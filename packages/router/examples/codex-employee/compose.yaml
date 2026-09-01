@@ -5,6 +5,7 @@ services:
     restart: unless-stopped
     read_only: true
     cap_drop: [ALL]
+    group_add: ["0"]
     security_opt:
       - no-new-privileges:true
     environment:
@@ -40,7 +41,6 @@ services:
     environment:
       EMPLOYEE_HOST: ${EMPLOYEE_HOST:?required}
     ports:
-      - "80:80"
       - "18443:18443"
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
