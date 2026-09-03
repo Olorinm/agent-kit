@@ -1,7 +1,8 @@
 {
-  "name": "@opengrove/codex-verifier-employee",
+  "name": "@agent-router/codex-verifier-employee",
   "version": "0.1.0",
   "private": true,
+  "license": "Apache-2.0",
   "type": "module",
   "engines": {
     "node": ">=24"
