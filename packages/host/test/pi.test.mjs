@@ -3,8 +3,8 @@ import test from "node:test";
 import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createAssistantMessageEventStream } from "@earendil-works/pi-ai";
-import { PiAgent } from "../dist/pi/index.js";
+import { createAssistantMessageEventStream } from "pi-ai-legacy";
+import { PiAgent } from "../dist/compat/pi085/index.js";
 import { FileBindingStore } from "../dist/index.js";
 const model = {
   id: "fixture",
@@ -71,7 +71,7 @@ const base = {
   input: "hello",
   instructions: "Stable instructions",
 };
-test("Pi native JSONL survives restart, tools execute through product policy, and latest context reaches the native model", async () => {
+test("Pi 0.85 compatibility: native JSONL survives restart, tools execute through product policy, and latest context reaches the native model", async () => {
   const cwd = await mkdtemp(join(tmpdir(), "agent-host-pi-"));
   const observed = [];
   let calls = 0;
@@ -136,7 +136,7 @@ test("Pi native JSONL survives restart, tools execute through product policy, an
     await agent.close();
   }
 });
-test("Pi pre-aborted input never calls a provider", async () => {
+test("Pi 0.85 compatibility: pre-aborted input never calls a provider", async () => {
   let calls = 0;
   const agent = new PiAgent({
     model,
