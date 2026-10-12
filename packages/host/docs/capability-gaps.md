@@ -1,6 +1,6 @@
 # Gap checklist against the core principles
 
-Reviewed **2026-10-12**, implemented in **0.1.0-alpha.6**, tracked by [issue #16](https://github.com/Olorinm/agent-host/issues/16). This closes the seven integration workstreams from the alpha.4/alpha.5 review. It does not claim that every Kernel has the same native functions or that every provider, media format and operating system has been certified.
+Reviewed **2026-10-12**, implemented in **0.1.0-alpha.6**, verified and corrected in **0.1.0-alpha.7**, tracked by [issue #16](https://github.com/Olorinm/agent-host/issues/16). This closes the seven integration workstreams from the alpha.4/alpha.5 review. It does not claim that every Kernel has the same native functions or that every provider, media format and operating system has been certified.
 
 The principle remains: **preserve native capabilities, make their use consistent, and keep differences visible**. Native storage, execution, permissions and model loops are not reimplemented by Host.
 
@@ -14,7 +14,7 @@ The principle remains: **preserve native capabilities, make their use consistent
 | 6. First use too manual | GitHub release archive, source-free [quickstart](quickstart.md), `init`, `doctor`, `run`, interactive terminal handlers and restartable personal sessions. | Independent archive installation, CLI first task and resume tests. Local checks, handshake and opt-in model probe are separate. Native installations/login and OpenClaw Gateway/plugin setup remain explicit prerequisites. |
 | 7. Evidence too narrow | Versioned [evidence matrix](native-verification.md), reusable opt-in probe runner, more failure-path tests, installed consumer tests and Linux/macOS/Windows CI. | CI is deterministic. Local live probes are macOS arm64; other platforms and provider/media combinations are not implied by passing fixtures. |
 
-## Native and environment limits that remain visible
+## Upstream capabilities and deployment prerequisites — not Host backlog
 
 - **Pi durable 1.1 has no native delete operation.** Host refuses deletion and keeps the binding. It also has no built-in question/elicitation RPC; product tools and native hooks remain available.
 - **OpenCode and Kimi's ACP interfaces do not expose a dedicated active-turn steering operation.** Host does not disguise a new prompt or cancellation/replay as native steering. OpenClaw does have native steering, whose interrupt-and-replace semantics are preserved.
@@ -24,13 +24,13 @@ The principle remains: **preserve native capabilities, make their use consistent
 - **Native readiness is not a promise of account/model access.** `doctor --probe` is an explicit provider request; static checks never pretend to establish access.
 - **OpenClaw product-tool callbacks currently require a local Gateway.** Arbitrary remote sandbox networking, workspace placement and provider provisioning are environment integrations, outside the current callback bridge.
 - **Distribution is a GitHub release archive.** There is no npm-registry package yet. Installation no longer requires cloning/building source.
-- **Live certification remains bounded.** macOS arm64 is exercised locally; Linux/macOS/Windows CI verifies deterministic package contracts, not login or live model execution on all platforms. Optional form types and every native setting are not all model-backed certified.
+- **Live certification remains bounded.** macOS arm64 is exercised locally; Linux/macOS/Windows CI verifies deterministic package contracts, not login or live model execution on all platforms. Live form/URL decisions, native questions, tool policy and selected native settings have additional model-backed checks in alpha.7. This is not exhaustive certification of every provider or setting value.
 
-These are documented native/environment or verification boundaries, not features silently replaced with weaker Host behavior. Additional native ports should be added when upstream provides an applicable interface and the same evidence standard can be met.
+A capability the native Kernel does not expose is not an unfinished Agent Host feature. Our responsibility is to connect the interfaces it does expose, preserve their semantics, and test that connection with a correctly configured native environment. The alpha.7 follow-up removes probe refusals and missing native tools as excuses for skipping applicable tests, and fixes the four integration regressions listed in the evidence matrix. The items above describe native/environment or verification boundaries. Additional native ports should be added when upstream provides an applicable interface and the same evidence standard can be met.
 
 ## Implementation and evidence
 
 - [Interactions](../src/interactions.ts), [progress](../src/progress.ts), [settings](../src/settings.ts), [native sessions](../src/sessions.ts).
 - [Runtime composition](../src/service/native-runtimes.ts), [HTTP operations](http-service.md), [common API](common-api.md).
-- [Gap regression tests](../test/gaps.test.mjs), [installed consumer](../scripts/test-gaps-package.mjs), [native probe runner](../scripts/probe-native-http.mjs).
+- [Gap regression tests](../test/gaps.test.mjs), [installed consumer](../scripts/test-gaps-package.mjs), [native probe runner](../scripts/probe-native-http.mjs), [focused native scenarios](../scripts/probe-native-scenarios.mjs).
 - [Kernel pins](kernel-support.md), [scope](scope.md), [CI](../.github/workflows/ci.yml).

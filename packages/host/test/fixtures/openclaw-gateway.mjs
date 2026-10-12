@@ -44,12 +44,17 @@ export async function startOpenClawFixture({
           methods.get(frame.method)({ params: p, client: { connId }, respond });
           return;
         }
-        if (frame.method === "connect")
+        if (frame.method === "connect") {
+          if (!p.caps?.includes("exec-approvals"))
+            return respond(false, undefined, {
+              message: "exec approval delivery capability missing",
+            });
           return respond(true, {
             type: "hello-ok",
             protocol: 4,
             server: { version: "2026.9.9" },
           });
+        }
         if (frame.method === "exec.approval.resolve") {
           approvals.get(p.id)?.(p.decision);
           return respond(true, { ok: true });

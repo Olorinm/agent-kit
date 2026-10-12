@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, cp, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, cp, writeFile, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { pathToFileURL } from "node:url";
 import { execFileSync } from "node:child_process";
@@ -30,7 +30,7 @@ execFileSync(
     "--ignore-scripts",
     "--no-audit",
     "--no-fund",
-    "./olorinm-agent-host-0.1.0-alpha.5.tgz",
+    `./olorinm-agent-host-${JSON.parse(await readFile("package.json", "utf8")).version}.tgz`,
   ],
   { cwd: consumer, stdio: "pipe" },
 );

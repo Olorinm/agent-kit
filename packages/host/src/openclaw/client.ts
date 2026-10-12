@@ -284,7 +284,9 @@ export class OpenClawGatewayClient {
       },
       role: "operator",
       scopes: OPENCLAW_OPERATOR_SCOPES,
-      caps: ["tool-events"],
+      // Approval scope authorizes replies; the capability tells Gateway this
+      // connection can deliver exec prompts instead of treating runs as headless.
+      caps: ["tool-events", "exec-approvals"],
       auth: stripUndefined({
         token: this.options.token,
         password: this.options.password,

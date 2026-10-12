@@ -49,6 +49,96 @@ const base = {
 };
 const outcome = (events) => events.at(-1).outcome;
 
+test("OpenClaw approval choices honor native allowed and unavailable decisions", () => {
+  for (const request of [
+    { allowedDecisions: ["allow-once", "deny"] },
+    { unavailableDecisions: ["allow-always"] },
+    {
+      allowedDecisions: ["allow-once", "allow-always", "deny"],
+      unavailableDecisions: ["allow-always"],
+    },
+  ]) {
+    const interaction = describeInteraction({
+      method: "exec.approval.requested",
+      params: { request },
+    });
+    assert.deepEqual(
+      interaction.choices.map((c) => c.id),
+      ["allow-once", "deny"],
+    );
+    assert.throws(
+      () => answerInteraction(interaction, { choice: "allow-always" }),
+      /invalid_interaction_choice/,
+    );
+  }
+});
+
+test("Codex MCP approvals preserve explicit persistence choices without treating arbitrary forms as approvals", () => {
+  for (const persist of [undefined, "session", ["session", "always"]]) {
+    const native = {
+      method: "mcpServer/elicitation/request",
+      params: {
+        message: "Allow test tool?",
+        _meta: { codex_approval_kind: "mcp_tool_call", persist },
+        requestedSchema: { type: "object", properties: {} },
+      },
+    };
+    const interaction = describeInteraction(native);
+    assert.equal(interaction.kind, "approval");
+    assert.equal(interaction.native, native);
+    assert.deepEqual(answerInteraction(interaction, { choice: "accept" }), {
+      action: "accept",
+    });
+    for (const action of ["decline", "cancel"])
+      assert.deepEqual(answerInteraction(interaction, { action }), { action });
+    for (const scope of ["session", "always"])
+      if ([persist].flat().includes(scope))
+        assert.deepEqual(answerInteraction(interaction, { choice: scope }), {
+          action: "accept",
+          _meta: { persist: scope },
+        });
+      else
+        assert.throws(
+          () => answerInteraction(interaction, { choice: scope }),
+          /invalid_interaction_choice/,
+        );
+  }
+  assert.equal(
+    describeInteraction({
+      method: "mcpServer/elicitation/request",
+      params: { requestedSchema: { type: "object", properties: {} } },
+    }).kind,
+    "form",
+  );
+  assert.equal(
+    describeInteraction({
+      method: "elicitation/create",
+      params: { _meta: { codex_approval_kind: "mcp_tool_call" } },
+    }).kind,
+    "form",
+  );
+});
+
+test("Claude elicitation keeps cancel distinct from decline through the SDK callback", async (t) => {
+  const agent = new ClaudeAgent({ query: createClaudeQueryFixture() });
+  t.after(() => agent.close());
+  for (const action of ["cancel", "decline"]) {
+    const events = await Array.fromAsync(
+      agent.run({
+        ...base,
+        sessionId: randomUUID(),
+        input: "fixture question",
+        onInteraction: async () => ({ action }),
+      }),
+    );
+    assert.equal(outcome(events).status, "completed");
+    assert.deepEqual(
+      JSON.parse(events.find((e) => e.type === "model.response").text),
+      { action },
+    );
+  }
+});
+
 test("common interactions preserve exact native options, scopes, multi-questions and form/url payloads", async () => {
   const cases = [
     [

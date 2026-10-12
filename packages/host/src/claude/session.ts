@@ -419,7 +419,10 @@ export class ClaudeAgent {
               context.signal,
             ),
           );
-          if (answer.action !== "accept") return { action: "decline" };
+          if (answer.action !== "accept")
+            return {
+              action: answer.action === "cancel" ? "cancel" : "decline",
+            };
           const content: Record<string, string | number | boolean | string[]> =
             {};
           for (const [key, value] of Object.entries(object(answer.content))) {

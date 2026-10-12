@@ -126,10 +126,12 @@ try {
       const r = await task.wait({
         pollMs: 50,
         onEvent: ({ event }) => events.push(event),
-        onInteraction: async (request) =>
-          request.kind === "approval"
-            ? { action: "decline" }
-            : { action: "cancel" },
+        onInteraction: async (request, context) =>
+          setup.onInteraction
+            ? setup.onInteraction(request, { ...context, profile, events })
+            : request.kind === "approval"
+              ? { action: "decline" }
+              : { action: "cancel" },
       });
       if (r.status !== "completed") throw Error(r.outcome?.error ?? r.status);
       return { r, events };
