@@ -2,9 +2,9 @@
 
 ## Outcome
 
-A developer can add a native Agent to a product without installing the OpenGrove desktop product or implementing its Rooms, Employees, knowledge vault, account service or business stores.
+A developer can add a native Agent to any product through a shared integration layer, supplying that product’s own context, tools, interaction handlers and storage.
 
-The independent repository owns the reusable integration. OpenGrove and a small file-editor product are consumers of its public package API.
+This repository owns the reusable integration. Products consume its public package API; terminal and browser file editors demonstrate embedded and HTTP use.
 
 ## Public boundary
 
@@ -35,7 +35,7 @@ Private credentials stay at the runtime/Host boundary. Products may supply crede
 | Durable product event storage and session-binding storage          | Product-selected storage implementation; the optional HTTP service supplies its own SQLite task store and file bindings |
 | Process or sandbox provisioning                                    | Selected environment/backend implementation                                                                             |
 
-Room, Employee, App Store, long-term memory strategy, billing, multi-tenant scheduling and cross-Agent collaboration are outside this extraction. This does not exclude their use by a consuming product.
+Product domain models, application distribution, long-term memory strategy, billing, multi-tenant scheduling and cross-Agent collaboration are outside this package. This does not exclude their use by a consuming product.
 
 The same adapters support [an optional HTTP service](http-service.md) and direct embedded use. The service manages task submission, result/event storage and callback transport. It does not change native execution semantics or take ownership of product business data.
 
@@ -65,9 +65,9 @@ Do not equate event replay, restoration of a native conversation, and recovery o
 ### Independent distribution
 
 - Install the built archive in a consumer outside this repository.
-- No imports from OpenGrove source or dependency on its business stores.
+- No imports from a consuming product’s source or dependency on its business stores.
 - Public types, runtime files, license and required assets are included in the archive.
-- OpenGrove consumes that package rather than retaining a second divergent adapter implementation.
+- Consumers use the public package rather than retaining separate adapter implementations.
 
 ### Shared behavior
 
@@ -80,16 +80,16 @@ Do not equate event replay, restoration of a native conversation, and recovery o
 - Handle process failure, missing credentials and unavailable models without an indefinitely pending turn.
 - Preserve supported native controls, or explicitly document an unsupported capability.
 
-### Two consumers
+### Independent consumers
 
-OpenGrove exercises existing workflows. A small file editor exercises the same API without OpenGrove concepts. Both use isolated example data for integration tests.
+The terminal file editor exercises embedded adapters, and the browser file editor exercises the standalone HTTP service. Both use the public package and isolated example data; neither defines a separate Agent runtime.
 
 Mock/protocol tests and native model-backed probes are recorded separately. Platform support is limited to actually verified platforms; an installer build is not a runtime certification.
 
 ## Work sequence
 
-1. Inventory reusable code and review the existing external-product and context-lifecycle proposals.
-2. Extract one complete native execution path through the public boundary and run both consumers.
-3. Migrate and update the remaining adapters one at a time, with separate extraction and upstream-compatibility changes where practical.
+1. Review native interfaces and identify the behavior required by consuming products.
+2. Implement a complete native execution path through the public boundary and run the independent consumers.
+3. Add and update adapters one at a time, keeping integration changes distinct from upstream compatibility changes.
 4. Compare the Rivet backend under the same gates and retain native paths where required capabilities differ.
 5. Publish a versioned package only with installation instructions and an evidence-backed support matrix.

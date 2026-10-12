@@ -1,6 +1,6 @@
 # Rivet Sandbox Agent backend decision
 
-Rivet's [Sandbox Agent 0.5.2](https://www.npmjs.com/package/sandbox-agent/v/0.5.2) offers a daemon, ACP over HTTP, event persistence and sandbox providers. Those are useful provisioning and transport capabilities. This extraction retains its native adapters because the SDK's default recovery does not meet the native-continuation requirement.
+Rivet's [Sandbox Agent 0.5.2](https://www.npmjs.com/package/sandbox-agent/v/0.5.2) offers a daemon, ACP over HTTP, event persistence and sandbox providers. Those are useful provisioning and transport capabilities. Agent Host retains its native adapters because the SDK's default recovery does not meet the native-continuation requirement.
 
 In the [reviewed implementation](https://github.com/rivet-dev/agents/blob/43d7bb21/sandbox-agent/sdks/typescript/src/client.ts#L1175), `resumeSession` reuses an existing live binding. After a stale connection it calls `createRemoteSession`, stores the new native ID and queues serialized history for the next prompt. Its own [integration test](https://github.com/rivet-dev/agents/blob/43d7bb21/sandbox-agent/sdks/typescript/tests/integration.test.ts#L499) explicitly checks recreation and replay.
 

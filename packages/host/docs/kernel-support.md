@@ -2,15 +2,15 @@
 
 Stable versions checked on **2026-10-09**. These are tested pins, not a promise that future releases are compatible. Native probes ran on macOS arm64 / Node.js 24; Linux CI runs deterministic contract and archive-consumer tests. Windows native execution has not been certified.
 
-| Kernel | Previous OpenGrove baseline | Tested version | Shared integration |
-| --- | --- | --- | --- |
-| Codex | 0.153.4 | [0.162.0](https://github.com/openai/codex/releases/tag/rust-v0.162.0) | Native app-server, tool groups, permissions/questions, cancellation, steer, compaction |
-| Claude Agent | SDK 0.3.263 | [SDK 0.3.295](https://www.npmjs.com/package/@anthropic-ai/claude-agent-sdk/v/0.3.295), engine 2.1.295 | SDK query lifecycle, native resume, MCP product tools with complete JSON Schema, native interactions |
-| Pi | 0.85.1 | [1.1.0](https://github.com/earendil-works/pi/releases/tag/v1.1.0) | Native durable conversations, model/tool extension hooks, cancellation, fork, steer, compaction |
-| OpenCode | 1.18.29 | [1.18.35](https://github.com/anomalyco/opencode/releases/tag/v1.18.35) | ACP initialization, native resume, model/config controls, MCP tools, native summarize bridge |
-| Kimi Code | 0.41.0 | [2.1.1](https://github.com/MoonshotAI/kimi-code/releases/tag/%40moonshot-ai%2Fkimi-code%402.1.1) | ACP, native load, native permission and form elicitation, MCP tools, `/compact` receipt |
-| Hermes | 0.21.1 | [0.21.6](https://github.com/NousResearch/hermes-agent/releases/tag/v0.21.6) | Native TUI Gateway, durable/live ID separation, MCP tools, modern approval/questions, compression and steering receipts |
-| OpenClaw | 2026.9.2 | [2026.9.9](https://github.com/openclaw/openclaw/releases/tag/v2026.9.9) | Gateway protocol 4, canonical session bindings, correlated streams, cancellation, model selection, compaction, optional product-tool plugin |
+| Kernel | Tested version | Shared integration |
+| --- | --- | --- |
+| Codex | [0.162.0](https://github.com/openai/codex/releases/tag/rust-v0.162.0) | Native app-server, tool groups, permissions/questions, cancellation, steer, compaction |
+| Claude Agent | [SDK 0.3.295](https://www.npmjs.com/package/@anthropic-ai/claude-agent-sdk/v/0.3.295), engine 2.1.295 | SDK query lifecycle, native resume, MCP product tools with complete JSON Schema, native interactions |
+| Pi | [1.1.0](https://github.com/earendil-works/pi/releases/tag/v1.1.0) | Native durable conversations, model/tool extension hooks, cancellation, fork, steer, compaction |
+| OpenCode | [1.18.35](https://github.com/anomalyco/opencode/releases/tag/v1.18.35) | ACP initialization, native resume, model/config controls, MCP tools, native summarize bridge |
+| Kimi Code | [2.1.1](https://github.com/MoonshotAI/kimi-code/releases/tag/%40moonshot-ai%2Fkimi-code%402.1.1) | ACP, native load, native permission and form elicitation, MCP tools, `/compact` receipt |
+| Hermes | [0.21.6](https://github.com/NousResearch/hermes-agent/releases/tag/v0.21.6) | Native TUI Gateway, durable/live ID separation, MCP tools, modern approval/questions, compression and steering receipts |
+| OpenClaw | [2026.9.9](https://github.com/openclaw/openclaw/releases/tag/v2026.9.9) | Gateway protocol 4, canonical session bindings, correlated streams, cancellation, model selection, compaction, optional product-tool plugin |
 
 ## What was exercised
 
@@ -24,7 +24,7 @@ The standalone HTTP service adds a separate consumer path. Its seven-adapter mat
 
 ## Upgrade boundaries
 
-- **Pi 1.1 is a storage/API generation change.** New conversations use `pi-durable`. Existing OpenGrove 0.85 JSONL conversations keep the explicit `compat/pi085` adapter and pinned old native engine. There is no invented transcript importer. Remove this compatibility path only after an upstream-supported migration or deliberate retirement of those conversations. Pi 1.1 has no supported native delete API; deletion fails explicitly instead of deleting only a Host binding and pretending the conversation was deleted.
+- **Pi 1.1 is a storage/API generation change.** New conversations use `pi-durable`. Existing Pi 0.85 JSONL conversations keep the explicit `compat/pi085` adapter and pinned old native engine. There is no invented transcript importer. Remove this compatibility path only after an upstream-supported migration or deliberate retirement of those conversations. Pi 1.1 has no supported native delete API; deletion fails explicitly instead of deleting only a Host binding and pretending the conversation was deleted.
 - **ACP capabilities are negotiated.** Native `session/resume` is preferred when advertised, otherwise supported `session/load` is used. Historical load notifications are not emitted as the current answer. Unsupported additional directories, images or controls fail explicitly. A protocol specification alone does not imply a Kernel implements a feature.
 - **Hermes uses a product-owned persistent profile.** `session_id` is a live handle; durable storage IDs are saved for restart. Reloading product MCP tools is allowed only in an exclusive profile. Interrupted sessions with pending native work are not silently replayed. Native `compressed` is required before reporting compaction success; `pending` is not success.
 - **OpenClaw product tools use its official plugin API.** They require a local Gateway plus the bundled plugin. The browser-only `toolBindings` route is not impersonated. Product names are arguments to one manifest-declared native tool. Scoped leases, tokens and native invocation guards limit callbacks to the active product turn. A deleted bound native session fails instead of being recreated.

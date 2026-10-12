@@ -6,7 +6,7 @@ import { pathToFileURL } from "node:url";
 
 /** Tests only the installed package and copied product, never repository-relative runtime imports. */
 export async function testHttpPackage(consumer, { native = false } = {}) {
-  const installed = join(consumer, "node_modules/@open-grove/agent-host");
+  const installed = join(consumer, "node_modules/@olorinm/agent-host");
   const { AgentHostClient } = await import(
     pathToFileURL(join(installed, "dist/service/client.js"))
   );

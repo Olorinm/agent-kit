@@ -1,6 +1,6 @@
 # Agent Host API (alpha)
 
-The package targets Node.js 24+ and provides native adapters for all seven Kernels in the [support matrix](kernel-support.md). No OpenGrove installation or account service is required. The common turn/tool/event boundary is alpha; optional controls remain Kernel-specific. The first example below uses Codex 0.162.0.
+The package targets Node.js 24+ and provides native adapters for all seven Kernels in the [support matrix](kernel-support.md). Native installations and authentication remain separate from the consuming product. The common turn/tool/event boundary is alpha; optional controls remain Kernel-specific. The first example below uses Codex 0.162.0.
 
 ## Install and run the example
 
@@ -11,7 +11,7 @@ npm ci
 npm test
 npm pack
 cd examples/file-editor
-npm install ../../open-grove-agent-host-0.1.0-alpha.3.tgz
+npm install ../../olorinm-agent-host-0.1.0-alpha.4.tgz
 AGENT_HOST_CODEX=../../node_modules/.bin/codex npm start
 ```
 
@@ -22,8 +22,8 @@ For an independently running HTTP process and a browser client, see [Standalone 
 ## Product integration
 
 ```ts
-import { CodexAgent } from '@open-grove/agent-host/codex';
-import { FileBindingStore } from '@open-grove/agent-host';
+import { CodexAgent } from '@olorinm/agent-host/codex';
+import { FileBindingStore } from '@olorinm/agent-host';
 
 const agent = new CodexAgent({
   command: 'codex',
@@ -88,7 +88,7 @@ npm run probe:codex
 AGENT_HOST_NATIVE_PROBE=1 npm run test:package
 ```
 
-On macOS arm64 with Codex 0.162.0 and an existing ChatGPT login, the native probe verifies a namespaced product tool, conversation continuation after process restart and native compaction. OpenGrove has a separate native consumer probe and its existing server smoke tests. Structured native questions, native permission UI and steering have protocol coverage only until corresponding native probes pass. Windows and Linux are not yet certified by native probes.
+On macOS arm64 with Codex 0.162.0 and an existing ChatGPT login, the native probe verifies a namespaced product tool, conversation continuation after process restart and native compaction. Structured native questions, native permission UI and steering have protocol coverage only until corresponding native probes pass. Windows and Linux are not yet certified by native probes.
 
 
 ## Choosing an adapter
@@ -97,12 +97,12 @@ All adapters accept a product `sessionId`, user `input`, stable `instructions`, 
 
 | Import | Construction / native prerequisite |
 | --- | --- |
-| `@open-grove/agent-host/codex` → `CodexAgent` | `command: 'codex'`; authenticated app-server executable |
-| `@open-grove/agent-host/acp` → `AcpAgent` | `command: 'opencode'` or `'kimi'`, default `args: ['acp']`; native credentials |
-| `@open-grove/agent-host/claude` → `ClaudeAgent` | Bundled SDK engine; optional `command`, `env`, `native` SDK options |
-| `@open-grove/agent-host/pi` → `PiAgent` | A Pi `model` or resolver, `cwd`, durable `sessionRoot`; native provider credentials |
-| `@open-grove/agent-host/hermes` → `HermesAgent` | Python executable and Gateway launch args, isolated persistent `HERMES_HOME`, `exclusiveProfile: true` for product tools |
-| `@open-grove/agent-host/openclaw` → `OpenClawAgent` | Authenticated Gateway `url` and `token` or `password`; optional product-tool plugin below |
+| `@olorinm/agent-host/codex` → `CodexAgent` | `command: 'codex'`; authenticated app-server executable |
+| `@olorinm/agent-host/acp` → `AcpAgent` | `command: 'opencode'` or `'kimi'`, default `args: ['acp']`; native credentials |
+| `@olorinm/agent-host/claude` → `ClaudeAgent` | Bundled SDK engine; optional `command`, `env`, `native` SDK options |
+| `@olorinm/agent-host/pi` → `PiAgent` | A Pi `model` or resolver, `cwd`, durable `sessionRoot`; native provider credentials |
+| `@olorinm/agent-host/hermes` → `HermesAgent` | Python executable and Gateway launch args, isolated persistent `HERMES_HOME`, `exclusiveProfile: true` for product tools |
+| `@olorinm/agent-host/openclaw` → `OpenClawAgent` | Authenticated Gateway `url` and `token` or `password`; optional product-tool plugin below |
 
 Use `FileBindingStore` for adapter restart. A binding is a reference to native storage, not a backup of that storage. Keep the native profile/session directory too. Never treat `outcomeUnknown` as permission to replay a mutating operation. Products own argument validation and business authorization even when a Kernel validates the supplied JSON Schema.
 
@@ -114,7 +114,7 @@ The editor's `createEditor` accepts `kernel`, `command`, `args`, `env`, `model`,
 
 ### Claude native SDK
 
-`ClaudeAgent` offers the common turn interface. `ClaudeQueryHost` is also exported for products that already project the complete native SDK event stream, as OpenGrove does. It owns query cancellation and request lifetime; the product still owns event storage and domain projections. Native SDK options include hooks, effort, MCP, settings sources and budget. Permission callbacks use native `allow`/`deny`; `AskUserQuestion` requires its structured answers. The SDK's own bypass permission mode bypasses its permission callback; it does not bypass authorization inside a product tool.
+`ClaudeAgent` offers the common turn interface. `ClaudeQueryHost` is also exported for products that already project the complete native SDK event stream. It owns query cancellation and request lifetime; the product still owns event storage and domain projections. Native SDK options include hooks, effort, MCP, settings sources and budget. Permission callbacks use native `allow`/`deny`; `AskUserQuestion` requires its structured answers. The SDK's own bypass permission mode bypasses its permission callback; it does not bypass authorization inside a product tool.
 
 ### Pi durable sessions
 
@@ -136,7 +136,7 @@ Start a local Gateway with the bundled plugin. In its native configuration, add 
 {
   "plugins": {
     "allow": ["agent-host"],
-    "load": { "paths": ["/absolute/path/node_modules/@open-grove/agent-host/plugins/openclaw"] },
+    "load": { "paths": ["/absolute/path/node_modules/@olorinm/agent-host/plugins/openclaw"] },
     "entries": { "agent-host": { "enabled": true } }
   },
   "tools": { "allow": ["agent-host"] }
@@ -151,4 +151,4 @@ Pass a fully qualified `provider/model` when choosing a model. Canonical session
 
 After building, run `node scripts/probe-acp.mjs opencode|kimi|claude|pi|hermes|openclaw` with one Kernel name. Despite its historical filename, this script dispatches the native adapter for each Kernel. It packs and installs the package into a separate consumer, then checks rejection, approval and native restart continuation. It uses `AGENT_HOST_COMMAND`, `AGENT_HOST_ARGS` (JSON array), `AGENT_HOST_MODEL`, native credential environment, and for OpenClaw `AGENT_HOST_OPENCLAW_URL` / `AGENT_HOST_OPENCLAW_TOKEN`. Pi provider overrides are documented in the script as `AGENT_HOST_PI_*`; Hermes requires a prepared product-owned `HERMES_HOME`.
 
-OpenGrove's extraction branch includes `scripts/probe-agent-host-codex.mjs`, `scripts/probe-agent-host-hermes.mjs` and `scripts/probe-agent-host-native.mjs` for its own consumer boundary. See the [support matrix](kernel-support.md) for what native tests do and do not establish.
+See the [support matrix](kernel-support.md) for what native tests do and do not establish.

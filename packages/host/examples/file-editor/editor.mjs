@@ -1,14 +1,14 @@
 import { readFile, writeFile, mkdir } from "node:fs/promises";
 import { join, resolve } from "node:path";
-import { OpenClawAgent } from "@open-grove/agent-host/openclaw";
-import { HermesAgent } from "@open-grove/agent-host/hermes";
-import { PiAgent } from "@open-grove/agent-host/pi";
-import { ClaudeAgent } from "@open-grove/agent-host/claude";
-import { AcpAgent } from "@open-grove/agent-host/acp";
-import { CodexAgent } from "@open-grove/agent-host/codex";
-import { FileBindingStore } from "@open-grove/agent-host";
+import { OpenClawAgent } from "@olorinm/agent-host/openclaw";
+import { HermesAgent } from "@olorinm/agent-host/hermes";
+import { PiAgent } from "@olorinm/agent-host/pi";
+import { ClaudeAgent } from "@olorinm/agent-host/claude";
+import { AcpAgent } from "@olorinm/agent-host/acp";
+import { CodexAgent } from "@olorinm/agent-host/codex";
+import { FileBindingStore } from "@olorinm/agent-host";
 
-/** This product owns its document, approvals and UI. No OpenGrove concepts. */
+/** This example product owns its document, approvals and UI. */
 export async function createEditor({
   directory,
   kernel = "codex",

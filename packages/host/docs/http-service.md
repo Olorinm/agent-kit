@@ -3,13 +3,13 @@
 Agent Host has two entry points over the same native adapters:
 
 - **Embedded:** import an adapter in a product's Node backend. The product supplies its own lifecycle and storage.
-- **Service:** run `agent-host serve`. Products connect over HTTP, while the service owns task records, native bindings and pending interactions. No OpenGrove installation, account or database is needed.
+- **Service:** run `agent-host serve`. Products connect over HTTP, while the service owns task records, native bindings and pending interactions.
 
-The service and browser client port the reusable integration from [OpenGrove PR #126](https://github.com/open-grove/opengrove/pull/126). The service does not introduce another Agent loop or replay conversations.
+The service manages transport, task storage and callbacks around the shared adapters. Native Agents retain their execution loops and conversations.
 
 ## Start a service
 
-Node.js 24+ is required. From this repository, build an archive with `npm pack`, then install that archive in your consumer. The current archive is `open-grove-agent-host-0.1.0-alpha.3.tgz`; it is not published to the npm registry.
+Node.js 24+ is required. From this repository, build an archive with `npm pack`, then install that archive in your consumer. The current archive is `olorinm-agent-host-0.1.0-alpha.4.tgz`; it is not published to the npm registry.
 
 Create `host.json`:
 
@@ -61,7 +61,7 @@ For custom Pi providers, Claude SDK settings, native discovery, or additional ru
 import {
   createNativeRuntime,
   startAgentHostServer,
-} from "@open-grove/agent-host/server";
+} from "@olorinm/agent-host/server";
 
 const stateDirectory = "/path/to/host-state";
 const runtime = createNativeRuntime(
@@ -87,10 +87,10 @@ Programmatic profiles accept the existing adapter options. A custom `ServiceRunt
 
 ## Connect a product
 
-`@open-grove/agent-host/client` uses standard Fetch and has no Node runtime imports. It can run in Node or a browser bundle. It neither starts a server nor discovers local credentials.
+`@olorinm/agent-host/client` uses standard Fetch and has no Node runtime imports. It can run in Node or a browser bundle. It neither starts a server nor discovers local credentials.
 
 ```ts
-import { AgentHostClient } from "@open-grove/agent-host/client";
+import { AgentHostClient } from "@olorinm/agent-host/client";
 
 const host = await new AgentHostClient({
   baseUrl: "http://127.0.0.1:37420",
@@ -189,7 +189,7 @@ Workspace file access is opt-in via `workspaceFiles: true`. Paths stay under the
 
 ## Example and verification
 
-See the [HTTP editor](../examples/http-editor/README.md). It starts a separate product companion and browser UI, connects to the service, asks before saving, and persists business receipts atomically with its document. It does not import OpenGrove or start another Agent runtime.
+See the [HTTP editor](../examples/http-editor/README.md). It starts a separate product companion and browser UI, connects to the service, asks before saving, and persists business receipts atomically with its document. It uses the public client API and the Agent runtime managed by the service.
 
 ```sh
 npm test
@@ -200,4 +200,4 @@ AGENT_HOST_HTTP_NATIVE=1 npm run test:package
 
 Tests distinguish deterministic Agent/provider fixtures from native model-backed probes. The HTTP fixture matrix covers all seven existing adapters, approve/reject and native binding continuation across Host restart. Additional tests cover native interaction response shapes, observation disconnects, deadlines, duplicate results, authentication, file revisions and hard-process-crash recovery. The package test installs the archive in an independent consumer, starts its CLI and exercises the copied product example. Existing embedded consumer tests remain required.
 
-The port intentionally leaves OpenGrove Rooms, Employees, Routines, knowledge/Skills deployment administration, accounts and application distribution in OpenGrove. Those are not runtime dependencies of this service. Native Skills/MCP already configured in a Kernel remain native capabilities; #126's OpenGrove extension-management API is not part of this HTTP contract.
+Products own their domain models, workflows, knowledge management, accounts and application distribution. These are not runtime dependencies of the service. Skills and MCP integrations already configured in a Kernel remain native capabilities; product extension administration is outside this HTTP contract.
