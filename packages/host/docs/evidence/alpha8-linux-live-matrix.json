@@ -1,0 +1,127 @@
+{
+  "kind": "reviewed-live-native-summary",
+  "date": "2026-10-12",
+  "platform": "linux",
+  "distribution": "Debian 12",
+  "arch": "arm64",
+  "node": "24.21.0",
+  "package": "0.1.0-alpha.8",
+  "kernelPins": "../kernel-support.md",
+  "results": [
+    {
+      "kernel": "claude",
+      "case": "continue-recall",
+      "status": "passed"
+    },
+    {
+      "kernel": "claude",
+      "case": "pdf-and-image",
+      "status": "passed"
+    },
+    {
+      "kernel": "claude",
+      "case": "tool-image",
+      "status": "passed"
+    },
+    {
+      "kernel": "claude",
+      "case": "two-images",
+      "status": "passed"
+    },
+    {
+      "kernel": "codex",
+      "case": "continue-recall",
+      "status": "passed"
+    },
+    {
+      "kernel": "codex",
+      "case": "tool-image",
+      "status": "passed"
+    },
+    {
+      "kernel": "codex",
+      "case": "two-images",
+      "status": "passed"
+    },
+    {
+      "kernel": "kimi",
+      "case": "continue-recall",
+      "status": "passed"
+    },
+    {
+      "kernel": "kimi",
+      "case": "file-csv",
+      "status": "passed"
+    },
+    {
+      "kernel": "kimi",
+      "case": "file-json",
+      "status": "passed"
+    },
+    {
+      "kernel": "kimi",
+      "case": "file-txt",
+      "status": "passed"
+    },
+    {
+      "kernel": "kimi",
+      "case": "tool-image",
+      "status": "passed"
+    },
+    {
+      "kernel": "kimi",
+      "case": "two-images",
+      "status": "passed"
+    },
+    {
+      "kernel": "opencode",
+      "case": "continue-recall",
+      "status": "passed"
+    },
+    {
+      "kernel": "opencode",
+      "case": "file-csv",
+      "status": "passed"
+    },
+    {
+      "kernel": "opencode",
+      "case": "file-json",
+      "status": "passed"
+    },
+    {
+      "kernel": "opencode",
+      "case": "file-txt",
+      "status": "passed"
+    },
+    {
+      "kernel": "opencode",
+      "case": "pdf-and-image",
+      "status": "passed"
+    },
+    {
+      "kernel": "opencode",
+      "case": "tool-image",
+      "status": "passed"
+    },
+    {
+      "kernel": "opencode",
+      "case": "two-images",
+      "status": "passed"
+    },
+    {
+      "kernel": "pi",
+      "case": "continue-recall",
+      "status": "passed"
+    },
+    {
+      "kernel": "pi",
+      "case": "tool-image",
+      "status": "passed"
+    },
+    {
+      "kernel": "pi",
+      "case": "two-images",
+      "status": "passed"
+    }
+  ]
+}

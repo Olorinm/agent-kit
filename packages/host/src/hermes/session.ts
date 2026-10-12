@@ -244,14 +244,21 @@ export class HermesAgent {
       owns = true;
       signal.throwIfAborted();
       client = this.connect();
+      const configuration = {
+        cwd: resolve(request.cwd),
+        instructions: request.instructions,
+        tools: request.tools?.map(({ execute: _, ...spec }) => spec),
+        descriptors: request.toolBridge?.descriptors,
+      };
       const fingerprint =
+        request.bindingFingerprint ?? hash(JSON.stringify(configuration));
+      // Upgrade older bindings on their first unchanged resume. Model/effort are
+      // native session settings, not immutable product configuration.
+      const legacyFingerprint =
         request.bindingFingerprint ??
         hash(
           JSON.stringify({
-            cwd: resolve(request.cwd),
-            instructions: request.instructions,
-            tools: request.tools?.map(({ execute: _, ...spec }) => spec),
-            descriptors: request.toolBridge?.descriptors,
+            ...configuration,
             model: request.model,
             provider: request.provider,
             effort: request.reasoningEffort,
@@ -259,7 +266,11 @@ export class HermesAgent {
         );
       const store = request.bindings ?? this.bindings;
       const binding = await store.get(request.sessionId);
-      if (binding && binding.fingerprint !== fingerprint)
+      if (
+        binding &&
+        binding.fingerprint !== fingerprint &&
+        binding.fingerprint !== legacyFingerprint
+      )
         throw new Error("session_configuration_changed");
       const rpcOptions = {
         signal,
@@ -494,6 +505,65 @@ export class HermesAgent {
           throw new Error("hermes_product_tools_reload_failed");
         this.configuredBridge = bridgeFingerprint;
       }
+      await abortable(
+        (async () => {
+          if (!binding) return;
+          if (request.model || request.provider) {
+            // Hermes parses whitespace-delimited model commands, not shell quoting.
+            if (
+              [request.model, request.provider].some(
+                (value) =>
+                  value &&
+                  (!/^[^\s'"\\]+$/.test(value) || value.startsWith("-")),
+              )
+            )
+              throw new Error("hermes_model_setting_invalid");
+            const result = object(
+              await client!.request(
+                "config.set",
+                {
+                  session_id: liveId,
+                  scope: "session",
+                  key: "model",
+                  value: [
+                    request.model,
+                    ...(request.provider
+                      ? ["--provider", request.provider]
+                      : []),
+                  ]
+                    .filter(Boolean)
+                    .join(" "),
+                },
+                rpcOptions,
+              ),
+            );
+            if (result.confirm_required === true)
+              throw new Error("hermes_model_confirmation_required");
+            if (result.key !== "model")
+              throw new Error("hermes_model_setting_not_confirmed");
+          }
+          if (request.reasoningEffort) {
+            const result = object(
+              await client!.request(
+                "config.set",
+                {
+                  session_id: liveId,
+                  scope: "session",
+                  key: "reasoning",
+                  value: request.reasoningEffort,
+                },
+                rpcOptions,
+              ),
+            );
+            if (
+              result.key !== "reasoning" ||
+              result.value !== request.reasoningEffort
+            )
+              throw new Error("hermes_reasoning_setting_not_confirmed");
+          }
+        })(),
+        signal,
+      );
       await abortable(
         request.beforeTurn?.(client, {
           ...context,

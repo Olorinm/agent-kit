@@ -156,6 +156,40 @@ test("OpenClaw native plugin scopes product tools, deduplicates calls, rejects e
     await gateway.close();
   }
 });
+test("OpenClaw product image results remain native image blocks outside text-only catalog wrappers", async () => {
+  const gateway = await startOpenClawFixture();
+  const agent = new OpenClawAgent(gateway);
+  try {
+    const events = await Array.fromAsync(
+      agent.run({
+        ...request,
+        input: "TOOL",
+        tools: [
+          {
+            name: "picture",
+            description: "Return an image",
+            inputSchema: { type: "object" },
+            execute: async () => ({
+              success: true,
+              contentItems: [
+                { type: "inputImage", imageUrl: "data:image/png;base64,AAH/" },
+              ],
+            }),
+          },
+        ],
+      }),
+    );
+    assert.equal(events.at(-1).outcome.status, "completed");
+    assert.deepEqual(
+      JSON.parse(events.find((e) => e.type === "model.response").text),
+      [{ type: "image", mimeType: "image/png", data: "AAH/" }],
+    );
+  } finally {
+    agent.close();
+    await gateway.close();
+  }
+});
+
 test("OpenClaw unknown cancellation blocks another turn on the same native producer", async () => {
   const gateway = await startOpenClawFixture({ ignoreCancel: true }),
     agent = new OpenClawAgent({ ...gateway, cancellationGraceMs: 20 });

@@ -276,11 +276,7 @@ export function createNativeRuntime(
           else if (promptCapabilities?.embeddedContext === true)
             media.push({
               type: "resource",
-              resource: {
-                uri: pathToFileURL(item.path).href,
-                mimeType: item.mediaType,
-                blob: item.data,
-              },
+              resource: embeddedResource(item),
             });
         }
         yield* agent.run({
@@ -582,6 +578,38 @@ export function createNativeRuntime(
       return { available: true };
     },
   };
+}
+
+/** Text resources bypass provider binary-file modality restrictions without losing bytes. */
+function embeddedResource(item: {
+  path: string;
+  mediaType: string;
+  data: string;
+}) {
+  const resource = {
+    uri: pathToFileURL(item.path).href,
+    mimeType: item.mediaType,
+  };
+  const [mime = "", ...parameters] = item.mediaType.toLowerCase().split(";");
+  const charset = parameters.join(";").match(/charset\s*=\s*"?([^;"\s]+)/)?.[1];
+  if (
+    (!charset || ["utf-8", "utf8", "us-ascii"].includes(charset)) &&
+    (mime.startsWith("text/") ||
+      /^(application\/(json|xml|yaml|x-yaml|javascript)|application\/.+\+(json|xml))$/.test(
+        mime,
+      ))
+  ) {
+    try {
+      const text = new TextDecoder("utf-8", {
+        fatal: true,
+        ignoreBOM: true,
+      }).decode(Buffer.from(item.data, "base64"));
+      return { ...resource, text };
+    } catch {
+      // Invalid UTF-8 remains binary; never silently replace invalid bytes.
+    }
+  }
+  return { ...resource, blob: item.data };
 }
 
 function commandExists(

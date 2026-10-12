@@ -1009,6 +1009,76 @@ test("native media types are passed only through negotiated ACP ports and Codex 
   }
 });
 
+test("ACP text attachments use lossless UTF-8 resources while binary and other encodings retain their bytes", async (t) => {
+  const cwd = await mkdtemp(join(tmpdir(), "agent-host-text-resources-"));
+  const log = join(cwd, "calls.jsonl");
+  const runtime = createNativeRuntime(
+    {
+      id: "opencode",
+      kernel: "opencode",
+      cwd,
+      options: {
+        ...command("acp-server"),
+        env: { ACP_TEST_LOG: log, ACP_TEST_RESOURCE: "1" },
+      },
+    },
+    join(cwd, "state"),
+  );
+  t.after(() => runtime.close());
+  const text = '\ufeff附件\r\n{"receipt":"orchard-7316"}\n';
+  const cases = [
+    ["text/plain; charset=utf-8", Buffer.from(text), true],
+    ["text/csv", Buffer.from(text), true],
+    ["application/json", Buffer.from(text), true],
+    ["application/ld+json", Buffer.from(text), true],
+    ["text/plain", Buffer.from([0xff, 0xfe, 0x61]), false],
+    ["text/plain; charset=iso-8859-1", Buffer.from([0xe9]), false],
+    ["application/octet-stream", Buffer.from(text), false],
+    ["application/pdf", Buffer.from("%PDF-1.4"), false],
+  ];
+  const attachments = cases.map(([mediaType, bytes], index) => ({
+    name: `资料 ${index}`,
+    path: join(cwd, `资料 ${index}`),
+    mediaType,
+    data: bytes.toString("base64"),
+  }));
+  const events = await Array.fromAsync(
+    runtime.run({
+      ...base,
+      runId: "text",
+      mode: "turn",
+      tools: [],
+      signal: new AbortController().signal,
+      onRequest: async () => undefined,
+      attachments,
+    }),
+  );
+  assert.equal(outcome(events).status, "completed");
+  const calls = (await readFile(log, "utf8"))
+    .trim()
+    .split("\n")
+    .map(JSON.parse);
+  const resources = calls
+    .find((c) => c.method === "session/prompt")
+    .params.prompt.filter((c) => c.type === "resource")
+    .map((c) => c.resource);
+  assert.equal(resources.length, cases.length);
+  cases.forEach(([mimeType, bytes, isText], index) => {
+    assert.equal(resources[index].mimeType, mimeType);
+    assert.ok(resources[index].uri.startsWith("file:"));
+    assert.deepEqual(
+      isText
+        ? Buffer.from(resources[index].text, "utf8")
+        : Buffer.from(resources[index].blob, "base64"),
+      bytes,
+    );
+    assert.equal(
+      isText ? resources[index].blob : resources[index].text,
+      undefined,
+    );
+  });
+});
+
 test("Claude native helpers use an explicitly configured native home without changing process environment", async (t) => {
   const cwd = await mkdtemp(join(tmpdir(), "agent-host-claude-home-"));
   const configured = join(cwd, "native-home"),

@@ -1,6 +1,6 @@
 # Kernel support
 
-Native versions pinned on **2026-10-09**, with integration probes repeated on **2026-10-12**. These are tested pins, not a promise that future releases are compatible. Native probes ran on macOS arm64 / Node.js 24; CI is configured for deterministic contract and archive-consumer tests on Linux, macOS and Windows. Native execution on Linux/Windows has not been certified.
+Native versions pinned on **2026-10-09**, with integration probes repeated on **2026-10-12**. These are tested pins, not a promise that future releases are compatible. Native probes ran on macOS arm64 / Node.js 24 across all seven kernels and Debian 12 Linux arm64 / Node.js 24 across Codex, Claude, Pi, OpenCode and Kimi. See the [case-level evidence](native-verification.md) for exact scope. CI passed deterministic contract and archive-consumer tests on Linux, macOS and Windows. Hermes/OpenClaw native execution on Linux and native execution on Windows remain unverified.
 
 | Kernel | Tested version | Shared integration |
 | --- | --- | --- |
@@ -20,7 +20,7 @@ The independent editor's **native model-backed probes passed for all seven Kerne
 
 Alpha.6 adds live HTTP coverage for all seven Kernels: text, native identity and recall after Host restart, native history/list, receipt-based compaction and image input. Native fork/delete and product-tool/control results are itemized in the [versioned evidence matrix](native-verification.md). The exact native operation and failure receipt are preserved; these results do not certify every provider or model.
 
-The common interaction helper, selectable settings, native session API, new CLI, controls and additional media paths have deterministic regression tests and independent archive-consumer checks. These are separate from native execution. OpenClaw's native command approvals now reach the common callback with session/run correlation; Pi's native policy hook can be enabled by the HTTP owner. Every optional form, model setting and media type is not model-backed certified.
+The common interaction helper, selectable settings, native session API, new CLI, controls and additional media paths have deterministic regression tests and independent archive-consumer checks. These are separate from native execution. OpenClaw's native command approvals now reach the common callback with session/run correlation; Pi's native policy hook can be enabled by the HTTP owner. Alpha.8 additionally verifies 76 macOS media/setting cases and 23 Linux continuation/media cases, including every selectable setting key and setting changes within all seven native sessions; values and limits are recorded in the evidence matrix. Every provider/format/value combination is not implied.
 
 ## Upgrade boundaries
 

@@ -7,14 +7,16 @@ Use Node.js 24 or later and an installed, authenticated native Kernel. Agent Hos
 ```sh
 mkdir my-agent && cd my-agent
 npm init -y
-npm install https://github.com/Olorinm/agent-host/releases/download/v0.1.0-alpha.7/olorinm-agent-host-0.1.0-alpha.7.tgz
+npm install https://github.com/Olorinm/agent-host/releases/download/v0.1.0-alpha.8/olorinm-agent-host-0.1.0-alpha.8.tgz
 ```
 
 The archive is published on [GitHub Releases](https://github.com/Olorinm/agent-host/releases). The package is not on the npm registry yet. Native binaries other than Claude's SDK engine are separate prerequisites. The release has the same contents tested by the independent archive consumer.
 
 ## Run a task yourself
 
-For an existing Codex installation:
+For an existing Codex installation, make sure Git is on `PATH`. Minimal Linux images also need CA certificates; without Git, the tested native Codex engine failed at thread creation with `workspace routing discovery failed`.
+
+Run:
 
 ```sh
 npx agent-host init --kernel codex --cwd . --config host.json

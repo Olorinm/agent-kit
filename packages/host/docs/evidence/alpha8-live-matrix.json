@@ -1,0 +1,391 @@
+{
+  "kind": "reviewed-live-native-summary",
+  "date": "2026-10-12",
+  "platform": "darwin",
+  "arch": "arm64",
+  "node": "24.18.0",
+  "package": "0.1.0-alpha.8",
+  "kernelPins": "../kernel-support.md",
+  "results": [
+    {
+      "kernel": "claude",
+      "case": "budget-limit",
+      "status": "passed"
+    },
+    {
+      "kernel": "claude",
+      "case": "change-settings-on-resume",
+      "status": "passed"
+    },
+    {
+      "kernel": "claude",
+      "case": "disabled-thinking",
+      "status": "passed"
+    },
+    {
+      "kernel": "claude",
+      "case": "effort-high",
+      "status": "passed"
+    },
+    {
+      "kernel": "claude",
+      "case": "effort-low",
+      "status": "passed"
+    },
+    {
+      "kernel": "claude",
+      "case": "effort-max",
+      "status": "passed"
+    },
+    {
+      "kernel": "claude",
+      "case": "effort-medium",
+      "status": "passed"
+    },
+    {
+      "kernel": "claude",
+      "case": "effort-xhigh",
+      "status": "passed"
+    },
+    {
+      "kernel": "claude",
+      "case": "fixed-thinking",
+      "status": "passed"
+    },
+    {
+      "kernel": "claude",
+      "case": "pdf-and-image",
+      "status": "passed"
+    },
+    {
+      "kernel": "claude",
+      "case": "tool-image",
+      "status": "passed"
+    },
+    {
+      "kernel": "claude",
+      "case": "turn-limit",
+      "status": "passed"
+    },
+    {
+      "kernel": "claude",
+      "case": "two-images",
+      "status": "passed"
+    },
+    {
+      "kernel": "codex",
+      "case": "change-settings-on-resume",
+      "status": "passed"
+    },
+    {
+      "kernel": "codex",
+      "case": "effort-high",
+      "status": "passed"
+    },
+    {
+      "kernel": "codex",
+      "case": "effort-low",
+      "status": "passed"
+    },
+    {
+      "kernel": "codex",
+      "case": "effort-max",
+      "status": "passed"
+    },
+    {
+      "kernel": "codex",
+      "case": "effort-medium",
+      "status": "passed"
+    },
+    {
+      "kernel": "codex",
+      "case": "effort-ultra",
+      "status": "passed"
+    },
+    {
+      "kernel": "codex",
+      "case": "effort-xhigh",
+      "status": "passed"
+    },
+    {
+      "kernel": "codex",
+      "case": "fast-tier",
+      "status": "passed"
+    },
+    {
+      "kernel": "codex",
+      "case": "second-model",
+      "status": "passed"
+    },
+    {
+      "kernel": "codex",
+      "case": "tool-image",
+      "status": "passed"
+    },
+    {
+      "kernel": "codex",
+      "case": "two-images",
+      "status": "passed"
+    },
+    {
+      "kernel": "hermes",
+      "case": "change-settings-on-resume",
+      "status": "passed"
+    },
+    {
+      "kernel": "hermes",
+      "case": "file-csv",
+      "status": "passed"
+    },
+    {
+      "kernel": "hermes",
+      "case": "file-json",
+      "status": "passed"
+    },
+    {
+      "kernel": "hermes",
+      "case": "file-txt",
+      "status": "passed"
+    },
+    {
+      "kernel": "hermes",
+      "case": "pdf-and-image",
+      "status": "passed"
+    },
+    {
+      "kernel": "hermes",
+      "case": "reasoning-high",
+      "status": "passed"
+    },
+    {
+      "kernel": "hermes",
+      "case": "reasoning-low",
+      "status": "passed"
+    },
+    {
+      "kernel": "hermes",
+      "case": "reasoning-medium",
+      "status": "passed"
+    },
+    {
+      "kernel": "hermes",
+      "case": "reasoning-none",
+      "status": "passed"
+    },
+    {
+      "kernel": "hermes",
+      "case": "reasoning-xhigh",
+      "status": "passed"
+    },
+    {
+      "kernel": "hermes",
+      "case": "tool-image",
+      "status": "passed"
+    },
+    {
+      "kernel": "hermes",
+      "case": "two-images",
+      "status": "passed"
+    },
+    {
+      "kernel": "kimi",
+      "case": "change-settings-on-resume",
+      "status": "passed"
+    },
+    {
+      "kernel": "kimi",
+      "case": "config-plan",
+      "status": "passed"
+    },
+    {
+      "kernel": "kimi",
+      "case": "effort-high",
+      "status": "passed"
+    },
+    {
+      "kernel": "kimi",
+      "case": "effort-low",
+      "status": "passed"
+    },
+    {
+      "kernel": "kimi",
+      "case": "effort-max",
+      "status": "passed"
+    },
+    {
+      "kernel": "kimi",
+      "case": "file-csv",
+      "status": "passed"
+    },
+    {
+      "kernel": "kimi",
+      "case": "file-json",
+      "status": "passed"
+    },
+    {
+      "kernel": "kimi",
+      "case": "file-txt",
+      "status": "passed"
+    },
+    {
+      "kernel": "kimi",
+      "case": "second-model",
+      "status": "passed"
+    },
+    {
+      "kernel": "kimi",
+      "case": "tool-image",
+      "status": "passed"
+    },
+    {
+      "kernel": "kimi",
+      "case": "two-images",
+      "status": "passed"
+    },
+    {
+      "kernel": "openclaw",
+      "case": "change-settings-on-resume",
+      "status": "passed"
+    },
+    {
+      "kernel": "openclaw",
+      "case": "pdf-and-image",
+      "status": "passed"
+    },
+    {
+      "kernel": "openclaw",
+      "case": "thinking-high",
+      "status": "passed"
+    },
+    {
+      "kernel": "openclaw",
+      "case": "thinking-low",
+      "status": "passed"
+    },
+    {
+      "kernel": "openclaw",
+      "case": "thinking-medium",
+      "status": "passed"
+    },
+    {
+      "kernel": "openclaw",
+      "case": "thinking-minimal",
+      "status": "passed"
+    },
+    {
+      "kernel": "openclaw",
+      "case": "thinking-off",
+      "status": "passed"
+    },
+    {
+      "kernel": "openclaw",
+      "case": "tool-image",
+      "status": "passed"
+    },
+    {
+      "kernel": "openclaw",
+      "case": "two-images",
+      "status": "passed"
+    },
+    {
+      "kernel": "opencode",
+      "case": "change-settings-on-resume",
+      "status": "passed"
+    },
+    {
+      "kernel": "opencode",
+      "case": "config-plan",
+      "status": "passed"
+    },
+    {
+      "kernel": "opencode",
+      "case": "effort-high",
+      "status": "passed"
+    },
+    {
+      "kernel": "opencode",
+      "case": "effort-low",
+      "status": "passed"
+    },
+    {
+      "kernel": "opencode",
+      "case": "file-csv",
+      "status": "passed"
+    },
+    {
+      "kernel": "opencode",
+      "case": "file-json",
+      "status": "passed"
+    },
+    {
+      "kernel": "opencode",
+      "case": "file-txt",
+      "status": "passed"
+    },
+    {
+      "kernel": "opencode",
+      "case": "pdf-and-image",
+      "status": "passed"
+    },
+    {
+      "kernel": "opencode",
+      "case": "tool-image",
+      "status": "passed"
+    },
+    {
+      "kernel": "opencode",
+      "case": "two-images",
+      "status": "passed"
+    },
+    {
+      "kernel": "pi",
+      "case": "change-settings-on-resume",
+      "status": "passed"
+    },
+    {
+      "kernel": "pi",
+      "case": "thinking-high",
+      "status": "passed"
+    },
+    {
+      "kernel": "pi",
+      "case": "thinking-low",
+      "status": "passed"
+    },
+    {
+      "kernel": "pi",
+      "case": "thinking-max",
+      "status": "passed"
+    },
+    {
+      "kernel": "pi",
+      "case": "thinking-medium",
+      "status": "passed"
+    },
+    {
+      "kernel": "pi",
+      "case": "thinking-minimal",
+      "status": "passed"
+    },
+    {
+      "kernel": "pi",
+      "case": "thinking-off",
+      "status": "passed"
+    },
+    {
+      "kernel": "pi",
+      "case": "thinking-xhigh",
+      "status": "passed"
+    },
+    {
+      "kernel": "pi",
+      "case": "tool-image",
+      "status": "passed"
+    },
+    {
+      "kernel": "pi",
+      "case": "two-images",
+      "status": "passed"
+    }
+  ]
+}

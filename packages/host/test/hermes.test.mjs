@@ -1,10 +1,11 @@
 import test from "node:test";
+import { createHash } from "node:crypto";
 import assert from "node:assert/strict";
 import { mkdtemp, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { HermesAgent } from "../dist/hermes/index.js";
-import { FileBindingStore } from "../dist/index.js";
+import { FileBindingStore, MemoryBindingStore } from "../dist/index.js";
 const fixture = resolve("test/fixtures/hermes-gateway.mjs");
 const request = {
   sessionId: "product-session",
@@ -160,5 +161,122 @@ test("Hermes failed native restore never creates a replacement conversation", as
     );
   } finally {
     agent.close();
+  }
+});
+
+test("Hermes resumes the native identity while changing session settings and preserves configuration guards", async () => {
+  const home = await mkdtemp(join(tmpdir(), "agent-host-hermes-settings-"));
+  const bindings = new MemoryBindingStore();
+  const agent = new HermesAgent({
+    command: process.execPath,
+    args: [fixture],
+    env: { HERMES_HOME: home },
+    bindings,
+  });
+  try {
+    const base = {
+      ...request,
+      model: "fixture-a",
+      provider: "custom:test",
+      reasoningEffort: "none",
+    };
+    const first = await Array.fromAsync(agent.run(base));
+    assert.equal(first.at(-1).outcome.status, "completed");
+    const second = await Array.fromAsync(
+      agent.run({ ...base, model: "fixture-b", reasoningEffort: "high" }),
+    );
+    assert.equal(second.at(-1).outcome.status, "completed");
+    assert.equal(
+      second.find((e) => e.type === "session.bound").threadId,
+      first.find((e) => e.type === "session.bound").threadId,
+    );
+    const calls = (await readFile(join(home, "methods.jsonl"), "utf8"))
+      .trim()
+      .split("\n")
+      .map(JSON.parse);
+    const settings = calls.filter((c) => c.method === "config.set");
+    assert.equal(settings.length, 2);
+    assert.ok(
+      settings.every(
+        (c) =>
+          c.params.scope === "session" &&
+          c.params.session_id.startsWith("live-"),
+      ),
+    );
+    assert.deepEqual(
+      settings.map((c) => [c.params.key, c.params.value]),
+      [
+        ["model", "fixture-b --provider custom:test"],
+        ["reasoning", "high"],
+      ],
+    );
+    const rejected = await Array.fromAsync(
+      agent.run({ ...base, reasoningEffort: "reject-me" }),
+    );
+    assert.equal(rejected.at(-1).outcome.status, "failed");
+    assert.match(rejected.at(-1).outcome.error, /native_setting_rejected/);
+    const guarded = await Array.fromAsync(
+      agent.run({ ...base, instructions: "Changed product configuration" }),
+    );
+    assert.match(guarded.at(-1).outcome.error, /session_configuration_changed/);
+    const confirmation = await Array.fromAsync(
+      agent.run({ ...base, model: "confirm-me" }),
+    );
+    assert.match(
+      confirmation.at(-1).outcome.error,
+      /hermes_model_confirmation_required/,
+    );
+    assert.equal(
+      (await bindings.get(base.sessionId)).threadId,
+      first.find((e) => e.type === "session.bound").threadId,
+    );
+  } finally {
+    await agent.close();
+  }
+});
+
+test("Hermes upgrades legacy model-bound fingerprints on unchanged resume before allowing setting changes", async () => {
+  const { options, agent } = await setup();
+  const base = {
+    ...request,
+    model: "fixture-a",
+    provider: "custom:test",
+    reasoningEffort: "none",
+  };
+  let reopened;
+  try {
+    const initial = await Array.fromAsync(agent.run(base));
+    const id = initial.find((e) => e.type === "session.bound").threadId;
+    const legacy = createHash("sha256")
+      .update(
+        JSON.stringify({
+          cwd: resolve(base.cwd),
+          instructions: base.instructions,
+          model: base.model,
+          provider: base.provider,
+          effort: base.reasoningEffort,
+        }),
+      )
+      .digest("hex");
+    await options.bindings.set(base.sessionId, {
+      threadId: id,
+      fingerprint: legacy,
+    });
+    await agent.close();
+    reopened = new HermesAgent(options);
+    const resumed = await Array.fromAsync(reopened.run(base));
+    assert.equal(resumed.at(-1).outcome.status, "completed");
+    assert.notEqual(
+      (await options.bindings.get(base.sessionId)).fingerprint,
+      legacy,
+    );
+    const changed = await Array.fromAsync(
+      reopened.run({ ...base, reasoningEffort: "high" }),
+    );
+    assert.equal(changed.at(-1).outcome.status, "completed");
+    assert.equal(changed.find((e) => e.type === "session.bound").threadId, id);
+  } finally {
+    await agent.close();
+    await reopened?.close();
   }
 });

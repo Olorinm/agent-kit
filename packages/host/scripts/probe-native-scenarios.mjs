@@ -83,7 +83,7 @@ try {
               return answer;
             },
           });
-          if (run.status !== "completed")
+          if (run.status !== (scenario.expectedStatus ?? "completed"))
             throw Error(run.outcome?.error ?? run.status);
           // Every case needs an explicit assertion; model completion alone proves nothing.
           if (typeof scenario.verify !== "function")
