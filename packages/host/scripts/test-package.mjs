@@ -27,7 +27,7 @@ execFileSync(
     "--ignore-scripts",
     "--no-audit",
     "--no-fund",
-    "./open-grove-agent-host-0.1.0-alpha.3.tgz",
+    "./olorinm-agent-host-0.1.0-alpha.4.tgz",
   ],
   { cwd: consumer, stdio: "pipe" },
 );
@@ -91,12 +91,12 @@ try {
   // Check the installed declarations, not repository-relative imports.
   await writeFile(
     join(consumer, "consumer.ts"),
-    `import { AcpAgent } from '@open-grove/agent-host/acp';\nimport { ClaudeAgent, ClaudeQueryHost } from '@open-grove/agent-host/claude';\nimport { PiAgent } from '@open-grove/agent-host/pi';\nimport { HermesAgent } from '@open-grove/agent-host/hermes';\nimport { OpenClawAgent } from '@open-grove/agent-host/openclaw';\nconst adapters = [AcpAgent, ClaudeAgent, ClaudeQueryHost, PiAgent, HermesAgent, OpenClawAgent];\nimport { CodexAgent } from '@open-grove/agent-host/codex';\nimport { FileBindingStore } from '@open-grove/agent-host';\nconst agent = new CodexAgent({ bindings: new FileBindingStore('state') });\nfor await (const e of agent.run({ sessionId: 's', cwd: '.', input: 'hi', instructions: '' })) console.log(e.type);\nawait agent.close();\n`,
+    `import { AcpAgent } from '@olorinm/agent-host/acp';\nimport { ClaudeAgent, ClaudeQueryHost } from '@olorinm/agent-host/claude';\nimport { PiAgent } from '@olorinm/agent-host/pi';\nimport { HermesAgent } from '@olorinm/agent-host/hermes';\nimport { OpenClawAgent } from '@olorinm/agent-host/openclaw';\nconst adapters = [AcpAgent, ClaudeAgent, ClaudeQueryHost, PiAgent, HermesAgent, OpenClawAgent];\nimport { CodexAgent } from '@olorinm/agent-host/codex';\nimport { FileBindingStore } from '@olorinm/agent-host';\nconst agent = new CodexAgent({ bindings: new FileBindingStore('state') });\nfor await (const e of agent.run({ sessionId: 's', cwd: '.', input: 'hi', instructions: '' })) console.log(e.type);\nawait agent.close();\n`,
   );
   await writeFile(
     join(consumer, "http-consumer.ts"),
-    `import { createNativeRuntime, startAgentHostServer } from '@open-grove/agent-host/server';
-import { AgentHostClient } from '@open-grove/agent-host/client';
+    `import { createNativeRuntime, startAgentHostServer } from '@olorinm/agent-host/server';
+import { AgentHostClient } from '@olorinm/agent-host/client';
 const runtime = createNativeRuntime({ id: 'codex', kernel: 'codex', cwd: '.' }, 'state');
 const server = await startAgentHostServer({ runtimes: [runtime], stateDirectory: 'state', token: 'example-owner-token' });
 const client = await new AgentHostClient({ baseUrl: server.url, token: 'example-owner-token' }).connect();
@@ -125,7 +125,7 @@ await server.close();
   );
   assert.match(
     await readFile(
-      join(consumer, "node_modules/@open-grove/agent-host/NOTICE"),
+      join(consumer, "node_modules/@olorinm/agent-host/NOTICE"),
       "utf8",
     ),
     /OpenGrove/,
@@ -330,7 +330,7 @@ for (const kernel of ["pi", "openclaw"]) {
     await gateway?.close();
   }
 }
-const installed = join(consumer, "node_modules/@open-grove/agent-host");
+const installed = join(consumer, "node_modules/@olorinm/agent-host");
 await testHttpPackage(consumer);
 await writeFile(
   resolve(".local/last-package-consumer.json"),

@@ -6,6 +6,6 @@
     "start": "node server.mjs"
   },
   "dependencies": {
-    "@open-grove/agent-host": "file:../../open-grove-agent-host-0.1.0-alpha.3.tgz"
+    "@olorinm/agent-host": "file:../../olorinm-agent-host-0.1.0-alpha.4.tgz"
   }
 }

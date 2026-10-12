@@ -2,45 +2,40 @@
 
 [中文](README.zh-CN.md)
 
-Agent Host is an open-source project to extract OpenGrove's native Agent integration into a product-independent package. A product supplies its context, tools and interaction handlers; Agent Host connects to the selected Agent and reports its work.
+Agent Host is an open-source integration layer for adding native coding Agents to any product. Your product supplies context, tools and interaction handlers; Agent Host connects to the selected Agent and returns progress and results.
 
-**Status: all seven native integrations support embedded use and an optional standalone HTTP service.** OpenGrove and independent editor examples consume the alpha archive. The package is public source and installs from a built archive; it is not yet published to npm. `agent-host` is the working project name.
+**Seven native integrations, two deployment modes:** Codex, Claude Agent, Pi, OpenCode, Kimi Code, Hermes and OpenClaw. Embed the package in your backend or run a standalone HTTP service. Both modes use the same adapters.
 
-The adapters provide native sessions, streaming, scoped product tools, approval/question callbacks, cancellation, steering and compaction. It has no OpenGrove runtime dependency. See [installation, API and verification limits](docs/api.md).
+**Status: alpha.** Source is public and the package installs from a built archive; it is not yet published to npm. See the [tested versions and verification limits](docs/kernel-support.md).
 
-Use the adapters directly in your product, or run `agent-host serve --config host.json` and connect through `@open-grove/agent-host/client`. Both modes use the same native adapters. The [standalone service guide](docs/http-service.md) covers task persistence, product callbacks, native interactions and restart behavior. Try the [browser editor](examples/http-editor/README.md) as an independent HTTP consumer.
+## What it provides
 
-## Responsibilities
+- Create and continue native sessions, stream progress and cancel work.
+- Connect product tools and route supported native approvals and structured questions to your UI.
+- Preserve native model loops, tools, transcripts and permission semantics.
+- Expose optional controls such as steering and compaction where supported by each Agent.
+- Keep storage, runtime configuration and product authorization explicit.
 
-- Connect to native Agents and manage their execution lifecycle.
-- Create and continue sessions, stream progress, cancel work and report recovery outcomes.
-- Bridge product tools, native permission requests and structured user questions.
-- Expose optional native controls without claiming every Agent has the same capabilities.
-- Provide explicit storage and environment interfaces rather than requiring OpenGrove business objects.
+Your product owns its UI, accounts, business permissions, memory strategy and data. Agent Host owns the integration with the native Agent. Capabilities differ by Kernel; the [support matrix](docs/kernel-support.md) records those boundaries.
 
-The native Agent keeps its reasoning loop, native tools, transcript and native permission semantics. The consuming product keeps its UI, users, business authorization, memory strategy and domain data.
+## Two ways to integrate
 
-## Acceptance consumers
+- **Embedded:** install `@olorinm/agent-host` from its archive and call an adapter from your Node.js backend. Your product manages lifecycle and storage.
+- **Standalone service:** run `agent-host serve --config host.json` and connect through `@olorinm/agent-host/client`. The service persists tasks and results and routes product-tool and interaction callbacks.
 
-1. **OpenGrove:** use the extracted package while preserving existing supported behavior.
-2. **An independent file editor:** install the distributable package, edit an example document through a product tool, handle approval and rejection, stop work and continue the conversation after restart. It must not import OpenGrove source or create Rooms, Employees or OpenGrove stores.
+Start with the [installation and API guide](docs/api.md) or the [HTTP service guide](docs/http-service.md). Native installations and authentication are configured separately.
 
-Both consumers must use the same package API. The editor is a reference integration, not a second Agent runtime implementation.
+## Examples and verification
 
-## Extraction and upgrades
+- [Terminal file editor](examples/file-editor): approve or reject an edit, save a document, cancel work and continue the native conversation after restarting the product.
+- [Browser file editor](examples/http-editor/README.md): connect a separate product to the HTTP service and handle edits through its own UI.
 
-All seven existing Kernel integrations are in scope: Codex, Claude Agent, Pi, OpenCode, Kimi Code, Hermes and OpenClaw. Updates target stable upstream releases, with exact tested versions recorded. New upstream capabilities are reviewed against the public integration surface and exposed only with implementation and verification evidence.
+The examples consume the public package API. Archive tests install the package outside this repository and exercise all seven adapters. Deterministic tests and live model-backed probes are documented separately in the [support matrix](docs/kernel-support.md).
 
-Rivet Sandbox Agent was evaluated as a replaceable backend. Its default stale-connection recovery recreates a native conversation and replays history, so the native paths remain. See the [decision and reproducible SDK evaluation](docs/rivet.md).
+## Design and scope
 
-See [scope and acceptance](docs/scope.md) and [Kernel upgrade targets](docs/kernel-support.md).
-
-Tracked work: [extraction and two consumers](https://github.com/open-grove/agent-host/issues/1), [Kernel upgrades and new capabilities](https://github.com/open-grove/agent-host/issues/2), [Rivet backend evaluation](https://github.com/open-grove/agent-host/issues/3).
-
-## Existing work
-
-The HTTP service and browser client adapt the task, product-tool and example integration from [OpenGrove #126](https://github.com/open-grove/opengrove/pull/126), replacing its OpenGrove runtime/storage dependencies. This does not imply the original PR or [context lifecycle work #123](https://github.com/open-grove/opengrove/pull/123) has merged. [Issue #5](https://github.com/open-grove/agent-host/issues/5) tracks the service port and its acceptance tests.
+See [scope and responsibilities](docs/scope.md) for the boundary between a product, Agent Host and the native Agent. The [Rivet backend evaluation](docs/rivet.md) explains the native-continuation requirements behind the current adapters.
 
 ## License
 
-[Apache-2.0](LICENSE). Preserve upstream attribution when extracting code.
+[Apache-2.0](LICENSE). Original source attribution is retained in [NOTICE](NOTICE).

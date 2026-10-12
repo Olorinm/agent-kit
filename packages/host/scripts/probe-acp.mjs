@@ -30,7 +30,7 @@ execFileSync(
     "--ignore-scripts",
     "--no-audit",
     "--no-fund",
-    "./open-grove-agent-host-0.1.0-alpha.3.tgz",
+    "./olorinm-agent-host-0.1.0-alpha.4.tgz",
   ],
   { cwd: consumer, stdio: "pipe" },
 );

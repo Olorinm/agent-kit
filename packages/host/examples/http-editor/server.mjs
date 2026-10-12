@@ -4,7 +4,7 @@ import { randomUUID, createHash } from "node:crypto";
 import { mkdir, readFile, writeFile, rename } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
-import { AgentHostClient } from "@open-grove/agent-host/client";
+import { AgentHostClient } from "@olorinm/agent-host/client";
 
 export async function startEditor({
   hostUrl = "http://127.0.0.1:37420",
@@ -152,7 +152,7 @@ export async function startEditor({
         "/": [new URL("./index.html", import.meta.url), "text/html"],
         "/app.js": [new URL("./app.js", import.meta.url), "text/javascript"],
         "/client.js": [
-          new URL(import.meta.resolve("@open-grove/agent-host/client")),
+          new URL(import.meta.resolve("@olorinm/agent-host/client")),
           "text/javascript",
         ],
       };

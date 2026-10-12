@@ -23,7 +23,7 @@ Open the address printed by the product companion (normally `http://127.0.0.1:37
 
 The default profile uses an installed and authenticated `codex` with a native read-only sandbox. Set `command` in `host.example.json` if it is not on PATH. Other profiles use the same service and product tool contract; see [runtime configuration](../../docs/http-service.md#runtime-profiles). The example's native approval/question UI covers only the forms implemented in `app.js`.
 
-For a separately installed archive, copy this example from `node_modules/@open-grove/agent-host/examples/http-editor` into your project and use your installed package. The repository example's package manifest points to the archive at the repository root.
+For a separately installed archive, copy this example from `node_modules/@olorinm/agent-host/examples/http-editor` into your project and use your installed package. The repository example's package manifest points to the archive at the repository root.
 
 Companion settings:
 
