@@ -1,7 +1,10 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { OpenClawAgent } from "../dist/openclaw/index.js";
-import { MemoryBindingStore } from "../dist/index.js";
+import { MemoryBindingStore, FileBindingStore } from "../dist/index.js";
 import { startOpenClawFixture } from "./fixtures/openclaw-gateway.mjs";
 const request = {
   sessionId: "product-session",
@@ -10,6 +13,33 @@ const request = {
   input: "hello",
   model: "provider/model",
 };
+test("OpenClaw native forks survive restart and retain configuration checks across nested forks", async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), "openclaw-fork-bindings-"));
+  const gateway = await startOpenClawFixture();
+  const bindings = new FileBindingStore(directory);
+  let agent = new OpenClawAgent({ ...gateway, bindings });
+  t.after(async () => {
+    agent.close();
+    await gateway.close();
+    await rm(directory, { recursive: true, force: true, maxRetries: 10 });
+  });
+  const run = async (input) => {
+    const events = await Array.fromAsync(agent.run({ ...request, ...input }));
+    return { outcome: events.at(-1).outcome, binding: events.find((e) => e.type === "session.bound") };
+  };
+  assert.equal((await run({})).outcome.status, "completed");
+  const child = await agent.sessions.fork(request.sessionId, "child", { entryId: "entry-1" });
+  agent.close();
+  agent = new OpenClawAgent({ ...gateway, bindings: new FileBindingStore(directory) });
+  const resumed = await run({ sessionId: "child" });
+  assert.equal(resumed.outcome.status, "completed", JSON.stringify(resumed.outcome));
+  assert.equal(resumed.binding.threadId, child.nativeSessionId);
+  const grandchild = await agent.sessions.fork("child", "grandchild", { entryId: "entry-1" });
+  assert.equal((await run({ sessionId: "grandchild" })).binding.threadId, grandchild.nativeSessionId);
+  for (const changed of [{ instructions: "Changed" }, { sessionKey: "another-key" }]) {
+    assert.equal((await run({ sessionId: "child", ...changed })).outcome.error, "session_configuration_changed");
+  }
+});
 test("OpenClaw correlates early events and overlapping agent/chat streams without replaying stale history", async () => {
   const gateway = await startOpenClawFixture(),
     agent = new OpenClawAgent(gateway);

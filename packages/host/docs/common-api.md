@@ -66,6 +66,8 @@ HTTP equivalents are under `client.nativeSessions(runtimeId)`. `fork(source,targ
 
 Operations that mutate a conversation are serialized with active turns in the same adapter/service. The application remains responsible for one owner of native storage across independent processes. Native deletion happens before binding removal. HTTP keeps a tombstone so reuse of a deleted Host ID cannot silently create a new conversation. A fork uses native storage, never a Host replay of old dialogue.
 
+Custom `BindingStore` implementations must round-trip the complete `SessionBinding`, including optional `configurationSessionId`. Native forks inherit this configuration identity while receiving their own native storage ID. This lets OpenClaw continue a fork after restart without treating the new Host ID as a configuration change; genuine instruction/tool/profile changes still fail validation.
+
 ## Settings and native extensions
 
 The service owner chooses exactly which values callers may select:

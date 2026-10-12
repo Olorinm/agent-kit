@@ -289,6 +289,9 @@ test("Codex/ACP/Hermes/OpenClaw native session RPCs preserve history and fork id
       fork.nativeSessionId,
       e.find((v) => v.type === "session.bound").threadId,
     );
+    const continued = await Array.fromAsync(a.run({ ...base, cwd, sessionId: "fork" }));
+    assert.equal(outcome(continued).status, "completed", JSON.stringify(outcome(continued)));
+    assert.equal(continued.find((v) => v.type === "session.bound").threadId, fork.nativeSessionId);
     assert.equal((await a.sessions.delete("fork", { cwd })).deleted, true);
     assert.equal(
       (await a.sessions.bindings()).some((v) => v.sessionId === "fork"),

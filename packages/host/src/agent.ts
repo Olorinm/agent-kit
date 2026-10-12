@@ -9,6 +9,8 @@ export interface ProductToolResult {
 export interface SessionBinding {
   threadId: string;
   fingerprint: string;
+  /** Original Host identity used by session-derived configuration fingerprints. Preserve on native forks. */
+  configurationSessionId?: string;
 }
 /** One writer per product session. A store failure prevents starting the turn. */
 export interface BindingStore {

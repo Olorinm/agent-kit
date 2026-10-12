@@ -66,7 +66,11 @@ export class SessionManager {
       if (!nativeSessionId || nativeSessionId === binding.threadId)
         throw new Error("native_fork_not_confirmed");
       try {
-        await this.store.set(target, { ...binding, threadId: nativeSessionId });
+        await this.store.set(target, {
+          ...binding,
+          threadId: nativeSessionId,
+          configurationSessionId: binding.configurationSessionId ?? source,
+        });
       } catch (error) {
         throw new Error(`native_fork_binding_failed:${nativeSessionId}`, {
           cause: error,

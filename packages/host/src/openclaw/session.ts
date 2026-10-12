@@ -197,21 +197,27 @@ export class OpenClawAgent {
       context.signal.throwIfAborted();
       await this.client.ensureConnected();
       context.signal.throwIfAborted();
+      const store = request.bindings ?? this.bindings;
+      const binding = await store.get(request.sessionId);
+      // A native fork changes its storage key, not the source configuration.
+      // Retaining the source identity also preserves pre-fork/older fingerprints.
+      const configurationKey =
+        request.sessionKey ??
+        this.options.sessionKey ??
+        `agent:main:agent-host-${createHash("sha256").update(binding?.configurationSessionId ?? request.sessionId).digest("hex")}`;
       const fingerprint =
         request.bindingFingerprint ??
         createHash("sha256")
           .update(
             JSON.stringify({
               gateway: this.options.url,
-              sessionKey,
+              sessionKey: configurationKey,
               instructions: request.instructions,
               tools: request.tools?.map(({ execute: _, ...spec }) => spec),
               descriptors: request.toolBridge?.descriptors,
             }),
           )
           .digest("hex");
-      const store = request.bindings ?? this.bindings;
-      const binding = await store.get(request.sessionId);
       if (binding && binding.fingerprint !== fingerprint)
         throw new Error("session_configuration_changed");
       if (binding) {
@@ -295,7 +301,13 @@ export class OpenClawAgent {
         renewal.unref();
         cleanup.push(() => clearInterval(renewal));
       }
-      await store.set(request.sessionId, { threadId: sessionKey, fingerprint });
+      await store.set(request.sessionId, {
+        threadId: sessionKey,
+        fingerprint,
+        ...(binding?.configurationSessionId
+          ? { configurationSessionId: binding.configurationSessionId }
+          : {}),
+      });
       queue.push({
         type: "session.bound",
         runId,

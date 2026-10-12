@@ -49,7 +49,7 @@ async function fixture(t, options = {}) {
   await launch();
   t.after(async () => {
     await host.close();
-    await rm(root, { recursive: true, force: true });
+    await rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
   });
   const api = async (path, body, expected = 200, extra = {}) => {
     const response = await fetch(`${host.url}/v1${path}`, {
@@ -460,7 +460,7 @@ test("HTTP attachments preserve binary bytes, reject oversized input and stay wi
   );
   const { relative, sep } = await import("node:path");
   const { realpath } = await import("node:fs/promises");
-  const path = relative(await realpath(root), received.attachments[0].path);
+  const path = relative(await realpath(root), await realpath(received.attachments[0].path));
   assert.ok(path.startsWith(join(".agent-host", "attachments", "media") + sep));
   const output = await api(
     `/sessions/media/files?encoding=base64&path=${encodeURIComponent(path)}`,

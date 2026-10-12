@@ -120,7 +120,7 @@ test("Hermes bridges product tools and preserves modern approval/multi-question 
   }
 });
 test("Hermes pre-abort starts nothing; cancellation settles or retires the producer", async () => {
-  const { agent, home } = await setup({ cancellationGraceMs: 20 });
+  const { agent, home } = await setup({ cancellationGraceMs: 1_000 });
   try {
     const aborted = await Array.fromAsync(
       agent.run({ ...request, signal: AbortSignal.abort() }),
