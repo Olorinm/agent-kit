@@ -98,80 +98,72 @@ const tools = [
     },
   },
 ];
-async function onRequest(request, context) {
-  const p = request.params ?? {},
-    signal = context.signal;
-  if (request.method === "item/tool/requestUserInput") {
+async function onInteraction(request, { signal }) {
+  if (request.kind === "approval") {
+    const choices = request.choices ?? [];
+    const selection = await confirm(
+      request.title,
+      [
+        request.permissions ? JSON.stringify(request.permissions, null, 2) : "",
+        ...choices.map(
+          (c, i) => `${i + 1}. ${c.label}${c.scope ? ` (${c.scope})` : ""}`,
+        ),
+      ]
+        .filter(Boolean)
+        .join("\n"),
+      signal,
+      true,
+    );
+    const choice = choices[Number(selection) - 1];
+    return choice ? { choice: choice.id } : { action: "cancel" };
+  }
+  if (request.kind === "questions") {
     const answers = {};
-    for (const question of p.questions ?? []) {
+    for (const question of request.questions ?? []) {
+      if (question.secret) return { action: "cancel" };
       const answer = await confirm(
-        "助手需要补充信息",
-        question.question,
+        question.title,
+        (question.options ?? [])
+          .map((o) => `${o.label}: ${o.description ?? ""}`)
+          .join("\n") + (question.multiple ? "\n多个答案用逗号分隔" : ""),
         signal,
         true,
       );
-      answers[question.id] = { answers: answer === false ? [] : [answer] };
+      if (answer === false) return { action: "cancel" };
+      answers[question.id] = question.multiple
+        ? answer.split(",").map((v) => v.trim())
+        : answer;
     }
     return { answers };
   }
-  if (
-    [
-      "item/commandExecution/requestApproval",
-      "item/fileChange/requestApproval",
-    ].includes(request.method)
-  )
-    return {
-      decision: (await confirm(
-        "允许助手执行操作？",
-        p.command ?? p.reason ?? "助手请求执行本机操作。",
-        signal,
-      ))
-        ? "accept"
-        : "decline",
-    };
-  if (request.method === "session/request_permission") {
-    const allow = p.options?.find((option) => option.kind === "allow_once");
-    const accepted =
-      allow &&
-      (await confirm(
-        "允许助手执行操作？",
-        p.toolCall?.title ?? "助手请求执行本机操作。",
-        signal,
-      ));
-    return {
-      outcome: accepted
-        ? { outcome: "selected", optionId: allow.optionId }
-        : { outcome: "cancelled" },
-    };
+  if (request.kind === "form") {
+    const answer = await confirm(
+      request.title,
+      `请按以下字段填写 JSON：\n${JSON.stringify(request.schema, null, 2)}`,
+      signal,
+      true,
+    );
+    return answer === false
+      ? { action: "cancel" }
+      : { action: "accept", content: JSON.parse(answer) };
   }
-  if (request.method === "permission")
-    return {
-      behavior: (await confirm(
-        "允许助手执行操作？",
-        p.toolName ?? "本机操作",
-        signal,
-      ))
-        ? "allow"
-        : "deny",
-    };
-  if (request.method === "approval")
-    return {
-      choice: (await confirm(
-        "允许助手执行操作？",
-        p.command ?? p.description ?? "本机操作",
-        signal,
-      ))
-        ? "once"
-        : "deny",
-    };
-  if (["sudo", "secret"].includes(request.method)) return { value: "" };
-  if (
-    ["elicitation/create", "mcpServer/elicitation/request"].includes(
-      request.method,
-    )
-  )
-    return { action: "decline" };
-  return null;
+  if (request.kind === "url") {
+    const answer = await confirm(
+      request.title,
+      `请在浏览器打开以下地址，完成后确认：\n${request.url}`,
+      signal,
+    );
+    return { action: answer ? "accept" : "cancel" };
+  }
+  const answer = await confirm(
+    "原生交互",
+    `此内核请求需要原生 JSON 回复。取消会拒绝请求。\n${JSON.stringify(request.native, null, 2)}`,
+    signal,
+    true,
+  );
+  return answer === false
+    ? { action: "cancel" }
+    : { native: JSON.parse(answer) };
 }
 async function stopObserving() {
   observer?.abort();
@@ -186,7 +178,7 @@ function observe() {
   observing = task
     .wait({
       signal: current.signal,
-      onRequest,
+      onInteraction,
       onHistoryGap: () => {
         el("status").textContent = "较早的进度已省略，完成后仍可查看完整结果。";
       },

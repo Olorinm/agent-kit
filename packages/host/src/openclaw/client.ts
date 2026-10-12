@@ -46,6 +46,7 @@ const OPENCLAW_OPERATOR_SCOPES = [
 
 export class OpenClawGatewayClient {
   serverVersion?: string;
+  methods?: string[];
   private ws?: WebSocket;
   private connected = false;
   private connectPromise?: Promise<void>;
@@ -95,6 +96,7 @@ export class OpenClawGatewayClient {
   close(): void {
     this.connected = false;
     this.serverVersion = undefined;
+    this.methods = undefined;
     for (const pending of this.pending.values()) {
       pending.cleanup();
       pending.reject(new Error("openclaw gateway closed"));
@@ -145,6 +147,10 @@ export class OpenClawGatewayClient {
               asObject(asObject(hello).server),
               "version",
             );
+            const methods = asObject(asObject(hello).features).methods;
+            this.methods = Array.isArray(methods)
+              ? methods.filter((m): m is string => typeof m === "string")
+              : undefined;
             settled = true;
             cleanupConnect();
             this.connected = true;

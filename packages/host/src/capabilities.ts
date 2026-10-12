@@ -13,6 +13,9 @@ export type IntegrationMode = "embedded" | "http";
 export const capabilityNames = [
   "input.text",
   "input.images",
+  "input.audio",
+  "input.documents",
+  "input.video",
   "input.attachments",
   "tools.product",
   "tools.images",
@@ -20,6 +23,7 @@ export const capabilityNames = [
   "interactions.questions",
   "interactions.elicitation",
   "sessions.resume",
+  "sessions.list",
   "sessions.history",
   "sessions.fork",
   "sessions.delete",
@@ -104,9 +108,15 @@ export function getKernelCapabilities(
     "events.native",
   ] as const)
     f[name] = supported();
-  f["sessions.history"] = missing(
-    "Host run records are not a native transcript API.",
-  );
+  for (const name of [
+    "sessions.list",
+    "sessions.history",
+    "sessions.fork",
+    "sessions.delete",
+  ] as const)
+    f[name] = supported(
+      "Native operations through agent.sessions; Host records remain separate.",
+    );
   f["extensions.nativeOptions"] = supported(
     mode === "http"
       ? "Service-owner profiles configure native options; HTTP callers cannot supply executables or credentials."
@@ -135,11 +145,11 @@ export function getKernelCapabilities(
     f["input.images"] = supported(
       "Native Claude image blocks for PNG, JPEG, GIF and WebP.",
     );
-    f["controls.compact"] = missing(
-      "No dedicated common ClaudeAgent compaction operation.",
+    f["controls.compact"] = supported(
+      "Native /compact on the bound session; requires a compact_boundary receipt.",
     );
-    f["controls.steer"] = missing(
-      "Native Query access remains available through ClaudeQueryHost.",
+    f["controls.steer"] = supported(
+      "Native streaming input with priority now; accepted input may be queued by Claude.",
     );
   } else if (kernel === "pi") {
     f["input.images"] = supported(
@@ -158,16 +168,8 @@ export function getKernelCapabilities(
     };
     f["interactions.approval"] = conditional(
       "configuration_required",
-      "An embedded onBeforeTool policy can block tool execution; it is not a native permission dialog.",
+      "Pi beforeTool policy callback; HTTP profiles opt in with toolApproval. No built-in permission dialog is invented.",
     );
-    if (mode === "http") {
-      f["sessions.fork"] = missing(
-        "Native fork is currently exposed only by the embedded Pi adapter.",
-      );
-      f["interactions.approval"] = missing(
-        "The standard service runtime does not wire Pi's onBeforeTool hook.",
-      );
-    }
   } else if (kernel === "opencode" || kernel === "kimi") {
     f["input.images"] = conditional(
       "native_negotiation_required",
@@ -195,8 +197,9 @@ export function getKernelCapabilities(
         : "Configure compaction: 'opencode'; requires an existing binding and the same native profile's serve/summarize API.",
     );
   } else if (kernel === "hermes") {
-    f["input.images"] = missing(
-      "Image bytes can be delivered as workspace files over HTTP; native image-block delivery is not wired.",
+    f["input.images"] = conditional(
+      "configuration_required",
+      "Native image.attach_bytes; Hermes selects native vision or its image-analysis tool according to model/provider configuration.",
     );
     f["tools.product"] = conditional(
       "configuration_required",
@@ -207,7 +210,7 @@ export function getKernelCapabilities(
     f["controls.steer"] = supported();
     f["controls.compact"] = conditional(
       "configuration_required",
-      "Requires a session opened in this process and a confirmed native compressed receipt.",
+      "Requires a bound native session and a confirmed native compressed receipt; durable sessions resume after restart.",
     );
   } else {
     f["input.images"] = supported(
@@ -218,19 +221,95 @@ export function getKernelCapabilities(
       "Requires a local OpenClaw Gateway and the bundled product-tool plugin.",
     );
     f["controls.compact"] = supported("Requires a native compaction receipt.");
-    f["interactions.approval"] = missing(
-      "Native shell approvals are not exposed as common callbacks.",
+    f["controls.steer"] = conditional(
+      "native_negotiation_required",
+      "Gateway sessions.steer interrupts and replaces the active native run; Host follows the returned run ID.",
     );
-    f["interactions.questions"] = missing(
-      "Native questions are not exposed as common callbacks.",
+    f["interactions.approval"] = conditional(
+      "configuration_required",
+      "Gateway exec approval events require operator.approvals scope and session correlation.",
+    );
+    f["interactions.questions"] = {
+      status: "unsupported",
+      reason: "native_not_supported",
+      details:
+        "The tested Gateway has no structured question request/response API. Product tools can ask their own questions.",
+    };
+  }
+  if (kernel === "opencode" || kernel === "kimi")
+    for (const name of ["sessions.list", "sessions.fork"] as const)
+      f[name] = conditional(
+        "native_negotiation_required",
+        "Requires the ACP session capability advertised at initialize.",
+      );
+  if (kernel === "kimi")
+    f["sessions.delete"] = conditional(
+      "native_negotiation_required",
+      "Requires ACP sessionCapabilities.delete.",
+    );
+  if (kernel === "openclaw")
+    f["sessions.fork"] = conditional(
+      "native_negotiation_required",
+      "Requires Gateway sessions.fork and a native entryId; inspect the connected Gateway methods.",
+    );
+  for (const name of ["input.audio", "input.documents", "input.video"] as const)
+    f[name] = {
+      status: "unsupported",
+      reason: "native_not_supported",
+      details:
+        "The pinned native prompt interface has no matching inline content type; HTTP still preserves the file bytes in the workspace.",
+    };
+  if (kernel === "codex")
+    f["input.audio"] = supported(
+      "Native audio/localAudio input items; provider interpretation requires native support.",
+    );
+  if (kernel === "claude")
+    f["input.documents"] = supported("Native PDF document content blocks.");
+  if (kernel === "hermes")
+    f["input.documents"] = conditional(
+      "configuration_required",
+      "Native pdf.attach renders pages with Hermes dependencies; file.attach preserves other files and its native file references.",
+    );
+  if (kernel === "opencode" || kernel === "kimi") {
+    f["input.audio"] = conditional(
+      "native_negotiation_required",
+      "ACP promptCapabilities.audio; otherwise the original file remains available.",
+    );
+    f["input.documents"] = conditional(
+      "native_negotiation_required",
+      "ACP promptCapabilities.embeddedContext preserves embedded resource bytes.",
     );
   }
+  if (kernel === "openclaw")
+    for (const name of [
+      "input.audio",
+      "input.documents",
+      "input.video",
+    ] as const)
+      f[name] = conditional(
+        "configuration_required",
+        "Native Gateway attachment pipeline; configured models and native media tools determine interpretation.",
+      );
   if (kernel !== "codex")
     f["tools.images"] = supported(
       kernel === "pi"
         ? "Inline image data URIs are native image content. External URLs are explicitly rejected."
         : "Inline image data URIs are MCP image content. External URLs remain explicit resource links; they are not fetched.",
     );
+  const nativeUnavailable: Partial<Record<Kernel, Array<CapabilityName>>> = {
+    pi: ["interactions.questions", "interactions.elicitation"],
+    opencode: ["controls.steer"],
+    kimi: ["controls.steer"],
+    hermes: ["interactions.elicitation"],
+    openclaw: ["interactions.elicitation"],
+  };
+  for (const feature of nativeUnavailable[kernel] ?? [])
+    f[feature] = {
+      status: "unsupported",
+      reason: "native_not_supported",
+      details:
+        "The pinned native interface has no corresponding request/control operation. Product tools or native extension hooks remain available; Host does not simulate this feature.",
+    };
   if (mode === "http") {
     f["input.attachments"] = supported(
       "Bounded binary attachments are saved in the selected runtime workspace. This does not imply model interpretation of every file type.",

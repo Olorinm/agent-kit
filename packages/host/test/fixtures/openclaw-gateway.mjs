@@ -12,6 +12,7 @@ export async function startOpenClawFixture({
     sessions = new Map(),
     runs = new Map(),
     calls = [];
+  const approvals = new Map();
   let factory,
     next = 0;
   if (pluginEnabled)
@@ -49,6 +50,10 @@ export async function startOpenClawFixture({
             protocol: 4,
             server: { version: "2026.9.9" },
           });
+        if (frame.method === "exec.approval.resolve") {
+          approvals.get(p.id)?.(p.decision);
+          return respond(true, { ok: true });
+        }
         if (frame.method === "sessions.resolve") {
           const key =
             canonicalize && !p.key.startsWith("agent:")
@@ -75,8 +80,40 @@ export async function startOpenClawFixture({
           return respond(true, {
             sessions: [...sessions].map(([key]) => ({ key })),
           });
+        if (frame.method === "sessions.fork") {
+          const sessionKey = p.sessionKey + "-fork";
+          sessions.set(sessionKey, { ...sessions.get(p.sessionKey) });
+          return respond(true, { sessionKey });
+        }
+        if (frame.method === "sessions.delete")
+          return respond(true, { ok: true, deleted: sessions.delete(p.key) });
         if (frame.method === "sessions.compact")
           return respond(true, { compacted: true });
+        if (frame.method === "sessions.steer") {
+          for (const run of runs.values())
+            if (run.sessionKey === p.key && run.status === "running")
+              run.status = "aborted";
+          const runId = `steered-${p.idempotencyKey}`;
+          runs.set(runId, { status: "running", sessionKey: p.key });
+          send({
+            type: "event",
+            event: "chat",
+            payload: {
+              runId,
+              sessionKey: p.key,
+              state: "final",
+              message: {
+                role: "assistant",
+                content: [{ type: "text", text: p.message }],
+              },
+            },
+          });
+          setTimeout(() => {
+            respond(true, { runId, interruptedActiveRun: true });
+            runs.get(runId).status = "ok";
+          }, 30);
+          return;
+        }
         if (frame.method === "chat.send" || frame.method === "agent") {
           sessions.set(p.sessionKey, sessions.get(p.sessionKey) ?? {});
           const runId = `native-${p.idempotencyKey}`;
@@ -114,6 +151,31 @@ export async function startOpenClawFixture({
           respond(true, { runId });
           if (p.message.includes("HANG")) return;
           let text = "native reply";
+          if (p.message.includes("APPROVAL")) {
+            const id = `approval-${runId}`;
+            const decision = new Promise((resolve) =>
+              approvals.set(id, resolve),
+            );
+            for (const request of [
+              { sessionKey: "another-session", runId },
+              { sessionKey: p.sessionKey, runId: "another-run" },
+              { sessionKey: p.sessionKey, runId },
+            ])
+              send({
+                type: "event",
+                event: "exec.approval.requested",
+                payload: {
+                  id:
+                    request.runId === runId &&
+                    request.sessionKey === p.sessionKey
+                      ? id
+                      : id + "-wrong",
+                  request: { ...request, command: "pwd" },
+                  expiresAtMs: Date.now() + 5000,
+                },
+              });
+            text = await decision;
+          }
           if (p.message.includes("TOOL")) {
             const tools = factory.create({
               sessionKey: p.sessionKey,
@@ -179,7 +241,10 @@ export async function startOpenClawFixture({
         if (frame.method === "chat.abort") {
           if (!ignoreCancel && runs.has(p.runId))
             runs.get(p.runId).status = cancelStatus;
-          return respond(true, { ok: true, aborted: !ignoreCancel && runs.has(p.runId) });
+          return respond(true, {
+            ok: true,
+            aborted: !ignoreCancel && runs.has(p.runId),
+          });
         }
         if (frame.method === "chat.history")
           return respond(true, {

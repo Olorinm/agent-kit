@@ -1,3 +1,4 @@
+import { testGapsPackage } from "./test-gaps-package.mjs";
 import assert from "node:assert/strict";
 import { testHttpPackage } from "./test-http-package.mjs";
 import { testCapabilitiesPackage } from "./test-capabilities-package.mjs";
@@ -13,7 +14,7 @@ import { tmpdir } from "node:os";
 const root = process.cwd();
 const consumer = await mkdtemp(join(tmpdir(), "agent-host-consumer-"));
 await mkdir(resolve(".local"), { recursive: true });
-execFileSync("npm", ["pack", "--pack-destination", consumer, "--silent"], {
+execFileSync(process.execPath, [process.env.npm_execpath, "pack", "--pack-destination", consumer, "--silent"], {
   stdio: "pipe",
 });
 await cp("examples/file-editor", consumer, { recursive: true });
@@ -22,13 +23,14 @@ await writeFile(
   JSON.stringify({ private: true, type: "module" }),
 );
 execFileSync(
-  "npm",
+  process.execPath,
   [
+    process.env.npm_execpath,
     "install",
     "--ignore-scripts",
     "--no-audit",
     "--no-fund",
-    "./olorinm-agent-host-0.1.0-alpha.5.tgz",
+    `./olorinm-agent-host-${JSON.parse(await readFile(join(root,"package.json"),"utf8")).version}.tgz`,
   ],
   { cwd: consumer, stdio: "pipe" },
 );
@@ -102,7 +104,9 @@ const runtime = createNativeRuntime({ id: 'codex', kernel: 'codex', cwd: '.' }, 
 const server = await startAgentHostServer({ runtimes: [runtime], stateDirectory: 'state', token: 'example-owner-token' });
 const client = await new AgentHostClient({ baseUrl: server.url, token: 'example-owner-token' }).connect();
 const task = await client.session({ sessionId: 's', runtimeId: 'codex', tools: [{ name: 'edit', description: 'Edit', inputSchema: {}, async execute(input, context) { context.signal.throwIfAborted(); return { success: true, contentItems: [{ type: 'inputText', text: JSON.stringify(input) }] }; } }] }).run('hi');
-await task.wait({ onRequest: async () => ({ decision: 'decline' }) });
+await task.wait({ onInteraction: async i => i.choices?.length ? { choice: i.choices[0]!.id } : { action: 'cancel' } });
+await client.nativeSessions('codex').history('s');
+await client.discover('codex');
 await server.close();
 `,
   );
@@ -419,3 +423,5 @@ if (process.env.AGENT_HOST_NATIVE_PROBE === "1") {
     await native.close();
   }
 }
+
+await testGapsPackage(consumer);

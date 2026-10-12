@@ -50,6 +50,7 @@ export const startRunSchema = z
     attachments: z.array(attachmentSchema).max(30).default([]),
     context: z.union([z.string(), z.record(z.string(), z.json())]).optional(),
     tools: z.array(toolSchema).max(100).default([]),
+    settings: z.record(z.string(), z.json()).optional(),
     mode: z.enum(["turn", "compact"]).default("turn"),
     timeoutMs: z.number().int().min(100).max(86_400_000).default(3_600_000),
   })
@@ -106,6 +107,7 @@ export const sessionSchema = z
     instructions: z.string(),
     tools: z.array(toolSchema),
     configurationKey: z.string(),
+    nativeDeletedAt: z.string().optional(),
     createdAt: z.string(),
   })
   .strict();
@@ -152,6 +154,7 @@ export interface EventPage {
   historyTruncated: boolean;
 }
 export interface RuntimeDescription {
+  allowedSettings?: import("../settings.js").AllowedSettings;
   id: string;
   kernel: string;
   cwd: string;

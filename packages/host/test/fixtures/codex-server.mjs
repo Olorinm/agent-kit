@@ -1,5 +1,7 @@
+import { appendFileSync } from "node:fs";
 import { createInterface } from "node:readline";
 let id = 0;
+const threads = new Set();
 const active = new Map();
 const requests = new Map();
 const send = (message) => process.stdout.write(`${JSON.stringify(message)}\n`);
@@ -20,6 +22,8 @@ createInterface({ input: process.stdin }).on("line", async (line) => {
     requests.delete(m.id);
     return;
   }
+  if (process.env.CODEX_TEST_LOG)
+    appendFileSync(process.env.CODEX_TEST_LOG, JSON.stringify(m) + "\n");
   const p = m.params ?? {};
   if (m.method === "initialize")
     return reply(m.id, { userAgent: "codex/0.162.0" });
@@ -35,10 +39,41 @@ createInterface({ input: process.stdin }).on("line", async (line) => {
         error: { code: -32602, message: "missing field type in dynamicTools" },
       });
     const threadId = `thread-${++id}`;
+    threads.add(threadId);
     if (process.env.AGENT_HOST_FIXTURE_DELAY === "1" && id === 2)
       return setTimeout(() => reply(m.id, { thread: { id: threadId } }), 400);
     return reply(m.id, { thread: { id: threadId } });
   }
+  if (m.method === "thread/list")
+    return reply(m.id, {
+      data: [...threads].map((id) => ({ id })),
+      nextCursor: null,
+    });
+  if (m.method === "thread/read")
+    return reply(m.id, {
+      thread: {
+        id: p.threadId,
+        turns: [
+          {
+            id: "native-turn",
+            items: [{ type: "userMessage", text: "native history" }],
+          },
+        ],
+      },
+    });
+  if (m.method === "thread/fork") {
+    const threadId = `fork-${++id}`;
+    threads.add(threadId);
+    return reply(m.id, { thread: { id: threadId } });
+  }
+  if (m.method === "thread/delete") {
+    threads.delete(p.threadId);
+    return reply(m.id, {});
+  }
+  if (m.method === "account/read")
+    return reply(m.id, { account: { type: "apiKey" } });
+  if (m.method === "model/list")
+    return reply(m.id, { data: [{ id: "fixture" }] });
   if (m.method === "thread/resume") {
     if (p.threadId === "missing")
       return send({
@@ -57,7 +92,9 @@ createInterface({ input: process.stdin }).on("line", async (line) => {
     return reply(m.id, {});
   const threadId = p.threadId;
   const turnId = `turn-${++id}`;
-  const fullInput = p.input?.some((item) => item.type === "image") ? JSON.stringify(p.input) : p.input?.map((i) => i.text ?? "").join("\n") ?? "compact";
+  const fullInput = p.input?.some((item) => item.type === "image")
+    ? JSON.stringify(p.input)
+    : (p.input?.map((i) => i.text ?? "").join("\n") ?? "compact");
   const input = p.input?.at(-1)?.text ?? "compact";
   active.set(threadId, turnId);
   if (input === "stale-tool") {

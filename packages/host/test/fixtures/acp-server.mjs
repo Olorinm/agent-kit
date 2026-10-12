@@ -44,7 +44,12 @@ async function handle({ id, method, params }) {
       protocolVersion: 1,
       agentCapabilities: {
         loadSession: process.env.ACP_TEST_NO_RESUME !== "1",
-        promptCapabilities: { image: true },
+        promptCapabilities: {
+          image: true,
+          audio: process.env.ACP_TEST_AUDIO === "1",
+          embeddedContext: process.env.ACP_TEST_RESOURCE === "1",
+        },
+        sessionCapabilities: { list: {}, fork: {}, delete: {} },
       },
     });
   if (method === "session/new" || method === "session/load") {
@@ -65,6 +70,19 @@ async function handle({ id, method, params }) {
         },
       ],
     });
+  }
+  if (method === "session/list")
+    return reply(id, {
+      sessions: [...sessions.keys()].map((sessionId) => ({ sessionId })),
+    });
+  if (method === "session/fork") {
+    const sessionId = `fork-${++seq}`;
+    sessions.set(sessionId, { ...sessions.get(params.sessionId), sessionId });
+    return reply(id, { sessionId });
+  }
+  if (method === "session/delete") {
+    sessions.delete(params.sessionId);
+    return reply(id, {});
   }
   if (method === "session/set_config_option") {
     if (params.value !== "opaque-model") throw new Error("wrong_model_id");
@@ -131,7 +149,13 @@ async function handle({ id, method, params }) {
       } finally {
         await client.close();
       }
-    } else update(params.sessionId, params.prompt.some((item) => item.type === "image") ? JSON.stringify(params.prompt) : text);
+    } else
+      update(
+        params.sessionId,
+        params.prompt.some((item) => item.type === "image")
+          ? JSON.stringify(params.prompt)
+          : text,
+      );
     return reply(id, { stopReason: "end_turn" });
   }
   throw new Error(`unknown_method:${method}`);

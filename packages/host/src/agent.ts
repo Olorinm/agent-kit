@@ -60,7 +60,14 @@ export interface TurnOutcome {
   outcomeUnknown?: boolean;
 }
 export type AgentEvent =
+  | import("./progress.js").ProgressEvent
   | { type: "turn.started"; runId: string }
+  | {
+      type: "control.result";
+      runId: string;
+      control: "compact";
+      result: JsonObject;
+    }
   | {
       type: "session.bound";
       runId: string;

@@ -1,3 +1,4 @@
+import { routeInteraction, type InteractionHandler } from "../interactions.js";
 // Observation and callback flow adapted from OpenGrove PR #126 (Apache-2.0).
 // Browser-safe: no Node imports, credentials discovery, or service startup.
 import { capabilityNames, unknownCapabilities } from "../capabilities.js";
@@ -39,6 +40,7 @@ export type RemoteTool = NonNullable<StartRunInput["tools"]>[number] & {
   ): Promise<ProductToolResult>;
 };
 export interface TaskObserver {
+  onInteraction?: InteractionHandler;
   signal?: AbortSignal;
   pollMs?: number;
   onEvent?(item: EventPage["events"][number]): void | Promise<void>;
@@ -88,6 +90,39 @@ export class AgentHostClient {
   async inspect(runtimeId: string): Promise<RuntimeDescription> {
     const value = await this.request("/runtimes/inspect", { runtimeId });
     return parseRuntime(value);
+  }
+  async discover(
+    runtimeId: string,
+  ): Promise<
+    RuntimeDescription & { native?: JsonValue; discovery: "native" | "static" }
+  > {
+    const value = await this.request("/runtimes/discover", { runtimeId });
+    return {
+      ...parseRuntime(value),
+      native: value.native as JsonValue | undefined,
+      discovery: value.discovery === "native" ? "native" : "static",
+    };
+  }
+  nativeSessions(runtimeId: string) {
+    const request = (action: string, options: Record<string, unknown> = {}) =>
+      this.request("/native-sessions", { runtimeId, action, ...options });
+    return {
+      list: (options: { limit?: number; cursor?: string } = {}) =>
+        request("list", options) as unknown as Promise<
+          import("../sessions.js").SessionPage
+        >,
+      bindings: () => request("bindings"),
+      history: (
+        sessionId: string,
+        options: { limit?: number; cursor?: string } = {},
+      ) =>
+        request("history", { sessionId, ...options }) as unknown as Promise<
+          import("../sessions.js").SessionPage
+        >,
+      fork: (sessionId: string, targetSessionId: string, entryId?: string) =>
+        request("fork", { sessionId, targetSessionId, entryId }),
+      delete: (sessionId: string) => request("delete", { sessionId }),
+    };
   }
   async sessions(): Promise<SessionRecord[]> {
     const value = await this.request("/sessions");
@@ -361,7 +396,12 @@ export class RemoteTask {
             tool.name === call.name && tool.namespace === call.namespace,
         );
         if (call.kind === "tool" && !tool) return;
-        if (call.kind === "interaction" && !observer.onRequest) return;
+        if (
+          call.kind === "interaction" &&
+          !observer.onRequest &&
+          !observer.onInteraction
+        )
+          return;
         const control = new AbortController();
         callControllers.set(call.id, control);
         const stop = () => control.abort(signal.reason);
@@ -382,9 +422,12 @@ export class RemoteTask {
           .then(async () => {
             control.signal.throwIfAborted();
             if (call.kind === "interaction")
-              return observer.onRequest!(
-                { method: call.name, params: call.input },
-                context,
+              return (
+                (await routeInteraction(
+                  observer,
+                  { method: call.name, params: call.input },
+                  context,
+                )) ?? null
               );
             try {
               return (await tool!.execute(
@@ -438,7 +481,7 @@ export class RemoteTask {
         for (const event of page.events) await observer.onEvent?.(event);
         this.cursor = page.cursor;
         if (run.status !== "running" && !page.hasMore) return run;
-        if (this.tools.length || observer.onRequest)
+        if (this.tools.length || observer.onRequest || observer.onInteraction)
           for (const call of await this.client.calls(this.runId, signal)) {
             if (call.status !== "pending") {
               callControllers
@@ -510,6 +553,14 @@ function parseRuntime(value: unknown): RuntimeDescription {
   if (capabilities.version !== 1)
     throw new Error("unsupported_host_capability_version");
   const features = object(capabilities.features);
+  for (const name of [
+    "sessions.list",
+    "input.audio",
+    "input.documents",
+    "input.video",
+  ])
+    if (features[name] === undefined)
+      features[name] = { status: "unknown", reason: "runtime_not_declared" };
   if (
     capabilityNames.some(
       (name) =>

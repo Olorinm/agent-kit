@@ -178,3 +178,24 @@ for (const kernel of ["opencode", "kimi"]) {
     assert.equal(result.outcomeUnknown, true);
   });
 }
+
+test("Kimi accepts confirmed native compaction even when the summary grows", async (t) => {
+  const { root, options } = await setup(t, "kimi", "larger");
+  const agent = createAgent({ kernel: "kimi", options });
+  t.after(() => agent.close());
+  const request = {
+    sessionId: "larger",
+    cwd: root,
+    instructions: "",
+    input: "hello",
+  };
+  await Array.fromAsync(agent.run(request));
+  assert.equal(
+    outcome(
+      await Array.fromAsync(
+        agent.run({ ...request, input: "", mode: "compact" }),
+      ),
+    ).status,
+    "completed",
+  );
+});

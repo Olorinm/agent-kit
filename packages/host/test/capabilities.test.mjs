@@ -46,8 +46,8 @@ test("capability discovery distinguishes native limits, negotiation and Host omi
   assert.equal(pi.features["sessions.delete"].reason, "native_not_supported");
   assert.equal(pi.features["sessions.fork"].status, "supported");
   assert.equal(
-    getKernelCapabilities("pi", "http").features["sessions.fork"].reason,
-    "host_not_integrated",
+    getKernelCapabilities("pi", "http").features["sessions.fork"].status,
+    "supported",
   );
   assert.equal(
     getKernelCapabilities("kimi").features["input.images"].reason,
@@ -59,7 +59,7 @@ test("capability discovery distinguishes native limits, negotiation and Host omi
   );
   assert.equal(
     getKernelCapabilities("openclaw").features["interactions.approval"].reason,
-    "host_not_integrated",
+    "configuration_required",
   );
   pi.features["sessions.fork"].status = "unsupported";
   assert.equal(

@@ -1,3 +1,7 @@
+import { startOpenCodeServer } from "./compaction.js";
+import { SessionManager, sessionPage } from "../sessions.js";
+import { projectProgress } from "../progress.js";
+import { routeInteraction, type InteractionHandler } from "../interactions.js";
 import { createHash, randomUUID } from "node:crypto";
 import { resolve } from "node:path";
 import { productToolBridge } from "../product-tool-bridge.js";
@@ -23,6 +27,7 @@ export type AcpEvent =
   | AgentEvent
   | { type: "native.response"; runId: string; response: JsonValue | undefined };
 export interface AcpRunRequest {
+  onInteraction?: InteractionHandler;
   sessionId: string;
   runId?: string;
   cwd: string;
@@ -74,7 +79,10 @@ export class AcpAgent {
   private client?: StdioJsonRpcClient;
   private closed = false;
   private readonly bindings: BindingStore;
-  private readonly sessions = new WeakMap<StdioJsonRpcClient, Set<string>>();
+  private readonly openedSessions = new WeakMap<
+    StdioJsonRpcClient,
+    Set<string>
+  >();
   private readonly capabilities = new WeakMap<StdioJsonRpcClient, JsonObject>();
   private readonly configuration = new WeakMap<
     StdioJsonRpcClient,
@@ -91,6 +99,130 @@ export class AcpAgent {
   private readonly retired = new Set<StdioJsonRpcClient>();
   private readonly active = new Map<string, AbortController>();
   private readonly bridge = new AcpHostToolBridgeServer();
+  get sessions(): SessionManager {
+    const cwd = (path?: string) => path ?? this.options.cwd ?? process.cwd();
+    const rpc = async (
+      method: string,
+      params: JsonObject,
+      signal?: AbortSignal,
+    ) =>
+      object(
+        await (
+          await this.connect()
+        ).request(method, params, { signal, timeoutMs: 30_000 }),
+      );
+    const requireCapability = async (name: string) => {
+      const c = await this.connect();
+      if (object(this.getCapabilities(c).sessionCapabilities)[name] == null)
+        throw new Error(`native_session_${name}_unsupported`);
+    };
+    const http = async (
+      path: string,
+      method: string,
+      directory: string,
+      signal?: AbortSignal,
+    ) => {
+      const server = await startOpenCodeServer({
+        command: this.options.command,
+        cwd: directory,
+        env: this.options.env,
+        signal,
+      });
+      try {
+        const response = await fetch(server.url + path, {
+          method,
+          signal,
+          headers: server.headers,
+        });
+        if (!response.ok)
+          throw new Error(`opencode_session_http_${response.status}`);
+        return await response.json();
+      } finally {
+        await server.close();
+      }
+    };
+    return (this.sessionManager ??= new SessionManager(
+      this.bindings,
+      (id) => this.active.has(id),
+      {
+        list: async (o) => {
+          await requireCapability("list");
+          const n = await rpc(
+            "session/list",
+            { cwd: cwd(o.cwd), cursor: o.cursor },
+            o.signal,
+          );
+          return sessionPage(n.sessions, n, n.nextCursor);
+        },
+        history: async (id, o) => {
+          if (this.options.compaction === "opencode") {
+            const n = await http(
+              `/session/${encodeURIComponent(id)}/message`,
+              "GET",
+              cwd(o.cwd),
+              o.signal,
+            );
+            return sessionPage(n);
+          }
+          // Native ACP load replays its transcript. A separate process keeps that replay out of active turns.
+          const reader = new AcpAgent({
+            ...this.options,
+            bindings: new MemoryBindingStore(),
+          });
+          try {
+            const client = await reader.connect();
+            if (reader.getCapabilities(client).loadSession !== true)
+              throw new Error("native_session_history_unsupported");
+            const items: JsonValue[] = [];
+            const stop = client.addNotificationHandler((n) => {
+              const p = object(n.params);
+              if (p.sessionId === id) items.push(p.update ?? p);
+            });
+            try {
+              await client.request(
+                "session/load",
+                { sessionId: id, cwd: cwd(o.cwd), mcpServers: [] },
+                { signal: o.signal, timeoutMs: 30_000 },
+              );
+              return sessionPage(items);
+            } finally {
+              stop();
+            }
+          } finally {
+            await reader.close();
+          }
+        },
+        fork: async (id, o) => {
+          if (o.entryId) throw new Error("native_fork_entry_id_unsupported");
+          await requireCapability("fork");
+          const n = await rpc(
+            "session/fork",
+            { sessionId: id, cwd: cwd(o.cwd), mcpServers: [] },
+            o.signal,
+          );
+          return String(n.sessionId ?? "");
+        },
+        delete: async (id, o) => {
+          if (this.options.compaction === "opencode") {
+            if (
+              (await http(
+                `/session/${encodeURIComponent(id)}`,
+                "DELETE",
+                cwd(o.cwd),
+                o.signal,
+              )) !== true
+            )
+              throw new Error("native_delete_not_confirmed");
+          } else {
+            await requireCapability("delete");
+            await rpc("session/delete", { sessionId: id }, o.signal);
+          }
+          if (this.client) this.openedSessions.get(this.client)?.delete(id);
+        },
+      },
+    ));
+  }
+  private sessionManager?: SessionManager;
   constructor(private readonly options: AcpAgentOptions) {
     this.bindings = options.bindings ?? new MemoryBindingStore();
   }
@@ -105,7 +237,7 @@ export class AcpAgent {
         env: this.options.env,
       });
       this.client = client;
-      this.sessions.set(client, new Set());
+      this.openedSessions.set(client, new Set());
       const ready = (async () => {
         const response = object(
           await client.request(
@@ -199,7 +331,10 @@ export class AcpAgent {
       queue.close(),
     );
     try {
-      for await (const event of queue) yield event;
+      for await (const event of queue)
+        yield* event.type === "native.response"
+          ? [event]
+          : projectProgress(event);
     } finally {
       controller.abort();
       request.signal?.removeEventListener("abort", abort);
@@ -233,6 +368,7 @@ export class AcpAgent {
     let client: StdioJsonRpcClient | undefined;
     const cleanup: Array<() => void> = [];
     try {
+      this.sessionManager?.assertIdle(request.sessionId);
       if (this.active.has(request.sessionId)) throw new Error("session_busy");
       this.active.set(request.sessionId, controller);
       registered = true;
@@ -280,7 +416,7 @@ export class AcpAgent {
         cleanup.push(() => binding.deactivate(bridge));
         binding.activate(bridge);
       }
-      const opened = this.sessions.get(client)!;
+      const opened = this.openedSessions.get(client)!;
       let threadId = binding?.threadId;
       if (threadId && !opened.has(threadId)) {
         if (this.options.resumeSessions === false)
@@ -405,7 +541,7 @@ export class AcpAgent {
           if (signal.aborted) return fallback;
           return (
             (await abortable(
-              request.onRequest?.(rpc, context) ?? Promise.resolve(undefined),
+              routeInteraction(request, rpc, context),
               signal,
             ).catch(() => undefined)) ?? fallback
           );
@@ -476,6 +612,19 @@ export class AcpAgent {
           : request.input;
       if (input.some((block) => block.type === "image") && !imageSupported)
         throw new Error("native_image_input_unsupported");
+      const promptCapabilities = object(
+        this.getCapabilities(client).promptCapabilities,
+      );
+      if (
+        input.some((block) => block.type === "audio") &&
+        promptCapabilities.audio !== true
+      )
+        throw new Error("native_audio_input_unsupported");
+      if (
+        input.some((block) => block.type === "resource") &&
+        promptCapabilities.embeddedContext !== true
+      )
+        throw new Error("native_embedded_context_unsupported");
       const prompt = [
         ...(prefix ? [{ type: "text", text: prefix }] : []),
         ...input,

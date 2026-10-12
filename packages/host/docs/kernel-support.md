@@ -1,16 +1,16 @@
 # Kernel support
 
-Stable versions checked on **2026-10-09**. These are tested pins, not a promise that future releases are compatible. Native probes ran on macOS arm64 / Node.js 24; Linux CI runs deterministic contract and archive-consumer tests. Windows native execution has not been certified.
+Native versions pinned on **2026-10-09**, with integration probes repeated on **2026-10-12**. These are tested pins, not a promise that future releases are compatible. Native probes ran on macOS arm64 / Node.js 24; CI is configured for deterministic contract and archive-consumer tests on Linux, macOS and Windows. Native execution on Linux/Windows has not been certified.
 
 | Kernel | Tested version | Shared integration |
 | --- | --- | --- |
 | Codex | [0.162.0](https://github.com/openai/codex/releases/tag/rust-v0.162.0) | Native app-server, tool groups, permissions/questions, cancellation, steer, compaction |
-| Claude Agent | [SDK 0.3.295](https://www.npmjs.com/package/@anthropic-ai/claude-agent-sdk/v/0.3.295), engine 2.1.295 | SDK query lifecycle, native resume, MCP product tools with complete JSON Schema, native interactions |
+| Claude Agent | [SDK 0.3.295](https://www.npmjs.com/package/@anthropic-ai/claude-agent-sdk/v/0.3.295), engine 2.1.295 | SDK query lifecycle, native resume/history/fork/delete, MCP tools, common interactions, streaming steer and native compaction |
 | Pi | [1.1.0](https://github.com/earendil-works/pi/releases/tag/v1.1.0) | Native durable conversations, model/tool extension hooks, cancellation, fork, steer, compaction |
 | OpenCode | [1.18.35](https://github.com/anomalyco/opencode/releases/tag/v1.18.35) | ACP initialization, native resume, model/config controls, MCP tools, native summarize bridge |
 | Kimi Code | [2.1.1](https://github.com/MoonshotAI/kimi-code/releases/tag/%40moonshot-ai%2Fkimi-code%402.1.1) | ACP, native load, native permission and form elicitation, MCP tools, `/compact` receipt |
 | Hermes | [0.21.6](https://github.com/NousResearch/hermes-agent/releases/tag/v0.21.6) | Native TUI Gateway, durable/live ID separation, MCP tools, modern approval/questions, compression and steering receipts |
-| OpenClaw | [2026.9.9](https://github.com/openclaw/openclaw/releases/tag/v2026.9.9) | Gateway protocol 4, canonical session bindings, correlated streams, cancellation, model selection, compaction, optional product-tool plugin |
+| OpenClaw | [2026.9.9](https://github.com/openclaw/openclaw/releases/tag/v2026.9.9) | Gateway protocol 4, canonical session bindings, correlated streams, cancellation, model selection, compaction, optional product-tool plugin, native exec approvals and interrupting steer |
 
 ## What was exercised
 
@@ -18,11 +18,9 @@ The independent editor's **native model-backed probes passed for all seven Kerne
 
 `npm test` uses protocol/SDK/provider fixtures to exercise failure boundaries, concurrency, cancellation, event correlation, interactions and controls. `npm run test:package` installs the archive outside the repository and tests the same editor against all seven adapters, including native Pi persistence with deterministic provider output. These tests do not contact a model provider.
 
-Native Codex compaction and Kimi structured elicitation have additional live probe coverage. Other optional controls and interaction forms have contract coverage or retained upstream ports; they are **not all certified by model-backed probes**. OpenClaw's native shell approvals and native question routing are not exposed as common callbacks. Its product-tool approval path is verified separately through the bundled plugin.
+Alpha.6 adds live HTTP coverage for all seven Kernels: text, native identity and recall after Host restart, native history/list, receipt-based compaction and image input. Native fork/delete and product-tool/control results are itemized in the [versioned evidence matrix](native-verification.md). The exact native operation and failure receipt are preserved; these results do not certify every provider or model.
 
-The standalone HTTP service adds a separate consumer path. Its seven-adapter matrix uses deterministic fixtures. A model-backed Codex 0.162.0 probe on macOS also passed through the installed HTTP CLI and independent editor: reject, approve/save, durable operation receipt, process restart and native conversation continuation. This does not certify all seven HTTP profiles or every control against live models. See [HTTP service verification](http-service.md#example-and-verification).
-
-The shared factory is exercised by all seven installed editor fixtures. Capability discovery and OpenCode/Kimi HTTP compaction have protocol and independent installed-consumer coverage, including native binding continuation after service restart. Missing bindings, absent receipts and interrupted compaction have failure-path tests. These additions have not received new live model-backed certification.
+The common interaction helper, selectable settings, native session API, new CLI, controls and additional media paths have deterministic regression tests and independent archive-consumer checks. These are separate from native execution. OpenClaw's native command approvals now reach the common callback with session/run correlation; Pi's native policy hook can be enabled by the HTTP owner. Every optional form, model setting and media type is not model-backed certified.
 
 ## Upgrade boundaries
 
@@ -37,4 +35,6 @@ The package does not replace global CLIs, migrate personal login state or provis
 
 ## Media through the HTTP service
 
-The service preserves attachment bytes and workspace paths for all configured runtimes. Codex, Claude, Pi 1.1 and OpenClaw have native image input paths; ACP negotiates image input, and Hermes uses workspace files. The HTTP fixture suite checks these paths and native image tool results; the independent installed-package consumer checks image submission and binary file read/write. These are protocol/SDK fixtures, not model-backed vision or speech certification. See [media input](http-service.md#media-input) for limits and model boundaries.
+The service preserves attachment bytes and workspace paths for all seven runtimes. Codex, Claude, Pi and OpenClaw have native image input paths; ACP negotiates image/audio/resource input; Hermes uses native image/PDF/file attachment operations. Claude also accepts native PDF document blocks, and Codex accepts native audio items. HTTP fixtures verify bytes at these boundaries and image tool results; installed-consumer tests verify image submission and binary file read/write. Native image probes and other media verification limits are recorded separately in [native verification](native-verification.md).
+
+See [common API](common-api.md) for native list/history/fork/delete, interaction helpers, settings and controls, and [quickstart](quickstart.md) for installation and readiness diagnostics.

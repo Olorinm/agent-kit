@@ -64,6 +64,7 @@ export async function startAgentHostServer(options: HostServerOptions) {
     options.eventLimit,
   );
   const active = new Map<string, ActiveRun>();
+  const managing = new Set<string>();
   let closing = false;
   let persistenceFailed = false;
   let closed: Promise<void> | undefined;
@@ -129,6 +130,7 @@ export async function startAgentHostServer(options: HostServerOptions) {
       cwd: runtime.cwd,
       model: runtime.model,
       capabilities,
+      allowedSettings: runtime.allowedSettings,
       controls: {
         steer: Boolean(runtime.steer),
         compact: Boolean(runtime.supportsCompaction),
@@ -162,6 +164,7 @@ export async function startAgentHostServer(options: HostServerOptions) {
         runId: record.id,
         input: input.input,
         attachments,
+        settings: input.settings,
         mode: input.mode,
         instructions: input.instructions,
         context:
@@ -205,6 +208,18 @@ export async function startAgentHostServer(options: HostServerOptions) {
 
   async function start(input: StartRun): Promise<RunRecord> {
     const runtime = getRuntime(input.runtimeId);
+    if (input.settings && Object.keys(input.settings).length) {
+      if (!runtime.validateSettings)
+        throw new HostError(409, "runtime_settings_unsupported");
+      try {
+        runtime.validateSettings(input.settings);
+      } catch (error) {
+        throw new HostError(
+          400,
+          error instanceof Error ? error.message : String(error),
+        );
+      }
+    }
     const inspected = await describe(runtime);
     if (!inspected.available)
       throw new HostError(409, inspected.reason ?? "runtime_unavailable");
@@ -227,7 +242,10 @@ export async function startAgentHostServer(options: HostServerOptions) {
       (runtime.maxConcurrentRuns ?? 16)
     )
       throw new HostError(409, "runtime_busy");
+    if (managing.has(input.sessionId)) throw new HostError(409, "session_busy");
     const previous = store.session(input.sessionId);
+    if (previous?.nativeDeletedAt)
+      throw new HostError(409, "native_session_deleted");
     const definition = {
       runtimeId: input.runtimeId,
       instructions: input.instructions,
@@ -351,6 +369,101 @@ export async function startAgentHostServer(options: HostServerOptions) {
         .strict()
         .parse(await body(request));
       return reply(response, 200, await describe(getRuntime(input.runtimeId)));
+    }
+    if (method === "POST" && path.join("/") === "v1/runtimes/discover") {
+      const input = z
+        .object({ runtimeId: idSchema })
+        .strict()
+        .parse(await body(request));
+      const runtime = getRuntime(input.runtimeId);
+      const discovered = await runtime.discover?.();
+      return reply(response, 200, {
+        ...(await describe(runtime)),
+        ...discovered,
+        discovery: discovered ? "native" : "static",
+      });
+    }
+    if (method === "POST" && path.join("/") === "v1/native-sessions") {
+      const input = z
+        .object({
+          runtimeId: idSchema,
+          action: z.enum(["list", "bindings", "history", "fork", "delete"]),
+          sessionId: idSchema.optional(),
+          targetSessionId: idSchema.optional(),
+          entryId: z.string().max(1000).optional(),
+          limit: z.number().int().min(1).max(1000).optional(),
+          cursor: z.string().max(10000).optional(),
+        })
+        .strict()
+        .parse(await body(request));
+      const runtime = getRuntime(input.runtimeId),
+        manager = runtime.sessions;
+      if (!manager) throw new HostError(409, "native_sessions_unsupported");
+      const query = {
+        cwd: runtime.cwd,
+        limit: input.limit,
+        cursor: input.cursor,
+        signal: AbortSignal.timeout(60_000),
+      };
+      if (input.action === "list")
+        return reply(response, 200, await manager.list(query));
+      if (input.action === "bindings")
+        return reply(response, 200, { bindings: await manager.bindings() });
+      if (!input.sessionId) throw new HostError(400, "session_id_required");
+      const session = store.session(input.sessionId);
+      if (!session || session.runtimeId !== runtime.id)
+        throw new HostError(404, "session_not_found");
+      if (session.nativeDeletedAt)
+        throw new HostError(409, "native_session_deleted");
+      if (session.configurationKey !== runtime.configurationKey)
+        throw new HostError(409, "session_configuration_conflict");
+      const ids = [
+        input.sessionId,
+        ...(input.targetSessionId ? [input.targetSessionId] : []),
+      ];
+      if (
+        ids.some(
+          (id) =>
+            managing.has(id) ||
+            [...active.values()].some((r) => r.record.sessionId === id),
+        )
+      )
+        throw new HostError(409, "session_busy");
+      if (
+        input.action === "fork" &&
+        (!input.targetSessionId || store.session(input.targetSessionId))
+      )
+        throw new HostError(409, "fork_target_required_or_exists");
+      ids.forEach((id) => managing.add(id));
+      try {
+        if (input.action === "history")
+          return reply(
+            response,
+            200,
+            await manager.history(input.sessionId, query),
+          );
+        if (input.action === "fork") {
+          const fork = await manager.fork(
+            input.sessionId,
+            input.targetSessionId!,
+            { ...query, entryId: input.entryId },
+          );
+          store.saveSession({
+            ...session,
+            id: input.targetSessionId!,
+            createdAt: new Date().toISOString(),
+          });
+          return reply(response, 200, fork);
+        }
+        const deleted = await manager.delete(input.sessionId, query);
+        store.saveSession({
+          ...session,
+          nativeDeletedAt: new Date().toISOString(),
+        });
+        return reply(response, 200, deleted);
+      } finally {
+        ids.forEach((id) => managing.delete(id));
+      }
     }
     if (method === "GET" && path.length === 2 && path[1] === "sessions")
       return reply(response, 200, { sessions: store.sessions() });

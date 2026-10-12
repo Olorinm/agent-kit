@@ -44,6 +44,7 @@ test("Hermes uses stored IDs across restart, scopes native events and trusts com
     assert.deepEqual(await agent.compact(request.sessionId, "focus"), {
       ok: true,
       compacted: true,
+      nativeSessionId: binding.threadId,
     });
     agent.close();
     reopened = new HermesAgent(options);

@@ -1,9 +1,12 @@
+import type { SessionManager } from "../sessions.js";
+import type { SettingsSelection, AllowedSettings } from "../settings.js";
 import type { AgentEvent, InteractionContext, ProductTool } from "../agent.js";
 import type { JsonValue } from "../types.js";
 import type { RuntimeDescription, ServiceEvent } from "./protocol.js";
 import type { AgentCapabilities } from "../capabilities.js";
 
 export interface RuntimeTurn {
+  settings?: SettingsSelection;
   sessionId: string;
   runId: string;
   input: string;
@@ -38,6 +41,10 @@ export interface ServiceRuntime {
   supportsCompaction?: boolean;
   maxConcurrentRuns?: number;
   inputs?: RuntimeDescription["inputs"];
+  sessions?: SessionManager;
+  allowedSettings?: AllowedSettings;
+  validateSettings?(settings: SettingsSelection): void;
+  discover?(): Promise<{ capabilities: AgentCapabilities; native?: JsonValue }>;
   inspect?(): Promise<Pick<RuntimeDescription, "available" | "reason">>;
   close(): void | Promise<void>;
 }
