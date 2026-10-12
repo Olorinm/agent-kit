@@ -246,7 +246,9 @@ test("expired product calls propagate deadlines and reject late success", async 
       tools: [
         {
           ...tool,
-          timeoutMs: 100,
+          // Leave room for HTTP polling on loaded Windows runners. The test
+          // checks expiry/late-result rejection, not sub-100ms dispatch latency.
+          timeoutMs: 1_000,
           execute: async (_input, { signal }) => {
             await new Promise((resolve) => {
               if (signal.aborted) resolve();
@@ -259,7 +261,7 @@ test("expired product calls propagate deadlines and reject late success", async 
       ],
     })
     .run("tool");
-  await task.wait({ pollMs: 20, signal: AbortSignal.timeout(5_000) });
+  await task.wait({ pollMs: 20, signal: AbortSignal.timeout(10_000) });
   assert.equal(aborted, true);
   const [call] = await task.client.calls(task.runId);
   assert.equal(call.status, "timed_out");
