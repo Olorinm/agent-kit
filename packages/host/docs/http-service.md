@@ -9,7 +9,7 @@ The service manages transport, task storage and callbacks around the shared adap
 
 ## Start a service
 
-Node.js 24+ is required. From this repository, build an archive with `npm pack`, then install that archive in your consumer. The current archive is `olorinm-agent-host-0.1.0-alpha.4.tgz`; it is not published to the npm registry.
+Node.js 24+ is required. From this repository, build an archive with `npm pack`, then install that archive in your consumer. The current archive is `olorinm-agent-host-0.1.0-alpha.5.tgz`; it is not published to the npm registry.
 
 Create `host.json`:
 
@@ -54,6 +54,8 @@ HTTP callers select a configured `runtimeId`. They cannot supply executables, en
 | `openclaw`         | Required `gatewayUrl`, optional `gatewayTokenEnv` naming a server environment variable, optional `model`. Product tools require the existing [Gateway plugin](api.md#openclaw-product-tools).            |
 
 `GET /v1/runtimes` and `POST /v1/runtimes/inspect` expose profile availability and implemented controls. Inspection checks the configured directory/executable and required model selection. It does not prove login, model access or native execution, and does not scan or install every Agent on the machine. Native request-time failures remain visible in the task outcome.
+
+Each description also includes the shared [capability schema](capabilities.md). It distinguishes adapter support from native negotiation and configuration requirements. Existing `controls.steer` and `controls.compact` flags remain available. Custom runtimes must declare their own capabilities; a custom runtime named `codex` does not automatically inherit the built-in adapter's claims.
 
 For custom Pi providers, Claude SDK settings, native discovery, or additional runtime composition, use the server package from Node:
 
@@ -173,7 +175,7 @@ Every operation requires `Authorization: Bearer <token>` and JSON bodies for POS
 | `GET /v1/sessions/:id/files?list=true&path=...` | List one directory, when enabled.                                                                                              |
 | `POST /v1/sessions/:id/files`                   | Write `{ path, content, encoding?: "utf8" | "base64", expectedRevision? }`, when enabled.                                                                    |
 
-`session.compact()` submits `mode: 'compact'` through the same task machinery. HTTP compaction is implemented for Codex, Pi, Hermes and OpenClaw; Hermes requires a live opened session in this service process. HTTP steering is implemented for Codex, Pi and Hermes. Unsupported controls fail explicitly. Existing embedded ACP compaction helpers remain available; the HTTP service does not create a substitute conversation to invoke them. Optional controls have protocol coverage unless separately recorded as native-tested.
+`session.compact()` submits `mode: 'compact'` through the same task machinery. HTTP compaction is implemented for Codex, Pi, OpenCode, Kimi, Hermes and OpenClaw; Hermes requires a live opened session in this service process. OpenCode/Kimi require an existing native binding, reject custom reasons, and use their native summarize/compact operation. OpenCode additionally requires a command supporting `serve` against the same native profile. An acknowledgement alone does not establish success; missing or interrupted completion is reported as unknown. HTTP steering is implemented for Codex, Pi and Hermes. Unsupported controls fail explicitly. Optional controls have protocol coverage unless separately recorded as native-tested.
 
 Workspace file access is opt-in via `workspaceFiles: true`. Paths stay under the selected profile's workspace; symlinks are rejected. `expectedRevision: null` requires a new file; a prior revision prevents overwriting a change already observed by this process. This is an optimistic check, not a transaction with unrelated filesystem writers or an OS sandbox for native tools. The client exposes `readFile`, `writeFile`, `readBinaryFile`, `writeBinaryFile`, and `listFiles`. Text files are limited to 1 MB; binary files to 30 MiB. Binary content is canonical base64 and revisions hash the decoded bytes.
 
@@ -192,6 +194,8 @@ Workspace file access is opt-in via `workspaceFiles: true`. Paths stay under the
 A turn accepts up to 30 `attachments`, with a combined decoded size of 30 MiB. Each item is `{ name, mediaType, data }`, where `data` is canonical base64. An attachment-only turn may use `input: ""`. The client supports `session.run(input, context, attachments)`.
 
 The service saves immutable, content-addressed files under the configured workspace's `.agent-host/attachments/` and supplies their paths to the runtime. Files use private permissions and the directory has a `.gitignore`. This is private runtime state; retention is controlled by the service owner. Attachment transfer does not require enabling the additional workspace file API.
+
+Custom runtimes must explicitly enable attachment delivery through `inputs.attachments`; otherwise requests fail before task creation or file writes. Compaction rejects attachments. Inline tool-result image data is validated before MCP delivery, and an invalid image produces a failed tool result rather than a successful result containing an unusable link.
 
 | Runtime | Image input | Other attachments |
 | --- | --- | --- |

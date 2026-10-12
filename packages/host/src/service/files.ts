@@ -41,7 +41,11 @@ function inside(root: string, path: string): string {
 }
 const revision = (content: Buffer) =>
   createHash("sha256").update(content).digest("hex");
-export function readWorkspaceFile(root: string, path: string, encoding: "utf8" | "base64" = "utf8") {
+export function readWorkspaceFile(
+  root: string,
+  path: string,
+  encoding: "utf8" | "base64" = "utf8",
+) {
   const target = inside(root, path);
   const fd = openSync(target, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
   try {
@@ -103,22 +107,49 @@ export function writeWorkspaceFile(
   } finally {
     if (existsSync(temporary)) unlinkSync(temporary);
   }
-  return { path, content, revision: revision(bytes), ...(encoding === "base64" ? { encoding } : {}) };
+  return {
+    path,
+    content,
+    revision: revision(bytes),
+    ...(encoding === "base64" ? { encoding } : {}),
+  };
 }
 
 /** Turn inputs are immutable, content-addressed files inside the selected runtime workspace. */
-export function saveRunAttachment(root: string, sessionId: string, item: { name: string; data: string }) {
+export function saveRunAttachment(
+  root: string,
+  sessionId: string,
+  item: { name: string; data: string },
+) {
   const bytes = Buffer.from(item.data, "base64");
-  const sanitized = item.name.replace(/[^\p{L}\p{N}_.-]/gu, "_").replace(/^\.+/, "_") || "attachment";
-  let name = ""; for (const character of sanitized) { if (Buffer.byteLength(name + character) > 200) break; name += character; }
+  const sanitized =
+    item.name.replace(/[^\p{L}\p{N}_.-]/gu, "_").replace(/^\.+/, "_") ||
+    "attachment";
+  let name = "";
+  for (const character of sanitized) {
+    if (Buffer.byteLength(name + character) > 200) break;
+    name += character;
+  }
   const path = `.agent-host/attachments/${sessionId}/${revision(bytes)}/${name}`;
   const target = inside(root, path);
   mkdirSync(dirname(target), { recursive: true, mode: 0o700 });
   inside(root, path);
   ignoreHostFiles(root);
   try {
-    const fd = openSync(target, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | (constants.O_NOFOLLOW ?? 0), 0o600);
-    try { writeFileSync(fd, bytes); fsyncSync(fd); } finally { closeSync(fd); }
+    const fd = openSync(
+      target,
+      constants.O_WRONLY |
+        constants.O_CREAT |
+        constants.O_EXCL |
+        (constants.O_NOFOLLOW ?? 0),
+      0o600,
+    );
+    try {
+      writeFileSync(fd, bytes);
+      fsyncSync(fd);
+    } finally {
+      closeSync(fd);
+    }
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
     if (readWorkspaceFile(root, path, "base64").revision !== revision(bytes))
@@ -128,6 +159,9 @@ export function saveRunAttachment(root: string, sessionId: string, item: { name:
 }
 function ignoreHostFiles(root: string) {
   const ignore = inside(root, ".agent-host/.gitignore");
-  try { writeFileSync(ignore, "*\n", { flag: "wx", mode: 0o600 }); }
-  catch (error) { if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error; }
+  try {
+    writeFileSync(ignore, "*\n", { flag: "wx", mode: 0o600 });
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+  }
 }

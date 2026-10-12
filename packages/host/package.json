@@ -1,6 +1,6 @@
 {
   "name": "@olorinm/agent-host",
-  "version": "0.1.0-alpha.4",
+  "version": "0.1.0-alpha.5",
   "description": "Product-independent native Agent sessions, tools and interaction routing",
   "type": "module",
   "license": "Apache-2.0",
@@ -83,6 +83,14 @@
     "./openclaw/plugin": {
       "types": "./dist/openclaw/plugin.d.ts",
       "import": "./dist/openclaw/plugin.js"
+    },
+    "./adapters": {
+      "types": "./dist/adapters.d.ts",
+      "import": "./dist/adapters.js"
+    },
+    "./capabilities": {
+      "types": "./dist/capabilities.d.ts",
+      "import": "./dist/capabilities.js"
     }
   },
   "bin": {

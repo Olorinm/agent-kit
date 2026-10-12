@@ -368,7 +368,8 @@ export class PiAgent {
               );
             return {
               content: result.contentItems.map((item) => {
-                if (item.type === "inputText") return { type: "text" as const, text: item.text };
+                if (item.type === "inputText")
+                  return { type: "text" as const, text: item.text };
                 const image = inlineImage(item.imageUrl);
                 if (!image) throw new Error("pi_tool_image_requires_data_uri");
                 return { type: "image" as const, ...image };
@@ -491,10 +492,22 @@ export class PiAgent {
               tool: event.toolName,
               result: {
                 success: result?.role === "toolResult" && !result.isError,
-                contentItems: result?.role === "toolResult" ? result.content.map((item) =>
-                  item.type === "text" ? { type: "inputText" as const, text: item.text } :
-                    { type: "inputImage" as const, imageUrl: `data:${item.mimeType};base64,${item.data}` }) :
-                  [{ type: "inputText", text: "Native tool did not produce a result" }],
+                contentItems:
+                  result?.role === "toolResult"
+                    ? result.content.map((item) =>
+                        item.type === "text"
+                          ? { type: "inputText" as const, text: item.text }
+                          : {
+                              type: "inputImage" as const,
+                              imageUrl: `data:${item.mimeType};base64,${item.data}`,
+                            },
+                      )
+                    : [
+                        {
+                          type: "inputText",
+                          text: "Native tool did not produce a result",
+                        },
+                      ],
               },
             });
           }

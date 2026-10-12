@@ -1,6 +1,7 @@
 import { z } from "zod";
 import type { AgentEvent, ProductToolResult } from "../agent.js";
 import type { JsonValue } from "../types.js";
+import type { AgentCapabilities } from "../capabilities.js";
 
 /** Native JSON objects may contain undefined fields; the wire format cannot. */
 export function wireJson(value: JsonValue) {
@@ -23,11 +24,22 @@ export const toolSchema = z
   })
   .strict();
 export type ToolDefinition = z.output<typeof toolSchema>;
-export const attachmentSchema = z.object({
-  name: z.string().min(1).max(255),
-  mediaType: z.string().min(1).max(100),
-  data: z.string().max(42_000_000).refine((data) => data.length % 4 === 0 && !/[^A-Za-z0-9+/=]/.test(data) && Buffer.from(data, "base64").toString("base64") === data, "invalid_base64"),
-}).strict();
+export const attachmentSchema = z
+  .object({
+    name: z.string().min(1).max(255),
+    mediaType: z.string().min(1).max(100),
+    data: z
+      .string()
+      .max(42_000_000)
+      .refine(
+        (data) =>
+          data.length % 4 === 0 &&
+          !/[^A-Za-z0-9+/=]/.test(data) &&
+          Buffer.from(data, "base64").toString("base64") === data,
+        "invalid_base64",
+      ),
+  })
+  .strict();
 export type RunAttachment = z.infer<typeof attachmentSchema>;
 export const startRunSchema = z
   .object({
@@ -48,9 +60,19 @@ export const startRunSchema = z
         .size !== value.tools.length
     )
       ctx.addIssue({ code: "custom", message: "duplicate_tool_name" });
-    if (value.attachments.reduce((size, item) => size + Buffer.byteLength(item.data, "base64"), 0) > 30 * 1024 * 1024)
+    if (
+      value.attachments.reduce(
+        (size, item) => size + Buffer.byteLength(item.data, "base64"),
+        0,
+      ) >
+      30 * 1024 * 1024
+    )
       ctx.addIssue({ code: "custom", message: "attachments_too_large" });
-    if (value.mode === "turn" && !value.input.trim() && !value.attachments.length)
+    if (
+      value.mode === "turn" &&
+      !value.input.trim() &&
+      !value.attachments.length
+    )
       ctx.addIssue({ code: "custom", message: "input_required" });
   });
 export type StartRunInput = z.input<typeof startRunSchema>;
@@ -135,7 +157,11 @@ export interface RuntimeDescription {
   cwd: string;
   model?: string;
   controls: { steer: boolean; compact: boolean };
-  inputs?: { attachments: boolean; images: "native" | "negotiated" | "workspace" };
+  capabilities: AgentCapabilities;
+  inputs?: {
+    attachments: boolean;
+    images: "native" | "negotiated" | "workspace";
+  };
   available: boolean;
   reason?: string;
 }

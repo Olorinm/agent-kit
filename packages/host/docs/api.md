@@ -11,7 +11,7 @@ npm ci
 npm test
 npm pack
 cd examples/file-editor
-npm install ../../olorinm-agent-host-0.1.0-alpha.4.tgz
+npm install ../../olorinm-agent-host-0.1.0-alpha.5.tgz
 AGENT_HOST_CODEX=../../node_modules/.bin/codex npm start
 ```
 
@@ -22,12 +22,15 @@ For an independently running HTTP process and a browser client, see [Standalone 
 ## Product integration
 
 ```ts
-import { CodexAgent } from '@olorinm/agent-host/codex';
+import { createAgent } from '@olorinm/agent-host/adapters';
 import { FileBindingStore } from '@olorinm/agent-host';
 
-const agent = new CodexAgent({
-  command: 'codex',
-  bindings: new FileBindingStore('.local/bindings'),
+const agent = createAgent({
+  kernel: 'codex',
+  options: {
+    command: 'codex',
+    bindings: new FileBindingStore('.local/bindings'),
+  },
 });
 try {
   for await (const event of agent.run({
@@ -48,6 +51,8 @@ try {
 ```
 
 `instructions` are stable; `context` is the current product state, supplied on every turn. A product can also supply native text/image/skill/mention input items. Native `thread` and `turn` options preserve controls such as model, effort, sandbox policy, output schema and collaboration mode without inventing equivalent features for other Kernels. Passing an option does not establish that it has been verified in every environment.
+
+`createAgent({ kernel, options })` selects any of the seven adapters. TypeScript retains the selected adapter's native options and methods; existing direct imports still work. Hermes requires its Gateway command, and OpenClaw requires its Gateway connection. The [capability API](capabilities.md) describes common operations and limits without starting a process. Native request formats remain available; this factory does not normalize every approval or question.
 
 ## Tools and interactions
 
@@ -111,6 +116,8 @@ The editor's `createEditor` accepts `kernel`, `command`, `args`, `env`, `model`,
 ### ACP controls and questions
 
 `AcpAgent.connect()` initializes the native process. `getCapabilities(client)` exposes what that process actually advertises; native initialization and session notifications retain configuration details. Form elicitation is opt-in through `elicitation: { form: {} }`; return native `{ action: 'accept', content }`, `decline` or `cancel` from `onRequest`. Permissions use native option IDs. Model, effort and config requests are checked against native options. `compactOpenCode` and `compactKimi` retain the native summarization/command paths; arbitrary ACP does not imply universal compaction support.
+
+The factory selects the matching native compaction path for `opencode` and `kimi`. Direct `AcpAgent` callers can set `compaction: 'opencode' | 'kimi'`. Submit `mode: 'compact', input: ''` with the same session, instructions, workspace and tool definitions as ordinary turns. Compaction requires an existing binding and resumes it after a restart; it never creates a substitute conversation. These native operations do not accept a custom reason, so nonempty input is rejected. OpenCode's command must also support `serve` with the same native profile/storage; Kimi must report a completion receipt. An interrupted or unconfirmed dispatch returns an unknown outcome.
 
 ### Claude native SDK
 

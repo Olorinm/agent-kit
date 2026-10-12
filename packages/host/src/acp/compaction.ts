@@ -31,6 +31,7 @@ export async function compactOpenCode(options: {
       command: options.command,
       cwd: resolve(options.cwd ?? process.cwd()),
       env: runtimeEnv,
+      signal: options.signal,
     });
     const model =
       openCodeSummarizeModel(options.model, runtimeEnv) ??
@@ -237,7 +238,9 @@ async function startOpenCodeServer(input: {
   command: string;
   cwd: string;
   env: NodeJS.ProcessEnv | undefined;
+  signal?: AbortSignal;
 }): Promise<OpenCodeServerProcess> {
+  input.signal?.throwIfAborted();
   const env: NodeJS.ProcessEnv = {
     ...process.env,
     ...(input.env ?? {}),
@@ -261,7 +264,7 @@ async function startOpenCodeServer(input: {
   child.stdin.end();
   let url: string;
   try {
-    url = await waitForOpenCodeServerUrl(child);
+    url = await waitForOpenCodeServerUrl(child, input.signal);
   } catch (error) {
     await closeOpenCodeServer(child);
     throw error;
@@ -274,6 +277,7 @@ async function startOpenCodeServer(input: {
 
 function waitForOpenCodeServerUrl(
   child: ChildProcessWithoutNullStreams,
+  signal?: AbortSignal,
 ): Promise<string> {
   return new Promise((resolveUrl, reject) => {
     let settled = false;
@@ -296,6 +300,8 @@ function waitForOpenCodeServerUrl(
       }
     };
     const onError = (error: Error) => finish(undefined, error);
+    const onAbort = () =>
+      finish(undefined, new Error("opencode_serve_aborted"));
     const onExit = (code: number | null, signal: NodeJS.Signals | null) => {
       finish(
         undefined,
@@ -312,6 +318,7 @@ function waitForOpenCodeServerUrl(
       child.stderr.off("data", onData);
       child.off("error", onError);
       child.off("exit", onExit);
+      signal?.removeEventListener("abort", onAbort);
       if (url) resolveUrl(url);
       else reject(error ?? new Error("opencode_serve_failed"));
     };
@@ -319,6 +326,8 @@ function waitForOpenCodeServerUrl(
     child.stderr.on("data", onData);
     child.on("error", onError);
     child.on("exit", onExit);
+    signal?.addEventListener("abort", onAbort, { once: true });
+    if (signal?.aborted) onAbort();
   });
 }
 

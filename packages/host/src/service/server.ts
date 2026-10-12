@@ -1,3 +1,4 @@
+import { unknownCapabilities } from "../capabilities.js";
 import { randomUUID, timingSafeEqual } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import {
@@ -78,18 +79,64 @@ export async function startAgentHostServer(options: HostServerOptions) {
   };
   const describe = async (
     runtime: ServiceRuntime,
-  ): Promise<RuntimeDescription> => ({
-    id: runtime.id,
-    kernel: runtime.kernel,
-    cwd: runtime.cwd,
-    model: runtime.model,
-    controls: {
-      steer: Boolean(runtime.steer),
-      compact: Boolean(runtime.supportsCompaction),
-    },
-    ...(runtime.inputs ? { inputs: runtime.inputs } : {}),
-    ...((await runtime.inspect?.()) ?? { available: true }),
-  });
+  ): Promise<RuntimeDescription> => {
+    const capabilities = structuredClone(
+      runtime.capabilities ?? unknownCapabilities(runtime.kernel, "http"),
+    );
+    capabilities.kernel = runtime.kernel;
+    capabilities.mode = "http";
+    if (!runtime.inputs?.attachments)
+      capabilities.features["input.attachments"] = {
+        status: "unsupported",
+        reason: "host_not_integrated",
+        details: "This runtime has not enabled attachment delivery.",
+      };
+    else if (!runtime.capabilities)
+      capabilities.features["input.attachments"] = {
+        status: "supported",
+        details: "The custom runtime explicitly accepts workspace attachments.",
+      };
+    if (!runtime.capabilities && runtime.inputs)
+      capabilities.features["input.images"] =
+        runtime.inputs.images === "native"
+          ? { status: "supported" }
+          : runtime.inputs.images === "negotiated"
+            ? {
+                status: "conditional",
+                reason: "native_negotiation_required",
+              }
+            : {
+                status: "unsupported",
+                reason: "host_not_integrated",
+                details:
+                  "Image bytes are available as workspace files, without native image-block delivery.",
+              };
+    for (const [name, enabled] of [
+      ["controls.steer", Boolean(runtime.steer)],
+      ["controls.compact", Boolean(runtime.supportsCompaction)],
+    ] as const) {
+      if (!enabled)
+        capabilities.features[name] = {
+          status: "unsupported",
+          reason: "host_not_integrated",
+        };
+      else if (capabilities.features[name].status === "unknown")
+        capabilities.features[name] = { status: "supported" };
+    }
+    return {
+      id: runtime.id,
+      kernel: runtime.kernel,
+      cwd: runtime.cwd,
+      model: runtime.model,
+      capabilities,
+      controls: {
+        steer: Boolean(runtime.steer),
+        compact: Boolean(runtime.supportsCompaction),
+      },
+      ...(runtime.inputs ? { inputs: runtime.inputs } : {}),
+      ...((await runtime.inspect?.()) ?? { available: true }),
+    };
+  };
 
   async function execute(task: ActiveRun, input: StartRun) {
     const { record, runtime, controller, broker } = task;
@@ -105,7 +152,10 @@ export async function startAgentHostServer(options: HostServerOptions) {
     timeout.unref();
     let enteredRuntime = false;
     try {
-      const attachments = input.attachments.map((item) => ({ ...item, path: saveRunAttachment(runtime.cwd, input.sessionId, item) }));
+      const attachments = input.attachments.map((item) => ({
+        ...item,
+        path: saveRunAttachment(runtime.cwd, input.sessionId, item),
+      }));
       enteredRuntime = true;
       for await (const event of runtime.run({
         sessionId: input.sessionId,
@@ -162,6 +212,10 @@ export async function startAgentHostServer(options: HostServerOptions) {
     if (persistenceFailed) throw new HostError(503, "host_storage_failed");
     if (input.mode === "compact" && !runtime.supportsCompaction)
       throw new HostError(409, "compaction_unsupported");
+    if (input.attachments.length && !runtime.inputs?.attachments)
+      throw new HostError(409, "attachments_unsupported");
+    if (input.mode === "compact" && input.attachments.length)
+      throw new HostError(400, "compaction_attachments_unsupported");
     if (
       [...active.values()].some(
         (item) => item.record.sessionId === input.sessionId,
@@ -384,7 +438,13 @@ export async function startAgentHostServer(options: HostServerOptions) {
           200,
           url.searchParams.get("list") === "true"
             ? { entries: listWorkspaceFiles(root, file) }
-            : readWorkspaceFile(root, file, z.enum(["utf8", "base64"]).parse(url.searchParams.get("encoding") ?? "utf8")),
+            : readWorkspaceFile(
+                root,
+                file,
+                z
+                  .enum(["utf8", "base64"])
+                  .parse(url.searchParams.get("encoding") ?? "utf8"),
+              ),
         );
       }
       if (method === "POST") {
@@ -397,7 +457,8 @@ export async function startAgentHostServer(options: HostServerOptions) {
           })
           .strict()
           .parse(await body(request, 44_000_000));
-        if (input.encoding === "base64") attachmentSchema.shape.data.parse(input.content);
+        if (input.encoding === "base64")
+          attachmentSchema.shape.data.parse(input.content);
         return reply(
           response,
           200,
@@ -470,7 +531,10 @@ function reply(response: ServerResponse, status: number, value: unknown) {
   });
   response.end(JSON.stringify(value));
 }
-async function body(request: IncomingMessage, limit = 2_000_000): Promise<unknown> {
+async function body(
+  request: IncomingMessage,
+  limit = 2_000_000,
+): Promise<unknown> {
   if (
     !request.headers["content-type"]
       ?.toLowerCase()

@@ -120,6 +120,11 @@ export async function testHttpPackage(consumer, { native = false } = {}) {
     assert.ok(
       !(await (await fetch(`${editor.url}/client.js`)).text()).includes(token),
     );
+    const capabilitiesModule = await fetch(`${editor.url}/capabilities.js`);
+    assert.equal(capabilitiesModule.status, 200);
+    const capabilitySource = await capabilitiesModule.text();
+    assert.ok(capabilitySource.includes("unknownCapabilities"));
+    assert.ok(!capabilitySource.includes("node:"));
     let project = await product("document");
     let allow = false,
       count = 0,
@@ -226,13 +231,28 @@ export async function testHttpPackage(consumer, { native = false } = {}) {
     if (!native) {
       const bytes = Buffer.from([0, 255, 137, 80, 78, 71]);
       const data = bytes.toString("base64");
-      const media = await wait(await client.session({ sessionId: "media-check", runtimeId: "codex" }).run("", undefined,
-        [{ name: "image.png", mediaType: "image/png", data }]));
-      assert.equal(JSON.parse(media.result.answer)[1].url, `data:image/png;base64,${data}`);
+      const media = await wait(
+        await client
+          .session({ sessionId: "media-check", runtimeId: "codex" })
+          .run("", undefined, [
+            { name: "image.png", mediaType: "image/png", data },
+          ]),
+      );
+      assert.equal(
+        JSON.parse(media.result.answer)[1].url,
+        `data:image/png;base64,${data}`,
+      );
       const path = `.agent-host/attachments/media-check/${createHash("sha256").update(bytes).digest("hex")}/image.png`;
-      assert.equal((await client.readBinaryFile("media-check", path)).content, data);
+      assert.equal(
+        (await client.readBinaryFile("media-check", path)).content,
+        data,
+      );
       await client.writeBinaryFile("media-check", "results/copy.png", data);
-      assert.equal((await client.readBinaryFile("media-check", "results/copy.png")).content, data);
+      assert.equal(
+        (await client.readBinaryFile("media-check", "results/copy.png"))
+          .content,
+        data,
+      );
     }
     if (native) assert.match(resumed.result.answer, /reject|denied|拒绝/i);
     console.log(

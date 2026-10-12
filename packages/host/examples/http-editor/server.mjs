@@ -155,6 +155,10 @@ export async function startEditor({
           new URL(import.meta.resolve("@olorinm/agent-host/client")),
           "text/javascript",
         ],
+        "/capabilities.js": [
+          new URL(import.meta.resolve("@olorinm/agent-host/capabilities")),
+          "text/javascript",
+        ],
       };
       const asset = assets[url.pathname];
       if (!asset) return reply(404, { error: "not_found" });

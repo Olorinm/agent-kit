@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { testHttpPackage } from "./test-http-package.mjs";
+import { testCapabilitiesPackage } from "./test-capabilities-package.mjs";
 import { model, fixture as piStream } from "../test/fixtures/pi-stream.mjs";
 import { startOpenClawFixture } from "../test/fixtures/openclaw-gateway.mjs";
 import { createClaudeQueryFixture } from "../test/fixtures/claude-query.mjs";
@@ -27,7 +28,7 @@ execFileSync(
     "--ignore-scripts",
     "--no-audit",
     "--no-fund",
-    "./olorinm-agent-host-0.1.0-alpha.4.tgz",
+    "./olorinm-agent-host-0.1.0-alpha.5.tgz",
   ],
   { cwd: consumer, stdio: "pipe" },
 );
@@ -91,7 +92,7 @@ try {
   // Check the installed declarations, not repository-relative imports.
   await writeFile(
     join(consumer, "consumer.ts"),
-    `import { AcpAgent } from '@olorinm/agent-host/acp';\nimport { ClaudeAgent, ClaudeQueryHost } from '@olorinm/agent-host/claude';\nimport { PiAgent } from '@olorinm/agent-host/pi';\nimport { HermesAgent } from '@olorinm/agent-host/hermes';\nimport { OpenClawAgent } from '@olorinm/agent-host/openclaw';\nconst adapters = [AcpAgent, ClaudeAgent, ClaudeQueryHost, PiAgent, HermesAgent, OpenClawAgent];\nimport { CodexAgent } from '@olorinm/agent-host/codex';\nimport { FileBindingStore } from '@olorinm/agent-host';\nconst agent = new CodexAgent({ bindings: new FileBindingStore('state') });\nfor await (const e of agent.run({ sessionId: 's', cwd: '.', input: 'hi', instructions: '' })) console.log(e.type);\nawait agent.close();\n`,
+    `import { AcpAgent } from '@olorinm/agent-host/acp';\nimport { ClaudeAgent, ClaudeQueryHost } from '@olorinm/agent-host/claude';\nimport { PiAgent } from '@olorinm/agent-host/pi';\nimport { HermesAgent } from '@olorinm/agent-host/hermes';\nimport { OpenClawAgent } from '@olorinm/agent-host/openclaw';\nconst adapters = [AcpAgent, ClaudeAgent, ClaudeQueryHost, PiAgent, HermesAgent, OpenClawAgent];\nimport { CodexAgent } from '@olorinm/agent-host/codex';\nimport { FileBindingStore } from '@olorinm/agent-host';\nimport { createAgent } from '@olorinm/agent-host/adapters';\nimport { getKernelCapabilities } from '@olorinm/agent-host/capabilities';\nconst agent: CodexAgent = createAgent({ kernel: 'codex', options: { bindings: new FileBindingStore('state') } });\nconst pi: PiAgent = createAgent({ kernel: 'pi' });\nconst kimi: AcpAgent = createAgent({ kernel: 'kimi' });\ngetKernelCapabilities('kimi', 'http').features['controls.compact'].status;\n// @ts-expect-error OpenClaw requires a configured Gateway.\ncreateAgent({ kernel: 'openclaw' });\n// @ts-expect-error Preserve native option validation.\ncreateAgent({ kernel: 'codex', options: { madeUp: true } });\nfor await (const e of agent.run({ sessionId: 's', cwd: '.', input: 'hi', instructions: '' })) console.log(e.type);\nawait agent.close();\n`,
   );
   await writeFile(
     join(consumer, "http-consumer.ts"),
@@ -332,6 +333,7 @@ for (const kernel of ["pi", "openclaw"]) {
 }
 const installed = join(consumer, "node_modules/@olorinm/agent-host");
 await testHttpPackage(consumer);
+await testCapabilitiesPackage(consumer);
 await writeFile(
   resolve(".local/last-package-consumer.json"),
   JSON.stringify({ consumer }),
