@@ -20,7 +20,7 @@ The independent editor's **native model-backed probes passed for all seven Kerne
 
 Alpha.6 adds live HTTP coverage for all seven Kernels: text, native identity and recall after Host restart, native history/list, receipt-based compaction and image input. Native fork/delete and product-tool/control results are itemized in the [versioned evidence matrix](native-verification.md). The exact native operation and failure receipt are preserved; these results do not certify every provider or model.
 
-The common interaction helper, selectable settings, native session API, new CLI, controls and additional media paths have deterministic regression tests and independent archive-consumer checks. These are separate from native execution. OpenClaw's native command approvals now reach the common callback with session/run correlation; Pi's native policy hook can be enabled by the HTTP owner. Every optional form, model setting and media type is not model-backed certified.
+The common interaction helper, selectable settings, native session API, new CLI, controls and additional media paths have deterministic regression tests and independent archive-consumer checks. These are separate from native execution. OpenClaw's native command approvals now reach the common callback with session/run correlation; Pi's native policy hook can be enabled by the HTTP owner. Alpha.8 additionally verifies 76 media/setting cases, including every selectable setting key and setting changes within all seven native sessions; values and limits are recorded in the evidence matrix. Every provider/format/value combination is not implied.
 
 ## Upgrade boundaries
 

@@ -8,6 +8,7 @@ interface NativeTool {
   name: string;
   label: string;
   description: string;
+  catalogMode: "direct-only";
   parameters: JsonObject;
   execute(
     callId: string,
@@ -164,6 +165,8 @@ export default {
             {
               name: "agent_host_call",
               label: "Product action",
+              // Native catalog wrappers JSON-encode results and would flatten image blocks.
+              catalogMode: "direct-only",
               description:
                 "Call a product tool. Available tools: " +
                 binding.tools

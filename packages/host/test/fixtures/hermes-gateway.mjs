@@ -97,7 +97,14 @@ async function handle(rpc) {
           .filter((n) => n.endsWith(".json"))
           .map((n) => ({ session_id: n.slice(0, -5) })),
       };
-    else if (method === "session.history")
+    else if (method === "config.set") {
+      if (p.scope !== "session" || !live.has(p.session_id))
+        throw new Error("settings must target a live native session");
+      if (p.value === "reject-me") throw new Error("native_setting_rejected");
+      result = { key: p.key, value: p.value };
+      if (p.value.includes("confirm-me")) result.confirm_required = true;
+      else live.get(p.session_id)[p.key] = p.value;
+    } else if (method === "session.history")
       result = {
         messages: JSON.parse(
           await readFile(

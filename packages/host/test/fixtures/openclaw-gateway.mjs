@@ -191,6 +191,10 @@ export async function startOpenClawFixture({
             });
             const tool = tools.find((t) => t.name === "agent_host_call");
             if (!tool) throw new Error("product tool absent");
+            if (tool.catalogMode !== "direct-only")
+              throw new Error(
+                "product image results would be flattened by native tool search",
+              );
             const result = await tool.execute("call-1", {
               name: tool.parameters.properties.name.enum[0],
               input: { text: "Saved via OpenClaw" },
