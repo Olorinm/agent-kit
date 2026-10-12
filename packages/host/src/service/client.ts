@@ -1,8 +1,10 @@
 // Observation and callback flow adapted from OpenGrove PR #126 (Apache-2.0).
 // Browser-safe: no Node imports, credentials discovery, or service startup.
+import { capabilityNames, unknownCapabilities } from "../capabilities.js";
 import type { ProductToolResult } from "../agent.js";
 import type { JsonValue } from "../types.js";
 import type {
+  RunAttachment,
   StartRunInput,
   RunRecord,
   SessionRecord,
@@ -11,6 +13,7 @@ import type {
   RuntimeDescription,
 } from "./protocol.js";
 export type {
+  RunAttachment,
   StartRunInput,
   RunRecord,
   SessionRecord,
@@ -80,13 +83,11 @@ export class AgentHostClient {
     const value = await this.request("/runtimes");
     if (!Array.isArray(value.runtimes))
       throw new Error("invalid_host_runtimes");
-    return value.runtimes as RuntimeDescription[];
+    return value.runtimes.map(parseRuntime);
   }
   async inspect(runtimeId: string): Promise<RuntimeDescription> {
     const value = await this.request("/runtimes/inspect", { runtimeId });
-    if (typeof value.available !== "boolean" || typeof value.id !== "string")
-      throw new Error("invalid_host_runtime");
-    return value as unknown as RuntimeDescription;
+    return parseRuntime(value);
   }
   async sessions(): Promise<SessionRecord[]> {
     const value = await this.request("/sessions");
@@ -118,8 +119,21 @@ export class AgentHostClient {
       ({ execute: _execute, ...definition }) => definition,
     );
     return {
-      run: (input: string, context?: StartRunInput["context"]) =>
-        this.start({ ...settings, tools: definitions, input, context }, tools),
+      run: (
+        input: string,
+        context?: StartRunInput["context"],
+        attachments?: RunAttachment[],
+      ) =>
+        this.start(
+          {
+            ...settings,
+            tools: definitions,
+            input,
+            context,
+            ...(attachments ? { attachments } : {}),
+          },
+          tools,
+        ),
       compact: (reason = "") =>
         this.start(
           { ...settings, tools: definitions, input: reason, mode: "compact" },
@@ -215,6 +229,22 @@ export class AgentHostClient {
       ),
     );
   }
+  async readBinaryFile(
+    sessionId: string,
+    path: string,
+  ): Promise<{
+    path: string;
+    content: string;
+    revision: string;
+    encoding: "base64";
+  }> {
+    const value = await this.request(
+      `/sessions/${encodeURIComponent(sessionId)}/files?encoding=base64&path=${encodeURIComponent(path)}`,
+    );
+    if (value.encoding !== "base64")
+      throw new Error("invalid_binary_file_response");
+    return { ...this.fileResponse(value), encoding: "base64" };
+  }
   async writeFile(
     sessionId: string,
     path: string,
@@ -228,6 +258,20 @@ export class AgentHostClient {
         expectedRevision,
       }),
     );
+  }
+  async writeBinaryFile(
+    sessionId: string,
+    path: string,
+    content: string,
+    expectedRevision?: string | null,
+  ) {
+    const value = await this.request(
+      `/sessions/${encodeURIComponent(sessionId)}/files`,
+      { path, content, encoding: "base64", expectedRevision },
+    );
+    if (value.encoding !== "base64")
+      throw new Error("invalid_binary_file_response");
+    return { ...this.fileResponse(value), encoding: "base64" as const };
   }
   async listFiles(
     sessionId: string,
@@ -440,6 +484,42 @@ function parseRun(value: unknown): RunRecord {
   )
     throw new Error("invalid_host_run");
   return run as unknown as RunRecord;
+}
+
+function parseRuntime(value: unknown): RuntimeDescription {
+  const runtime = object(value);
+  const controls = object(runtime.controls);
+  if (
+    typeof runtime.id !== "string" ||
+    typeof runtime.kernel !== "string" ||
+    typeof runtime.available !== "boolean" ||
+    typeof controls.steer !== "boolean" ||
+    typeof controls.compact !== "boolean"
+  )
+    throw new Error("invalid_host_runtime");
+  // Protocol v1 servers predating discovery remain usable; never infer support from a name.
+  if (runtime.capabilities === undefined) {
+    const capabilities = unknownCapabilities(runtime.kernel, "http");
+    for (const name of ["steer", "compact"] as const)
+      capabilities.features[`controls.${name}`] = controls[name]
+        ? { status: "supported" }
+        : { status: "unsupported", reason: "host_not_integrated" };
+    return { ...runtime, capabilities } as unknown as RuntimeDescription;
+  }
+  const capabilities = object(runtime.capabilities);
+  if (capabilities.version !== 1)
+    throw new Error("unsupported_host_capability_version");
+  const features = object(capabilities.features);
+  if (
+    capabilityNames.some(
+      (name) =>
+        !["supported", "conditional", "unsupported", "unknown"].includes(
+          String(object(features[name]).status),
+        ),
+    )
+  )
+    throw new Error("invalid_host_capabilities");
+  return runtime as unknown as RuntimeDescription;
 }
 function delay(ms: number, signal: AbortSignal): Promise<void> {
   return new Promise((resolve, reject) => {

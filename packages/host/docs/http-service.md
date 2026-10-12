@@ -9,7 +9,7 @@ The service manages transport, task storage and callbacks around the shared adap
 
 ## Start a service
 
-Node.js 24+ is required. From this repository, build an archive with `npm pack`, then install that archive in your consumer. The current archive is `olorinm-agent-host-0.1.0-alpha.4.tgz`; it is not published to the npm registry.
+Node.js 24+ is required. From this repository, build an archive with `npm pack`, then install that archive in your consumer. The current archive is `olorinm-agent-host-0.1.0-alpha.5.tgz`; it is not published to the npm registry.
 
 Create `host.json`:
 
@@ -162,7 +162,7 @@ Every operation requires `Authorization: Bearer <token>` and JSON bodies for POS
 | `GET /v1/health`                                | Service protocol version (`1`).                                                                                                |
 | `GET /v1/runtimes`                              | Configured profiles and control availability.                                                                                  |
 | `POST /v1/runtimes/inspect`                     | Check `{ runtimeId }` without running an Agent.                                                                                |
-| `POST /v1/runs`                                 | Submit `{ sessionId, runtimeId, instructions?, input, context?, tools?, mode?, timeoutMs? }`; returns `202` with a run record. |
+| `POST /v1/runs`                                 | Submit `{ sessionId, runtimeId, instructions?, input, attachments?, context?, tools?, mode?, timeoutMs? }`; returns `202` with a run record. |
 | `GET /v1/sessions`                              | Session configurations.                                                                                                        |
 | `GET /v1/runs?sessionId=...`                    | Run records, newest first.                                                                                                     |
 | `GET /v1/runs/:id`                              | Status and independently persisted final answer.                                                                               |
@@ -171,13 +171,13 @@ Every operation requires `Authorization: Bearer <token>` and JSON bodies for POS
 | `POST /v1/runs/:id/steer`                       | Send `{ input }` to an active turn when its adapter supports it.                                                               |
 | `GET /v1/runs/:id/calls`                        | Product-tool and native interaction records for this run.                                                                      |
 | `POST /v1/runs/:id/calls/:callId/result`        | Resolve a pending call with `{ result }`.                                                                                      |
-| `GET /v1/sessions/:id/files?path=...`           | Read a bound workspace text file, when enabled.                                                                                |
+| `GET /v1/sessions/:id/files?path=...`           | Read a bound workspace file; add `encoding=base64` for binary, when enabled.                                                                                |
 | `GET /v1/sessions/:id/files?list=true&path=...` | List one directory, when enabled.                                                                                              |
-| `POST /v1/sessions/:id/files`                   | Write `{ path, content, expectedRevision? }`, when enabled.                                                                    |
+| `POST /v1/sessions/:id/files`                   | Write `{ path, content, encoding?: "utf8" | "base64", expectedRevision? }`, when enabled.                                                                    |
 
 `session.compact()` submits `mode: 'compact'` through the same task machinery. HTTP compaction is implemented for Codex, Pi, OpenCode, Kimi, Hermes and OpenClaw; Hermes requires a live opened session in this service process. OpenCode/Kimi require an existing native binding, reject custom reasons, and use their native summarize/compact operation. OpenCode additionally requires a command supporting `serve` against the same native profile. An acknowledgement alone does not establish success; missing or interrupted completion is reported as unknown. HTTP steering is implemented for Codex, Pi and Hermes. Unsupported controls fail explicitly. Optional controls have protocol coverage unless separately recorded as native-tested.
 
-Workspace file access is opt-in via `workspaceFiles: true`. Paths stay under the selected profile's workspace; symlinks are rejected. `expectedRevision: null` requires a new file; a prior revision prevents overwriting a change already observed by this process. This is an optimistic check, not a transaction with unrelated filesystem writers or an OS sandbox for native tools. The client exposes `readFile`, `writeFile`, and `listFiles`.
+Workspace file access is opt-in via `workspaceFiles: true`. Paths stay under the selected profile's workspace; symlinks are rejected. `expectedRevision: null` requires a new file; a prior revision prevents overwriting a change already observed by this process. This is an optimistic check, not a transaction with unrelated filesystem writers or an OS sandbox for native tools. The client exposes `readFile`, `writeFile`, `readBinaryFile`, `writeBinaryFile`, and `listFiles`. Text files are limited to 1 MB; binary files to 30 MiB. Binary content is canonical base64 and revisions hash the decoded bytes.
 
 ## Disconnects, restart and duplicate operations
 
@@ -188,6 +188,25 @@ Workspace file access is opt-in via `workspaceFiles: true`. Paths stay under the
 - Reposting the same result for a completed call succeeds, including after restart. A different result conflicts. The same SDK task object caches executions across repeated observation; different clients/pages can execute the same pending call. The product must persist a `callId` receipt together with its business change. This is not an exactly-once side-effect guarantee.
 - SQLite saves task results/events/call records independently of the product. It holds one process's exclusive state lock, released by the OS on crash. A second service cannot share this state directory concurrently.
 - After a crash, unfinished runs become `failed` with `outcomeUnknown: true` and `host_restarted`; pending calls become cancelled. Nothing is replayed automatically. Completed native bindings can be continued by a new, explicitly submitted turn. Preserve both Host state and the Kernel's native storage.
+
+## Media input
+
+A turn accepts up to 30 `attachments`, with a combined decoded size of 30 MiB. Each item is `{ name, mediaType, data }`, where `data` is canonical base64. An attachment-only turn may use `input: ""`. The client supports `session.run(input, context, attachments)`.
+
+The service saves immutable, content-addressed files under the configured workspace's `.agent-host/attachments/` and supplies their paths to the runtime. Files use private permissions and the directory has a `.gitignore`. This is private runtime state; retention is controlled by the service owner. Attachment transfer does not require enabling the additional workspace file API.
+
+Custom runtimes must explicitly enable attachment delivery through `inputs.attachments`; otherwise requests fail before task creation or file writes. Compaction rejects attachments. Inline tool-result image data is validated before MCP delivery, and an invalid image produces a failed tool result rather than a successful result containing an unusable link.
+
+| Runtime | Image input | Other attachments |
+| --- | --- | --- |
+| Codex | Native image input items | Workspace file paths |
+| Claude | Native SDK image blocks (PNG/JPEG/GIF/WebP) | Workspace file paths |
+| Pi 1.1 | Native image content | Workspace file paths |
+| OpenCode / Kimi ACP | Image blocks, subject to negotiated capability | Workspace file paths |
+| Hermes | Workspace file paths | Workspace file paths |
+| OpenClaw | Native Gateway attachment payload | Workspace file paths and Gateway payload |
+
+`runtimes` / `runtimes/inspect` include `inputs.attachments` and `inputs.images` (`native`, `negotiated`, or `workspace`). This describes the adapter path, not the selected model's vision, audio, video or speech capabilities. Those remain native runtime/model/tool capabilities. Unsupported image formats or negotiated capabilities fail explicitly. Product `inputImage` results retain image content through Codex, Claude, Pi and the MCP bridges; inline `data:image/...;base64,...` avoids an additional fetch. Pi requires an inline image, since its native tool results do not accept remote image URLs.
 
 ## Example and verification
 

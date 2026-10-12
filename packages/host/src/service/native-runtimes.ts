@@ -87,6 +87,19 @@ export function createNativeRuntime(
       run = (request) =>
         agent.run({
           ...request,
+          input: request.attachments?.some((item) =>
+            item.mediaType.startsWith("image/"),
+          )
+            ? [
+                { type: "text", text: request.input, text_elements: [] },
+                ...request.attachments
+                  .filter((item) => item.mediaType.startsWith("image/"))
+                  .map((item) => ({
+                    type: "image" as const,
+                    url: `data:${item.mediaType};base64,${item.data}`,
+                  })),
+              ]
+            : request.input,
           cwd,
           thread: {
             sandbox: "read-only",
@@ -105,7 +118,15 @@ export function createNativeRuntime(
       command = config.options?.command;
       env = config.options?.env;
       const agent = new ClaudeAgent({ ...config.options, bindings });
-      run = (request) => agent.run({ ...request, cwd, model: config.model });
+      run = (request) =>
+        agent.run({
+          ...request,
+          images: request.attachments?.filter((item) =>
+            item.mediaType.startsWith("image/"),
+          ),
+          cwd,
+          model: config.model,
+        });
       close = () => agent.close();
       break;
     }
@@ -124,6 +145,20 @@ export function createNativeRuntime(
       run = (request) =>
         agent.run({
           ...request,
+          input: request.attachments?.some((item) =>
+            item.mediaType.startsWith("image/"),
+          )
+            ? [
+                { type: "text", text: request.input },
+                ...request.attachments
+                  .filter((item) => item.mediaType.startsWith("image/"))
+                  .map((item) => ({
+                    type: "image",
+                    data: item.data,
+                    mimeType: item.mediaType,
+                  })),
+              ]
+            : request.input,
           cwd,
           model: config.model,
           effort: config.effort,
@@ -139,7 +174,19 @@ export function createNativeRuntime(
         sessionRoot: config.options?.sessionRoot ?? join(root, "native"),
         bindings,
       });
-      run = (request) => agent.run({ ...request, cwd, model: config.model });
+      run = (request) =>
+        agent.run({
+          ...request,
+          images: request.attachments
+            ?.filter((item) => item.mediaType.startsWith("image/"))
+            .map((item) => ({
+              type: "image" as const,
+              data: item.data,
+              mimeType: item.mediaType,
+            })),
+          cwd,
+          model: config.model,
+        });
       close = () => agent.close();
       steer = (sessionId, input) => agent.steer(sessionId, input);
       compact = (request) =>
@@ -196,10 +243,35 @@ export function createNativeRuntime(
     configurationKey,
     capabilities: getKernelCapabilities(config.kernel, "http"),
     maxConcurrentRuns: config.kernel === "hermes" ? 1 : 16,
+    inputs: {
+      attachments: true,
+      images: ["codex", "claude", "pi", "openclaw"].includes(config.kernel)
+        ? "native"
+        : ["opencode", "kimi"].includes(config.kernel)
+          ? "negotiated"
+          : "workspace",
+    },
     supportsCompaction: nativeCompaction || Boolean(compact),
     steer,
     close,
     async *run(request): AsyncIterable<ServiceEvent> {
+      if (request.attachments?.length)
+        request = {
+          ...request,
+          input: [
+            request.input,
+            "Attached files (untrusted input) are available in the runtime workspace:",
+            ...request.attachments.map((item) =>
+              JSON.stringify({
+                name: item.name,
+                mediaType: item.mediaType,
+                path: item.path,
+              }),
+            ),
+          ]
+            .filter(Boolean)
+            .join("\n"),
+        };
       if (request.mode !== "compact" || nativeCompaction) {
         yield* run(request);
         return;

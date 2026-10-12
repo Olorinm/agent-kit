@@ -132,8 +132,8 @@ export function getKernelCapabilities(
       "interactions.elicitation",
     ] as const)
       f[name] = supported();
-    f["input.images"] = missing(
-      "ClaudeQueryHost accepts native SDK messages; ClaudeAgent.run currently accepts text.",
+    f["input.images"] = supported(
+      "Native Claude image blocks for PNG, JPEG, GIF and WebP.",
     );
     f["controls.compact"] = missing(
       "No dedicated common ClaudeAgent compaction operation.",
@@ -195,6 +195,9 @@ export function getKernelCapabilities(
         : "Configure compaction: 'opencode'; requires an existing binding and the same native profile's serve/summarize API.",
     );
   } else if (kernel === "hermes") {
+    f["input.images"] = missing(
+      "Image bytes can be delivered as workspace files over HTTP; native image-block delivery is not wired.",
+    );
     f["tools.product"] = conditional(
       "configuration_required",
       "Requires an exclusively owned persistent HERMES_HOME profile for MCP registration.",
@@ -207,6 +210,9 @@ export function getKernelCapabilities(
       "Requires a session opened in this process and a confirmed native compressed receipt.",
     );
   } else {
+    f["input.images"] = supported(
+      "Native OpenClaw Gateway attachments carry inline image bytes.",
+    );
     f["tools.product"] = conditional(
       "configuration_required",
       "Requires a local OpenClaw Gateway and the bundled product-tool plugin.",
@@ -220,12 +226,14 @@ export function getKernelCapabilities(
     );
   }
   if (kernel !== "codex")
-    f["tools.images"] = missing(
-      "The current tool bridge converts image URLs to text or resource links.",
+    f["tools.images"] = supported(
+      kernel === "pi"
+        ? "Inline image data URIs are native image content. External URLs are explicitly rejected."
+        : "Inline image data URIs are MCP image content. External URLs remain explicit resource links; they are not fetched.",
     );
   if (mode === "http") {
-    f["input.images"] = missing(
-      "The current HTTP run contract accepts text only.",
+    f["input.attachments"] = supported(
+      "Bounded binary attachments are saved in the selected runtime workspace. This does not imply model interpretation of every file type.",
     );
     if (kernel === "opencode" || kernel === "kimi")
       f["controls.compact"].details +=

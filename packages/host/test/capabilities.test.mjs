@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { mkdtemp, rm } from "node:fs/promises";
+import { access, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { getKernelCapabilities } from "../dist/capabilities.js";
@@ -9,6 +9,37 @@ import {
   startAgentHostServer,
 } from "../dist/service/index.js";
 import { AgentHostClient } from "../dist/service/client.js";
+
+test("new clients keep protocol-v1 servers usable without inventing their undeclared capabilities", async () => {
+  const runtime = {
+    id: "old",
+    kernel: "codex",
+    cwd: ".",
+    available: true,
+    controls: { steer: true, compact: false },
+  };
+  const client = new AgentHostClient({
+    baseUrl: "http://fixture.invalid",
+    fetch: async (url) =>
+      Response.json(
+        String(url).endsWith("/inspect") ? runtime : { runtimes: [runtime] },
+      ),
+  });
+  const listed = (await client.runtimes())[0];
+  assert.equal(
+    listed.capabilities.features["controls.steer"].status,
+    "supported",
+  );
+  assert.equal(
+    listed.capabilities.features["sessions.resume"].status,
+    "unknown",
+  );
+  assert.equal(listed.capabilities.features["input.images"].status, "unknown");
+  assert.deepEqual(
+    (await client.inspect("old")).capabilities,
+    listed.capabilities,
+  );
+});
 
 test("capability discovery distinguishes native limits, negotiation and Host omissions without launching an Agent", () => {
   const pi = getKernelCapabilities("pi");
@@ -87,6 +118,27 @@ test("HTTP advertises the same capability vocabulary without guessing custom run
     other.capabilities.features["controls.steer"].status,
     "unsupported",
   );
+  assert.equal(
+    other.capabilities.features["input.attachments"].status,
+    "unsupported",
+  );
+  await assert.rejects(
+    client.start({
+      sessionId: "unsupported-media",
+      runtimeId: "custom",
+      input: "",
+      attachments: [
+        {
+          name: "file.bin",
+          mediaType: "application/octet-stream",
+          data: "AA==",
+        },
+      ],
+    }),
+    /attachments_unsupported/,
+  );
+  assert.deepEqual(await client.sessions(), []);
+  await assert.rejects(access(join(root, ".agent-host/attachments")));
   assert.deepEqual(
     (await client.inspect("native")).capabilities,
     standard.capabilities,

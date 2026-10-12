@@ -28,7 +28,7 @@ execFileSync(
     "--ignore-scripts",
     "--no-audit",
     "--no-fund",
-    "./olorinm-agent-host-0.1.0-alpha.4.tgz",
+    "./olorinm-agent-host-0.1.0-alpha.5.tgz",
   ],
   { cwd: consumer, stdio: "pipe" },
 );

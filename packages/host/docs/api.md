@@ -11,7 +11,7 @@ npm ci
 npm test
 npm pack
 cd examples/file-editor
-npm install ../../olorinm-agent-host-0.1.0-alpha.4.tgz
+npm install ../../olorinm-agent-host-0.1.0-alpha.5.tgz
 AGENT_HOST_CODEX=../../node_modules/.bin/codex npm start
 ```
 

@@ -1,3 +1,4 @@
+import { mcpToolResult } from "./image-content.js";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import type { ProductTool, InteractionContext, AgentEvent } from "./agent.js";
 import type { AsyncEventQueue } from "./async-event-queue.js";
@@ -37,13 +38,14 @@ export function productToolBridge(
           tool: name,
           input: input as JsonValue,
         });
-        const result = await abortable(
+        const execution = await abortable(
           tool.execute(input as JsonValue, { ...context, callId }),
           context.signal,
         ).catch((error) => ({
           success: false,
           contentItems: [{ type: "inputText" as const, text: String(error) }],
         }));
+        const { result, content } = mcpToolResult(execution);
         queue.push({
           type: "tool.finished",
           runId: context.runId,
@@ -53,15 +55,7 @@ export function productToolBridge(
         });
         return {
           isError: !result.success,
-          content: result.contentItems.map((item) =>
-            item.type === "inputText"
-              ? { type: "text" as const, text: item.text }
-              : {
-                  type: "resource_link" as const,
-                  uri: item.imageUrl,
-                  name: "image",
-                },
-          ),
+          content,
         };
       })();
       calls.set(callId, { signature, result });

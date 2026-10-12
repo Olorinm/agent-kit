@@ -155,3 +155,42 @@ test("Pi 0.85 compatibility: pre-aborted input never calls a provider", async ()
     await agent.close();
   }
 });
+test("Pi 0.85 compatibility preserves native image tool content and its public event", async (t) => {
+  const cwd = await mkdtemp(join(tmpdir(), "agent-host-pi-media-"));
+  const observed = [],
+    data = Buffer.from("tool-image").toString("base64");
+  const agent = new PiAgent({
+    cwd,
+    model: { ...model, input: ["text", "image"] },
+    streamFn: fixture(observed),
+  });
+  t.after(() => agent.close());
+  const events = await Array.fromAsync(
+    agent.run({
+      ...base,
+      cwd,
+      input: "call edit",
+      tools: [
+        {
+          name: "edit",
+          description: "Image",
+          inputSchema: { type: "object" },
+          execute: async () => ({
+            success: true,
+            contentItems: [
+              { type: "inputImage", imageUrl: `data:image/png;base64,${data}` },
+            ],
+          }),
+        },
+      ],
+    }),
+  );
+  assert.equal(events.at(-1).outcome.status, "completed");
+  assert.equal(observed.at(-1).messages.at(-1).content[0].type, "image");
+  assert.equal(observed.at(-1).messages.at(-1).content[0].data, data);
+  assert.equal(
+    events.find((event) => event.type === "tool.finished").result
+      .contentItems[0].imageUrl,
+    `data:image/png;base64,${data}`,
+  );
+});

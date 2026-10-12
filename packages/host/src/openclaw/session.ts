@@ -31,6 +31,7 @@ export interface OpenClawRunRequest {
   sessionKey?: string;
   cwd?: string;
   input: string;
+  attachments?: Array<{ name: string; mediaType: string; data: string }>;
   instructions: string;
   context?: string;
   model?: string;
@@ -363,6 +364,16 @@ export class OpenClawAgent {
               .join("\n\n"),
             deliver: false,
             idempotencyKey: runId,
+            ...(request.attachments?.length
+              ? {
+                  attachments: request.attachments.map((item) => ({
+                    type: "file",
+                    fileName: item.name,
+                    mimeType: item.mediaType,
+                    content: item.data,
+                  })),
+                }
+              : {}),
             ...(method === "agent"
               ? {
                   extraSystemPrompt: request.instructions,
@@ -400,18 +411,20 @@ export class OpenClawAgent {
       const nativeCanceled =
         (await cancellation) === true ||
         ["aborted", "cancelled", "canceled", "interrupted"].includes(status);
-      settled = nativeCanceled || [
-        "ok",
-        "complete",
-        "completed",
-        "success",
-        "aborted",
-        "cancelled",
-        "canceled",
-        "interrupted",
-        "error",
-        "failed",
-      ].includes(status);
+      settled =
+        nativeCanceled ||
+        [
+          "ok",
+          "complete",
+          "completed",
+          "success",
+          "aborted",
+          "cancelled",
+          "canceled",
+          "interrupted",
+          "error",
+          "failed",
+        ].includes(status);
       outcome = nativeCanceled
         ? { status: "cancelled" }
         : terminalError
