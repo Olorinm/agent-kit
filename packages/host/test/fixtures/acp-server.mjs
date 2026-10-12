@@ -131,7 +131,7 @@ async function handle({ id, method, params }) {
       } finally {
         await client.close();
       }
-    } else update(params.sessionId, text);
+    } else update(params.sessionId, params.prompt.some((item) => item.type === "image") ? JSON.stringify(params.prompt) : text);
     return reply(id, { stopReason: "end_turn" });
   }
   throw new Error(`unknown_method:${method}`);

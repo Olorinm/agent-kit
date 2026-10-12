@@ -14,6 +14,7 @@ import {
   HostError,
   idSchema,
   startRunSchema,
+  attachmentSchema,
   type RunRecord,
   type StartRun,
   type SessionRecord,
@@ -23,6 +24,7 @@ import {
   listWorkspaceFiles,
   readWorkspaceFile,
   writeWorkspaceFile,
+  saveRunAttachment,
 } from "./files.js";
 import type { ServiceRuntime } from "./runtime.js";
 
@@ -85,6 +87,7 @@ export async function startAgentHostServer(options: HostServerOptions) {
       steer: Boolean(runtime.steer),
       compact: Boolean(runtime.supportsCompaction),
     },
+    ...(runtime.inputs ? { inputs: runtime.inputs } : {}),
     ...((await runtime.inspect?.()) ?? { available: true }),
   });
 
@@ -100,11 +103,15 @@ export async function startAgentHostServer(options: HostServerOptions) {
       input.timeoutMs,
     );
     timeout.unref();
+    let enteredRuntime = false;
     try {
+      const attachments = input.attachments.map((item) => ({ ...item, path: saveRunAttachment(runtime.cwd, input.sessionId, item) }));
+      enteredRuntime = true;
       for await (const event of runtime.run({
         sessionId: input.sessionId,
         runId: record.id,
         input: input.input,
+        attachments,
         mode: input.mode,
         instructions: input.instructions,
         context:
@@ -133,7 +140,7 @@ export async function startAgentHostServer(options: HostServerOptions) {
       outcome = {
         status: "failed",
         error: error instanceof Error ? error.message : String(error),
-        outcomeUnknown: true,
+        outcomeUnknown: enteredRuntime,
       };
     } finally {
       clearTimeout(timeout);
@@ -298,7 +305,7 @@ export async function startAgentHostServer(options: HostServerOptions) {
         return reply(
           response,
           202,
-          await start(startRunSchema.parse(await body(request))),
+          await start(startRunSchema.parse(await body(request, 44_000_000))),
         );
       if (method === "GET")
         return reply(response, 200, {
@@ -352,7 +359,7 @@ export async function startAgentHostServer(options: HostServerOptions) {
         const { result } = z
           .object({ result: z.json() })
           .strict()
-          .parse(await body(request));
+          .parse(await body(request, 44_000_000));
         const broker =
           active.get(run.id)?.broker ??
           new CallBroker(store, run.id, AbortSignal.abort(), 0);
@@ -377,18 +384,20 @@ export async function startAgentHostServer(options: HostServerOptions) {
           200,
           url.searchParams.get("list") === "true"
             ? { entries: listWorkspaceFiles(root, file) }
-            : readWorkspaceFile(root, file),
+            : readWorkspaceFile(root, file, z.enum(["utf8", "base64"]).parse(url.searchParams.get("encoding") ?? "utf8")),
         );
       }
       if (method === "POST") {
         const input = z
           .object({
             path: z.string().min(1),
-            content: z.string().max(1_000_000),
+            content: z.string().max(42_000_000),
+            encoding: z.enum(["utf8", "base64"]).default("utf8"),
             expectedRevision: z.string().nullable().optional(),
           })
           .strict()
-          .parse(await body(request));
+          .parse(await body(request, 44_000_000));
+        if (input.encoding === "base64") attachmentSchema.shape.data.parse(input.content);
         return reply(
           response,
           200,
@@ -397,6 +406,7 @@ export async function startAgentHostServer(options: HostServerOptions) {
             input.path,
             input.content,
             input.expectedRevision,
+            input.encoding,
           ),
         );
       }
@@ -460,7 +470,7 @@ function reply(response: ServerResponse, status: number, value: unknown) {
   });
   response.end(JSON.stringify(value));
 }
-async function body(request: IncomingMessage): Promise<unknown> {
+async function body(request: IncomingMessage, limit = 2_000_000): Promise<unknown> {
   if (
     !request.headers["content-type"]
       ?.toLowerCase()
@@ -471,7 +481,7 @@ async function body(request: IncomingMessage): Promise<unknown> {
   const chunks: Buffer[] = [];
   for await (const chunk of request) {
     length += Buffer.byteLength(chunk);
-    if (length > 2_000_000) throw new HostError(413, "request_too_large");
+    if (length > limit) throw new HostError(413, "request_too_large");
     chunks.push(Buffer.from(chunk));
   }
   return JSON.parse(Buffer.concat(chunks).toString("utf8"));

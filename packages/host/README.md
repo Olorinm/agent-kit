@@ -8,6 +8,8 @@ Agent Host is an open-source integration layer that makes native coding Agents e
 
 **Status: alpha.** Source is public and the package installs from a built archive; it is not yet published to npm. See the [tested versions and verification limits](docs/kernel-support.md).
 
+The HTTP service preserves attachment bytes, supported native image inputs and image tool results. See [media input](docs/http-service.md#media-input) for runtime differences and limits.
+
 ## Core principles
 
 **Preserve native Agent capabilities as fully as possible, and make them simple to use through a clear, consistent integration layer.**

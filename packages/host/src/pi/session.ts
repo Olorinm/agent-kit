@@ -1,3 +1,4 @@
+import { inlineImage } from "../image-content.js";
 import { createHash, randomUUID } from "node:crypto";
 import { join } from "node:path";
 import {
@@ -366,10 +367,12 @@ export class PiAgent {
                   .join("\n"),
               );
             return {
-              content: result.contentItems.map((item) => ({
-                type: "text" as const,
-                text: item.type === "inputText" ? item.text : item.imageUrl,
-              })),
+              content: result.contentItems.map((item) => {
+                if (item.type === "inputText") return { type: "text" as const, text: item.text };
+                const image = inlineImage(item.imageUrl);
+                if (!image) throw new Error("pi_tool_image_requires_data_uri");
+                return { type: "image" as const, ...image };
+              }),
             };
           },
         })),

@@ -417,3 +417,91 @@ for (const kernel of [
     );
   });
 }
+
+test("HTTP attachments preserve binary bytes, reject oversized input and stay within the runtime workspace", async (t) => {
+  let received;
+  const { api, root } = await fixture(t, { workspaceFiles: true, configure: (cwd) => [{
+    id: "media", kernel: "fixture", cwd, configurationKey: "media-test", close() {},
+    async *run(input) { received = input; yield { type: "turn.finished", runId: input.runId, outcome: { status: "completed" } }; },
+  }] });
+  const data = Buffer.from([0, 255, 1, 128]).toString("base64");
+  const run = await api("/runs", { sessionId: "media", runtimeId: "media", input: "", attachments: [{ name: "../../音频.bin", mediaType: "audio/octet-stream", data }] }, 202);
+  await until(() => api(`/runs/${run.id}`), (value) => value.status === "completed");
+  const { relative } = await import("node:path");
+  const { realpath } = await import("node:fs/promises");
+  const path = relative(await realpath(root), received.attachments[0].path);
+  assert.ok(path.startsWith(".agent-host/attachments/media/"));
+  const output = await api(`/sessions/media/files?encoding=base64&path=${encodeURIComponent(path)}`);
+  assert.equal(output.encoding, "base64"); assert.equal(output.content, data);
+  const { readFile, stat } = await import("node:fs/promises");
+  assert.equal(await readFile(join(root, ".agent-host/.gitignore"), "utf8"), "*\n");
+  if (process.platform !== "win32") assert.equal((await stat(received.attachments[0].path)).mode & 0o777, 0o600);
+  await api("/runs", { sessionId: "bad", runtimeId: "media", input: "", attachments: [{ name: "bad", mediaType: "image/png", data: "not valid base64!" }] }, 400);
+  await api("/runs", { sessionId: "huge", runtimeId: "media", input: "", attachments: [{ name: "big", mediaType: "application/octet-stream", data: Buffer.alloc(30 * 1024 * 1024 + 1).toString("base64") }] }, 400);
+});
+
+test("HTTP image input reaches Claude's native multimodal prompt", async (t) => {
+  const data = Buffer.from("image fixture").toString("base64");
+  const { api } = await fixture(t, { configure: (root) => [createNativeRuntime({ id: "claude-image", kernel: "claude", cwd: root,
+    options: { query: createClaudeQueryFixture() } }, root)] });
+  const run = await api("/runs", { sessionId: "image", runtimeId: "claude-image", input: "Describe", attachments: [{ name: "image.png", mediaType: "image/png", data }] }, 202);
+  const done = await until(() => api(`/runs/${run.id}`), (value) => value.status !== "running");
+  assert.equal(done.status, "completed");
+  const blocks = JSON.parse(done.answer);
+  assert.equal(blocks[1].type, "image"); assert.equal(blocks[1].source.data, data);
+  assert.equal(blocks[1].source.media_type, "image/png");
+  const runtime = await api("/runtimes/inspect", { runtimeId: "claude-image" });
+  assert.deepEqual(runtime.inputs, { attachments: true, images: "native" });
+});
+for (const kernel of ["codex", "opencode", "pi", "openclaw"]) {
+  test(`HTTP image input reaches ${kernel}'s native interface (fixture)`, async (t) => {
+    const observed = [], data = Buffer.from([137, 80, 78, 71, 0, 255]).toString("base64");
+    const gateway = kernel === "openclaw" ? await startOpenClawFixture() : undefined;
+    t.after(() => gateway?.close());
+    const { api } = await fixture(t, { configure: (cwd) => [createNativeRuntime({
+      id: kernel, kernel, cwd, options: kernel === "pi" ? { model: { ...model, input: ["text", "image"] }, streamFn: piStream(observed) } :
+        kernel === "openclaw" ? { url: gateway.url, token: "fixture" } :
+        { command: process.execPath, args: [resolve(`test/fixtures/${kernel === "codex" ? "codex" : "acp"}-server.mjs`)] },
+    }, cwd)] });
+    const run = await api("/runs", { sessionId: "image", runtimeId: kernel, input: "Describe", attachments: [{ name: "image.png", mediaType: "image/png", data }] }, 202);
+    const done = await until(() => api(`/runs/${run.id}`), (value) => value.status !== "running");
+    assert.equal(done.status, "completed", JSON.stringify(done.outcome));
+    if (kernel === "pi") {
+      const input = observed.flatMap((entry) => entry.messages).find((message) => message.role === "user" && message.content.some((item) => item.type === "image"));
+      assert.equal(input.content.find((item) => item.type === "image").data, data);
+    } else if (kernel === "openclaw") {
+      const input = gateway.calls.find((call) => call.method === "chat.send").params.attachments[0];
+      assert.equal(input.content, data); assert.equal(input.mimeType, "image/png");
+    } else {
+      const input = JSON.parse(done.answer).find((item) => item.type === "image");
+      if (kernel === "codex") assert.equal(input.url, `data:image/png;base64,${data}`);
+      else { assert.equal(input.data, data); assert.equal(input.mimeType, "image/png"); }
+    }
+  });
+}
+test("HTTP binary writes preserve bytes and reject invalid data", async (t) => {
+  const { client, api } = await fixture(t, { workspaceFiles: true });
+  const session = client().session({ sessionId: "binary", runtimeId: "codex" });
+  await (await session.run("hello")).wait({ pollMs: 20 });
+  const data = Buffer.from([0, 255, 128]).toString("base64");
+  const file = await client().writeBinaryFile("binary", "results/image.png", data);
+  assert.equal((await client().readBinaryFile("binary", file.path)).content, data);
+  await api("/sessions/binary/files", { path: "bad.bin", encoding: "base64", content: "invalid!" }, 400);
+});
+for (const kernel of ["claude", "pi", "opencode"]) {
+  test(`HTTP tool image stays native through ${kernel}'s tool bridge (fixture)`, async (t) => {
+    const observed = [], data = Buffer.from("tool-image").toString("base64");
+    const { client } = await fixture(t, { configure: (cwd) => [createNativeRuntime({ id: kernel, kernel, cwd,
+      options: kernel === "claude" ? { query: createClaudeQueryFixture() } :
+        kernel === "pi" ? { model: { ...model, input: ["text", "image"] }, streamFn: piStream(observed, "edit_document") } :
+        { command: process.execPath, args: [resolve("test/fixtures/acp-server.mjs")] },
+    }, cwd)] });
+    const session = client().session({ sessionId: "tool-image", runtimeId: kernel, tools: [{ ...tool, execute: async () => ({
+      success: true, contentItems: [{ type: "inputImage", imageUrl: `data:image/png;base64,${data}` }],
+    }) }] });
+    const result = await (await session.run({ claude: "fixture tool", pi: "call edit", opencode: "tool" }[kernel])).wait({ pollMs: 20 });
+    assert.equal(result.status, "completed", JSON.stringify(result.outcome));
+    const content = kernel === "pi" ? observed.at(-1).messages.at(-1).content : JSON.parse(result.answer).content;
+    assert.equal(content[0].type, "image"); assert.equal(content[0].data, data); assert.equal(content[0].mimeType, "image/png");
+  });
+}
