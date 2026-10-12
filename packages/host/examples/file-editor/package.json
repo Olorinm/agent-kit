@@ -6,6 +6,6 @@
     "start": "node cli.mjs"
   },
   "dependencies": {
-    "@olorinm/agent-host": "0.1.0-alpha.5"
+    "@olorinm/agent-host": "0.1.0-alpha.6"
   }
 }

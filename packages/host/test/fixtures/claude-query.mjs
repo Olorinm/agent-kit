@@ -26,7 +26,7 @@ export function createClaudeQueryFixture(observed = []) {
         let text;
         if (typeof prompt === "string") text = prompt;
         else {
-          const messages = await Array.fromAsync(prompt);
+          const messages = [(await prompt[Symbol.asyncIterator]().next()).value];
           text = messages
             .map((message) =>
               typeof message.message.content === "string"

@@ -2,6 +2,8 @@
 
 The package targets Node.js 24+ and provides native adapters for all seven Kernels in the [support matrix](kernel-support.md). Native installations and authentication remain separate from the consuming product. The common turn/tool/event boundary is alpha; optional controls remain Kernel-specific. The first example below uses Codex 0.162.0.
 
+For a source-free installation and personal task CLI, start with the [quickstart](quickstart.md). Shared interactions, settings, progress and native conversation operations are described in the [common API](common-api.md).
+
 ## Install and run the example
 
 From a checkout of this repository:
@@ -11,7 +13,7 @@ npm ci
 npm test
 npm pack
 cd examples/file-editor
-npm install ../../olorinm-agent-host-0.1.0-alpha.5.tgz
+npm install ../../olorinm-agent-host-0.1.0-alpha.6.tgz
 AGENT_HOST_CODEX=../../node_modules/.bin/codex npm start
 ```
 
@@ -52,7 +54,7 @@ try {
 
 `instructions` are stable; `context` is the current product state, supplied on every turn. A product can also supply native text/image/skill/mention input items. Native `thread` and `turn` options preserve controls such as model, effort, sandbox policy, output schema and collaboration mode without inventing equivalent features for other Kernels. Passing an option does not establish that it has been verified in every environment.
 
-`createAgent({ kernel, options })` selects any of the seven adapters. TypeScript retains the selected adapter's native options and methods; existing direct imports still work. Hermes requires its Gateway command, and OpenClaw requires its Gateway connection. The [capability API](capabilities.md) describes common operations and limits without starting a process. Native request formats remain available; this factory does not normalize every approval or question.
+`createAgent({ kernel, options })` selects any of the seven adapters. TypeScript retains the selected adapter's native options and methods; existing direct imports still work. Hermes requires its Gateway command, and OpenClaw requires its Gateway connection. The [capability API](capabilities.md) describes common operations and limits without starting a process. Native request formats remain available; `onInteraction` handles common approvals and questions while retaining the native request.
 
 ## Tools and interactions
 

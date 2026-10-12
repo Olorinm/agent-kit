@@ -35,8 +35,8 @@ async function fixture(t, options = {}) {
                 options: {
                   command: resolve("test/fixtures/codex-server.mjs"),
                   args: [],
-                  cancellationGraceMs: 100,
-                  requestTimeoutMs: 1_000,
+                  cancellationGraceMs: 1_000,
+                  requestTimeoutMs: 5_000,
                 },
               },
               root,
@@ -49,7 +49,12 @@ async function fixture(t, options = {}) {
   await launch();
   t.after(async () => {
     await host.close();
-    await rm(root, { recursive: true, force: true });
+    await rm(root, {
+      recursive: true,
+      force: true,
+      maxRetries: 10,
+      retryDelay: 100,
+    });
   });
   const api = async (path, body, expected = 200, extra = {}) => {
     const response = await fetch(`${host.url}/v1${path}`, {
@@ -146,7 +151,7 @@ test("HTTP cancellation closes pending calls and does not accept late tool resul
     () => api(`/runs/${run.id}`),
     (value) => value.status !== "running",
   );
-  assert.equal(done.status, "cancelled");
+  assert.equal(done.status, "cancelled", JSON.stringify(done.outcome));
   await api(
     `/runs/${run.id}/calls/${calls[0].id}/result`,
     { result: { success: true, contentItems: [] } },
@@ -458,10 +463,13 @@ test("HTTP attachments preserve binary bytes, reject oversized input and stay wi
     () => api(`/runs/${run.id}`),
     (value) => value.status === "completed",
   );
-  const { relative } = await import("node:path");
+  const { relative, sep } = await import("node:path");
   const { realpath } = await import("node:fs/promises");
-  const path = relative(await realpath(root), received.attachments[0].path);
-  assert.ok(path.startsWith(".agent-host/attachments/media/"));
+  const path = relative(
+    await realpath(root),
+    await realpath(received.attachments[0].path),
+  );
+  assert.ok(path.startsWith(join(".agent-host", "attachments", "media") + sep));
   const output = await api(
     `/sessions/media/files?encoding=base64&path=${encodeURIComponent(path)}`,
   );

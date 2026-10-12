@@ -1,5 +1,12 @@
 import { createInterface } from "node:readline";
-import { readFile, writeFile, mkdir, appendFile } from "node:fs/promises";
+import {
+  readFile,
+  writeFile,
+  mkdir,
+  appendFile,
+  readdir,
+  unlink,
+} from "node:fs/promises";
 import { join } from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
@@ -74,7 +81,46 @@ async function handle(rpc) {
   );
   let result = {};
   try {
-    if (method === "mcp.servers.list") {
+    if (["image.attach_bytes", "pdf.attach", "file.attach"].includes(method))
+      result = {
+        attached: true,
+        path: "/fixture/image.png",
+        pages: [{ path: "/fixture/page.png" }],
+        ref_text: "@file:fixture",
+      };
+    else if (method === "image.detach") result = { detached: true };
+    else if (method === "gateway.capabilities")
+      result = { per_session_exclusive_submit: true };
+    else if (method === "session.list")
+      result = {
+        sessions: (await readdir(home))
+          .filter((n) => n.endsWith(".json"))
+          .map((n) => ({ session_id: n.slice(0, -5) })),
+      };
+    else if (method === "session.history")
+      result = {
+        messages: JSON.parse(
+          await readFile(
+            file(live.get(p.session_id).stored_session_id),
+            "utf8",
+          ),
+        ).messages,
+        count: 1,
+      };
+    else if (method === "session.branch") {
+      const source = live.get(p.session_id);
+      const stored_session_id = `stored-fork-${++next}`,
+        session_id = `live-fork-${next}`;
+      result = { ...source, stored_session_id, session_id };
+      live.set(session_id, result);
+      await writeFile(file(stored_session_id), JSON.stringify(result));
+    } else if (method === "session.close") {
+      live.delete(p.session_id);
+      result = { closed: p.session_id };
+    } else if (method === "session.delete") {
+      await unlink(file(p.session_id));
+      result = { deleted: p.session_id };
+    } else if (method === "mcp.servers.list") {
       result = {
         servers: mcpConfig ? [{ name: "agent-host", source: "config" }] : [],
       };
@@ -125,12 +171,22 @@ async function handle(rpc) {
           text: "",
           status: "interrupted",
         });
-    } else if (method === "session.compress")
+    } else if (method === "session.compress") {
+      const state = live.get(p.session_id);
+      if (process.env.HERMES_TEST_ROTATE === "1") {
+        state.stored_session_id += "-compressed";
+        await writeFile(file(state.stored_session_id), JSON.stringify(state));
+      }
       result =
         p.focus_topic === "pending"
           ? { status: "pending" }
-          : { status: "compressed", before_tokens: 100, after_tokens: 20 };
-    else if (method === "session.steer")
+          : {
+              status: "compressed",
+              before_tokens: 100,
+              after_tokens: 20,
+              info: { stored_session_id: state.stored_session_id },
+            };
+    } else if (method === "session.steer")
       result = { status: "queued", text: p.text };
     else throw new Error("unknown method " + method);
     send({ id, result });

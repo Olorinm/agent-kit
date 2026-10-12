@@ -1,3 +1,6 @@
+import { SessionManager, sessionPage } from "../sessions.js";
+import { projectProgress } from "../progress.js";
+import { routeInteraction, type InteractionHandler } from "../interactions.js";
 import { createHash, randomUUID } from "node:crypto";
 import { AsyncEventQueue } from "../async-event-queue.js";
 import { abortable } from "../abortable.js";
@@ -9,7 +12,7 @@ import {
   type ProductTool,
   type TurnOutcome,
 } from "../agent.js";
-import type { JsonObject } from "../types.js";
+import type { JsonObject, JsonValue } from "../types.js";
 import { productToolBridge } from "../product-tool-bridge.js";
 import { AcpHostToolBridgeServer } from "../acp/tool-bridge.js";
 import type { HostToolBridge } from "../acp/tools.js";
@@ -26,6 +29,11 @@ export interface OpenClawAgentOptions extends OpenClawGatewayConnection {
   cancellationGraceMs?: number;
 }
 export interface OpenClawRunRequest {
+  onInteraction?: InteractionHandler;
+  onRequest?(
+    request: { method: string; params?: JsonValue },
+    context: InteractionContext,
+  ): Promise<JsonValue | undefined>;
   sessionId: string;
   runId?: string;
   sessionKey?: string;
@@ -35,6 +43,7 @@ export interface OpenClawRunRequest {
   instructions: string;
   context?: string;
   model?: string;
+  thinking?: string;
   tools?: ProductTool[];
   toolBridge?: HostToolBridge;
   bindings?: BindingStore;
@@ -56,6 +65,66 @@ export class OpenClawAgent {
   private readonly active = new Map<string, AbortController>();
   private readonly unsettled = new Set<string>();
   private closed = false;
+  get sessions(): SessionManager {
+    return (this.sessionManager ??= new SessionManager(
+      this.bindings,
+      () => this.active.size > 0,
+      {
+        list: async (o) => {
+          const n = object(
+            await this.client.request(
+              "sessions.list",
+              { limit: o.limit ?? 100 },
+              { signal: o.signal, timeoutMs: 30_000 },
+            ),
+          );
+          return sessionPage(n.sessions, n);
+        },
+        history: async (id, o) => {
+          const n = object(
+            await this.client.request(
+              "chat.history",
+              { sessionKey: id, limit: o.limit ?? 100 },
+              { signal: o.signal, timeoutMs: 30_000 },
+            ),
+          );
+          return sessionPage(n.messages, n);
+        },
+        fork: async (id, o) => {
+          if (!o.entryId) throw new Error("native_fork_entry_id_required");
+          const n = object(
+            await this.client.request(
+              "sessions.fork",
+              { sessionKey: id, entryId: o.entryId },
+              { signal: o.signal, timeoutMs: 30_000 },
+            ),
+          );
+          return String(n.sessionKey ?? "");
+        },
+        delete: async (id, o) => {
+          const n = object(
+            await this.client.request(
+              "sessions.delete",
+              { key: id, deleteTranscript: true },
+              { signal: o.signal, timeoutMs: 30_000 },
+            ),
+          );
+          if (n.ok !== true || n.deleted !== true)
+            throw new Error("native_delete_not_confirmed");
+        },
+      },
+    ));
+  }
+  private readonly steering = new Map<
+    string,
+    (input: string) => Promise<JsonObject>
+  >();
+  async steer(sessionId: string, input: string) {
+    const send = this.steering.get(sessionId);
+    if (!send) throw new Error("run_not_found");
+    return send(input);
+  }
+  private sessionManager?: SessionManager;
   constructor(private readonly options: OpenClawAgentOptions) {
     this.client = options.client ?? new OpenClawGatewayClient(options);
     this.bindings = options.bindings ?? new MemoryBindingStore();
@@ -77,7 +146,7 @@ export class OpenClawAgent {
       queue.close(),
     );
     try {
-      yield* queue;
+      for await (const event of queue) yield* projectProgress(event);
       await producer;
     } finally {
       controller.abort(new Error("consumer_closed"));
@@ -118,6 +187,7 @@ export class OpenClawAgent {
     let toolsBound = false;
     queue.push({ type: "turn.started", runId });
     try {
+      this.sessionManager?.assertIdle(request.sessionId);
       if (this.closed) throw new Error("agent_closed");
       if (this.active.has(lockKey)) throw new Error("session_busy");
       if (this.unsettled.has(lockKey))
@@ -127,21 +197,29 @@ export class OpenClawAgent {
       context.signal.throwIfAborted();
       await this.client.ensureConnected();
       context.signal.throwIfAborted();
+      const store = request.bindings ?? this.bindings;
+      const binding = await store.get(request.sessionId);
+      // A native fork changes its storage key, not the source configuration.
+      // Retaining the source identity also preserves pre-fork/older fingerprints.
+      const configurationKey =
+        request.sessionKey ??
+        this.options.sessionKey ??
+        `agent:main:agent-host-${createHash("sha256")
+          .update(binding?.configurationSessionId ?? request.sessionId)
+          .digest("hex")}`;
       const fingerprint =
         request.bindingFingerprint ??
         createHash("sha256")
           .update(
             JSON.stringify({
               gateway: this.options.url,
-              sessionKey,
+              sessionKey: configurationKey,
               instructions: request.instructions,
               tools: request.tools?.map(({ execute: _, ...spec }) => spec),
               descriptors: request.toolBridge?.descriptors,
             }),
           )
           .digest("hex");
-      const store = request.bindings ?? this.bindings;
-      const binding = await store.get(request.sessionId);
       if (binding && binding.fingerprint !== fingerprint)
         throw new Error("session_configuration_changed");
       if (binding) {
@@ -225,7 +303,13 @@ export class OpenClawAgent {
         renewal.unref();
         cleanup.push(() => clearInterval(renewal));
       }
-      await store.set(request.sessionId, { threadId: sessionKey, fingerprint });
+      await store.set(request.sessionId, {
+        threadId: sessionKey,
+        fingerprint,
+        ...(binding?.configurationSessionId
+          ? { configurationSessionId: binding.configurationSessionId }
+          : {}),
+      });
       queue.push({
         type: "session.bound",
         runId,
@@ -244,8 +328,75 @@ export class OpenClawAgent {
       let agentText = "",
         chatText = "",
         finalChatText: string | undefined;
+      const approvals = new Map<string, AbortController>();
+      cleanup.push(() => {
+        for (const c of approvals.values()) c.abort();
+        approvals.clear();
+      });
       const project = (frame: GatewayEventFrame) => {
         const payload = object(frame.payload);
+        if (frame.event === "exec.approval.resolved") {
+          approvals
+            .get(String(payload.id))
+            ?.abort(new Error("native_request_withdrawn"));
+          return;
+        }
+        if (frame.event === "exec.approval.requested") {
+          const native = object(payload.request);
+          if (
+            native.sessionKey !== sessionKey ||
+            (native.runId && !accepted.has(String(native.runId))) ||
+            typeof payload.id !== "string" ||
+            approvals.has(payload.id)
+          )
+            return;
+          const id = payload.id;
+          const control = new AbortController();
+          approvals.set(id, control);
+          const expiry =
+            typeof payload.expiresAtMs === "number"
+              ? Math.max(1, payload.expiresAtMs - Date.now())
+              : 120_000;
+          const signal = AbortSignal.any([
+            context.signal,
+            control.signal,
+            AbortSignal.timeout(expiry),
+          ]);
+          void abortable(
+            routeInteraction(
+              request,
+              { method: frame.event, params: payload },
+              { ...context, signal },
+            ),
+            signal,
+          )
+            .then((answer) => {
+              if (signal.aborted) return;
+              const decision = object(answer).decision;
+              if (
+                !["allow-once", "allow-always", "deny"].includes(
+                  String(decision),
+                )
+              )
+                return this.client.request(
+                  "exec.approval.resolve",
+                  { id, decision: "deny" },
+                  { timeoutMs: 10_000 },
+                );
+              return this.client.request(
+                "exec.approval.resolve",
+                { id, decision },
+                { timeoutMs: 10_000 },
+              );
+            })
+            .catch((error) => {
+              if (!signal.aborted) controller.abort(error);
+            })
+            .finally(() => {
+              control.abort();
+            });
+          return;
+        }
         if (typeof payload.runId !== "string" || !accepted.has(payload.runId))
           return;
         if (frame.event === "chat" && payload.sessionKey !== sessionKey) return;
@@ -362,6 +513,7 @@ export class OpenClawAgent {
             ]
               .filter(Boolean)
               .join("\n\n"),
+            ...(request.thinking ? { thinking: request.thinking } : {}),
             deliver: false,
             idempotencyKey: runId,
             ...(request.attachments?.length
@@ -390,18 +542,79 @@ export class OpenClawAgent {
       context.turnId = nativeRunId;
       accepted.add(nativeRunId);
       acknowledged = true;
-      for (const frame of early) project(frame);
+      for (const frame of early.splice(0)) project(frame);
+      let steeringPending: Promise<JsonObject> | undefined;
+      let steeringFailure: unknown;
+      this.steering.set(request.sessionId, (input) => {
+        if (steeringPending) throw new Error("steer_busy");
+        if (settled || context.signal.aborted) throw new Error("run_not_found");
+        acknowledged = false;
+        const pending = (async () => {
+          try {
+            const result = object(
+              await this.client.request(
+                "sessions.steer",
+                {
+                  key: sessionKey,
+                  message: input,
+                  idempotencyKey: randomUUID(),
+                },
+                { timeoutMs: 30_000, signal: context.signal },
+              ),
+            );
+            if (typeof result.runId !== "string" || !result.runId)
+              throw new Error("openclaw_steer_run_id_missing");
+            nativeRunId = result.runId;
+            context.turnId = nativeRunId;
+            accepted.clear();
+            accepted.add(nativeRunId);
+            agentText = "";
+            chatText = "";
+            text = "";
+            finalChatText = undefined;
+            streamingSource = undefined;
+            terminalError = "";
+            for (const c of approvals.values())
+              c.abort(new Error("native_turn_replaced"));
+            approvals.clear();
+            if (context.signal.aborted) abort();
+            return result;
+          } catch (error) {
+            steeringFailure = new Error("openclaw_steer_outcome_unknown", {
+              cause: error,
+            });
+            controller.abort(steeringFailure);
+            throw steeringFailure;
+          } finally {
+            acknowledged = true;
+            for (const frame of early.splice(0)) project(frame);
+          }
+        })();
+        steeringPending = pending;
+        void pending
+          .finally(() => {
+            if (steeringPending === pending) steeringPending = undefined;
+          })
+          .catch(() => undefined);
+        return pending;
+      });
+      cleanup.push(() => this.steering.delete(request.sessionId));
       if (context.signal.aborted) abort();
       const slice = this.options.waitSliceMs ?? 30_000;
       let status = "";
       while (true) {
+        if (steeringPending) await steeringPending;
+        const waitedRunId = nativeRunId;
         const receipt = object(
           await this.client.request(
             "agent.wait",
-            { runId: nativeRunId, timeoutMs: slice },
+            { runId: waitedRunId, timeoutMs: slice },
             { timeoutMs: slice + 5_000, signal: waitController.signal },
           ),
         );
+        if (steeringPending) await steeringPending;
+        if (steeringFailure) throw steeringFailure;
+        if (waitedRunId !== nativeRunId) continue;
         status = String(receipt.status ?? "").toLowerCase();
         if (!["timeout", "pending", "running", "working"].includes(status))
           break;
@@ -468,8 +681,8 @@ export class OpenClawAgent {
       queue.push({ type: "turn.finished", runId, outcome });
     }
   }
-  async compact(sessionKey: string) {
-    return compactOpenClaw(this.client, sessionKey);
+  async compact(sessionKey: string, signal?: AbortSignal) {
+    return compactOpenClaw(this.client, sessionKey, signal);
   }
 }
 export async function selectOpenClawModel(
@@ -510,12 +723,13 @@ export async function selectOpenClawModel(
 export async function compactOpenClaw(
   client: OpenClawGatewayClient,
   sessionKey: string,
+  signal?: AbortSignal,
 ) {
   const result = object(
     await client.request(
       "sessions.compact",
       { key: sessionKey },
-      { timeoutMs: 120_000 },
+      { timeoutMs: 120_000, signal },
     ),
   );
   return result.compacted === true

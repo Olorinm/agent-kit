@@ -1,3 +1,4 @@
+import { randomBytes } from "node:crypto";
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { resolve } from "node:path";
 import { resolveCommandInvocation } from "../environment/command.js";
@@ -35,7 +36,11 @@ export async function compactOpenCode(options: {
     });
     const model =
       openCodeSummarizeModel(options.model, runtimeEnv) ??
-      (await readOpenCodeDefaultSummarizeModel(server.url, options.signal));
+      (await readOpenCodeDefaultSummarizeModel(
+        server.url,
+        options.signal,
+        server.headers,
+      ));
     if (!model) {
       return {
         ok: false,
@@ -48,7 +53,7 @@ export async function compactOpenCode(options: {
       `${server.url}/session/${encodeURIComponent(options.sessionId)}/summarize`,
       {
         method: "POST",
-        headers: { "content-type": "application/json" },
+        headers: { "content-type": "application/json", ...server.headers },
         body: JSON.stringify(model),
         signal: options.signal,
       },
@@ -155,10 +160,7 @@ export async function compactKimi(options: {
       if (signal?.aborted) throw new Error("kimi_compaction_aborted");
     }
     const commandResult = readKimiCompactionResult(commandText);
-    if (
-      commandResult &&
-      commandResult.tokensAfter < commandResult.tokensBefore
-    ) {
+    if (commandResult) {
       return {
         ok: true,
         compacted: true,
@@ -198,6 +200,7 @@ type OpenCodeSummarizeModel = { providerID: string; modelID: string };
 
 type OpenCodeServerProcess = {
   url: string;
+  headers: Record<string, string>;
   close(): Promise<void>;
 };
 
@@ -221,8 +224,12 @@ function openCodeSummarizeModel(
 async function readOpenCodeDefaultSummarizeModel(
   serverUrl: string,
   signal?: AbortSignal,
+  headers?: Record<string, string>,
 ): Promise<OpenCodeSummarizeModel | undefined> {
-  const response = await fetch(`${serverUrl}/config/providers`, { signal });
+  const response = await fetch(`${serverUrl}/config/providers`, {
+    signal,
+    headers,
+  });
   if (!response.ok) return undefined;
   const payload = asObject(await response.json().catch(() => undefined));
   const defaults = asObject(payload.default);
@@ -234,17 +241,20 @@ async function readOpenCodeDefaultSummarizeModel(
   return undefined;
 }
 
-async function startOpenCodeServer(input: {
+export async function startOpenCodeServer(input: {
   command: string;
   cwd: string;
   env: NodeJS.ProcessEnv | undefined;
   signal?: AbortSignal;
 }): Promise<OpenCodeServerProcess> {
   input.signal?.throwIfAborted();
+  const password = randomBytes(32).toString("hex");
   const env: NodeJS.ProcessEnv = {
     ...process.env,
     ...(input.env ?? {}),
     PWD: input.cwd,
+    OPENCODE_SERVER_USERNAME: "agent-host",
+    OPENCODE_SERVER_PASSWORD: password,
   };
   for (const [key, value] of Object.entries(env)) {
     if (value === undefined) delete env[key];
@@ -271,6 +281,9 @@ async function startOpenCodeServer(input: {
   }
   return {
     url,
+    headers: {
+      authorization: `Basic ${Buffer.from(`agent-host:${password}`).toString("base64")}`,
+    },
     close: () => closeOpenCodeServer(child),
   };
 }

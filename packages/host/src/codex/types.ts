@@ -74,11 +74,17 @@ export type CodexInitializeResponse = {
 
 export type CodexTurnInputItem =
   | { type: "text"; text: string; text_elements: [] }
+  | ({ type: "image"; detail?: "auto" | "low" | "high" | "original" } & (
+      | { url: string; fileId?: string }
+      | { fileId: string; url?: string }
+    ))
   | {
-      type: "image";
-      url: string;
+      type: "localImage";
+      path: string;
       detail?: "auto" | "low" | "high" | "original";
     }
+  | { type: "audio"; url: string }
+  | { type: "localAudio"; path: string }
   | { type: "skill"; name: string; path: string }
   | { type: "mention"; name: string; path: string };
 

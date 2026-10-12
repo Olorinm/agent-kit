@@ -1,10 +1,19 @@
 name: Package contracts
 on:
   push:
+    branches: [main]
   pull_request:
+concurrency:
+  group: package-${{ github.ref }}
+  cancel-in-progress: true
 jobs:
   package:
-    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -13,4 +22,6 @@ jobs:
           cache: npm
       - run: npm ci --ignore-scripts
       - run: npm test
+        timeout-minutes: 3
       - run: npm run test:package
+        timeout-minutes: 5

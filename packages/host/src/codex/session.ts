@@ -1,3 +1,6 @@
+import { SessionManager, sessionPage } from "../sessions.js";
+import { projectProgress } from "../progress.js";
+import { routeInteraction, type InteractionHandler } from "../interactions.js";
 import {
   MemoryBindingStore,
   type BindingStore,
@@ -28,6 +31,7 @@ import type {
 } from "./types.js";
 
 export interface CodexRunRequest {
+  onInteraction?: InteractionHandler;
   sessionId: string;
   runId?: string;
   cwd: string;
@@ -78,6 +82,62 @@ export class CodexAgent {
     InteractionContext & { controller: AbortController }
   >();
 
+  get sessions(): SessionManager {
+    return (this.sessionManager ??= new SessionManager(
+      this.bindings,
+      (id) => this.active.has(id),
+      {
+        list: async (o) => {
+          const native =
+            object(
+              await (
+                await this.connect()
+              ).request(
+                "thread/list",
+                { cwd: o.cwd, limit: o.limit ?? 100, cursor: o.cursor },
+                { signal: o.signal },
+              ),
+            ) ?? {};
+          return sessionPage(native.data, native, native.nextCursor);
+        },
+        history: async (id, o) => {
+          const native =
+            object(
+              await (
+                await this.connect()
+              ).request(
+                "thread/read",
+                { threadId: id, includeTurns: true },
+                { signal: o.signal },
+              ),
+            ) ?? {};
+          return sessionPage(object(native.thread)?.turns, native);
+        },
+        fork: async (id, o) => {
+          const native =
+            object(
+              await (
+                await this.connect()
+              ).request(
+                "thread/fork",
+                {
+                  threadId: id,
+                  ...(o.entryId ? { lastTurnId: o.entryId } : {}),
+                },
+                { signal: o.signal },
+              ),
+            ) ?? {};
+          return String(object(native.thread)?.id ?? "");
+        },
+        delete: async (id, o) => {
+          await (
+            await this.connect()
+          ).request("thread/delete", { threadId: id }, { signal: o.signal });
+        },
+      },
+    ));
+  }
+  private sessionManager?: SessionManager;
   constructor(private readonly options: CodexAgentOptions = {}) {
     this.bindings = options.bindings ?? new MemoryBindingStore();
   }
@@ -155,7 +215,9 @@ export class CodexAgent {
   async steer(sessionId: string, input: string): Promise<void> {
     const active = this.active.get(sessionId);
     if (!active?.turnId) throw new Error("active_turn_not_ready");
-    const response = await (await this.connect()).request<{ turnId?: string }>(
+    const response = await (
+      await this.connect()
+    ).request<{ turnId?: string }>(
       "turn/steer",
       {
         threadId: active.threadId,
@@ -178,7 +240,7 @@ export class CodexAgent {
       queue.close(),
     );
     try {
-      for await (const event of queue) yield event;
+      for await (const event of queue) yield* projectProgress(event);
     } finally {
       controller.abort();
       request.signal?.removeEventListener("abort", abort);
@@ -224,6 +286,7 @@ export class CodexAgent {
       { signature: string; result: Promise<CodexDynamicToolCallResponse> }
     >();
     try {
+      this.sessionManager?.assertIdle(request.sessionId);
       if (this.active.has(request.sessionId)) throw new Error("session_busy");
       this.active.set(request.sessionId, context);
       activeRegistered = true;
@@ -461,9 +524,11 @@ export class CodexAgent {
                       signal,
                       callId,
                     })
-                  : ((await request.onRequest?.(nativeRequest, context)) as
-                      | CodexDynamicToolCallResponse
-                      | undefined);
+                  : ((await routeInteraction(
+                      request,
+                      nativeRequest,
+                      context,
+                    )) as CodexDynamicToolCallResponse | undefined);
               } catch (error) {
                 result = {
                   success: false,
@@ -505,7 +570,7 @@ export class CodexAgent {
           }
           return untilAborted(
             Promise.resolve().then(() =>
-              request.onRequest?.(nativeRequest, context),
+              routeInteraction(request, nativeRequest, context),
             ),
             signal,
             fallback,

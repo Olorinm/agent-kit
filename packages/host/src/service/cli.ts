@@ -1,90 +1,16 @@
 #!/usr/bin/env node
-import { randomBytes } from "node:crypto";
+import { randomBytes, randomUUID } from "node:crypto";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { parseArgs } from "node:util";
 import { z } from "zod";
 import { startAgentHostServer } from "./server.js";
-import {
-  createNativeRuntime,
-  type NativeRuntimeConfig,
-} from "./native-runtimes.js";
-import { idSchema } from "./protocol.js";
-
-const profileSchema = z
-  .object({
-    id: idSchema,
-    kernel: z.enum([
-      "codex",
-      "claude",
-      "pi",
-      "opencode",
-      "kimi",
-      "hermes",
-      "openclaw",
-    ]),
-    cwd: z.string().min(1),
-    model: z.string().optional(),
-    command: z.string().min(1).optional(),
-    args: z.array(z.string()).optional(),
-    env: z.record(z.string(), z.string()).optional(),
-    thread: z.record(z.string(), z.json()).optional(),
-    turn: z.record(z.string(), z.json()).optional(),
-    gatewayUrl: z.url().optional(),
-    gatewayTokenEnv: z.string().optional(),
-    provider: z.string().optional(),
-    effort: z.string().optional(),
-  })
-  .strict()
-  .superRefine((profile, ctx) => {
-    const allowed = {
-      codex: ["command", "args", "env", "thread", "turn"],
-      claude: ["command", "env"],
-      opencode: ["command", "args", "env", "effort"],
-      kimi: ["command", "args", "env", "effort"],
-      pi: [],
-      hermes: ["command", "args", "env", "provider", "effort"],
-      openclaw: ["gatewayUrl", "gatewayTokenEnv"],
-    }[profile.kernel];
-    for (const key of Object.keys(profile))
-      if (!["id", "kernel", "cwd", "model", ...allowed].includes(key))
-        ctx.addIssue({
-          code: "custom",
-          message: `${key} is not supported by this ${profile.kernel} CLI profile`,
-        });
-    if (profile.kernel === "hermes" && !profile.command)
-      ctx.addIssue({
-        code: "custom",
-        message: "Hermes requires its gateway command and arguments",
-      });
-    if (profile.kernel === "openclaw" && !profile.gatewayUrl)
-      ctx.addIssue({ code: "custom", message: "OpenClaw requires gatewayUrl" });
-    if (
-      profile.gatewayUrl &&
-      !["ws:", "wss:"].includes(new URL(profile.gatewayUrl).protocol)
-    )
-      ctx.addIssue({
-        code: "custom",
-        message: "OpenClaw gatewayUrl must use ws or wss",
-      });
-    if (profile.gatewayTokenEnv && !process.env[profile.gatewayTokenEnv])
-      ctx.addIssue({
-        code: "custom",
-        message: "Configured Gateway token environment variable is empty",
-      });
-    if (profile.kernel === "pi" && !profile.model)
-      ctx.addIssue({ code: "custom", message: "Pi requires provider/model" });
-  });
-const configSchema = z
-  .object({
-    stateDirectory: z.string().default(".agent-host"),
-    host: z.string().default("127.0.0.1"),
-    port: z.number().int().min(0).max(65535).default(37420),
-    allowedOrigins: z.array(z.string().url()).default([]),
-    workspaceFiles: z.boolean().default(false),
-    runtimes: z.array(profileSchema).min(1),
-  })
-  .strict();
+import { configSchema, createConfiguredRuntimes } from "./config.js";
+import { diagnoseRuntime } from "./diagnostics.js";
+import { terminalInteraction } from "./terminal.js";
+import { routeInteraction } from "../interactions.js";
+import { TaskStore } from "./store.js";
+import { kernels } from "../capabilities.js";
 
 async function main() {
   const { values, positionals } = parseArgs({
@@ -95,21 +21,168 @@ async function main() {
       host: { type: "string" },
       "token-file": { type: "string" },
       help: { type: "boolean", short: "h" },
+      kernel: { type: "string" },
+      cwd: { type: "string" },
+      model: { type: "string" },
+      command: { type: "string" },
+      args: { type: "string" },
+      runtime: { type: "string" },
+      session: { type: "string" },
+      settings: { type: "string" },
+      json: { type: "boolean" },
+      native: { type: "boolean" },
+      probe: { type: "boolean" },
+      timeout: { type: "string" },
     },
   });
-  if (values.help) {
+  if (values.help || !positionals.length) {
+    console.log(`Usage:
+  agent-host init --kernel codex [--config host.json] [--cwd .] [--model ID]
+  agent-host doctor --config host.json [--native] [--probe]
+  agent-host run --config host.json [--runtime ID] [--session ID] [--settings JSON] [--json] "Your task"
+  agent-host serve --config host.json [--host 127.0.0.1] [--port 37420] [--token-file path]
+Native credentials stay in the Kernel's existing configuration. --native starts a native handshake; --probe executes a short model request and may incur provider usage. run prints a session ID to continue later. Noninteractive permission requests are declined.`);
+    return;
+  }
+  const operation = positionals[0];
+  const filename = resolve(values.config ?? "host.json");
+  if (operation === "init") {
+    const kernel = z.enum(kernels).parse(values.kernel ?? "codex");
+    const profile = {
+      id: kernel,
+      kernel,
+      cwd: resolve(values.cwd ?? process.cwd()),
+      ...(values.model ? { model: values.model } : {}),
+      ...(values.command ? { command: values.command } : {}),
+      ...(values.args ? { args: JSON.parse(values.args) } : {}),
+      ...(kernel === "openclaw" ? { gatewayUrl: "ws://127.0.0.1:18789" } : {}),
+    };
+    if (kernel === "hermes" && !values.command)
+      throw new Error(
+        "Hermes requires --command and --args for its TUI Gateway. See docs/quickstart.md.",
+      );
+    if (kernel === "pi" && !values.model)
+      throw new Error("Pi requires --model provider/model.");
+    const config = { stateDirectory: ".agent-host", runtimes: [profile] };
+    configSchema.parse(config);
+    await writeFile(filename, JSON.stringify(config, null, 2) + "\n", {
+      flag: "wx",
+      mode: 0o600,
+    });
     console.log(
-      "Usage: agent-host serve --config host.json [--host 127.0.0.1] [--port 37420] [--token-file path]\nThe service uses AGENT_HOST_TOKEN or a private token file. Native credentials stay on the server.",
+      `Created ${filename}. Run agent-host doctor --config ${JSON.stringify(filename)}.`,
     );
     return;
   }
-  if (positionals.length !== 1 || positionals[0] !== "serve" || !values.config)
-    throw new Error("Usage: agent-host serve --config host.json");
-  const filename = resolve(values.config);
+  if (!["serve", "run", "doctor"].includes(operation ?? ""))
+    throw new Error("Unknown command; use agent-host --help");
   const config = configSchema.parse(
     JSON.parse(await readFile(filename, "utf8")),
   );
   const stateDirectory = resolve(dirname(filename), config.stateDirectory);
+  const runtimes = createConfiguredRuntimes(config, filename);
+  if (operation === "doctor") {
+    const ownership = values.probe
+      ? new TaskStore(join(stateDirectory, "tasks.sqlite"))
+      : undefined;
+    try {
+      const reports = [];
+      for (const runtime of runtimes)
+        if (!values.runtime || values.runtime === runtime.id)
+          reports.push(
+            await diagnoseRuntime(runtime, {
+              native: values.native,
+              probe: values.probe,
+              timeoutMs: values.timeout ? Number(values.timeout) : undefined,
+            }),
+          );
+      if (!reports.length) throw new Error("runtime_not_found");
+      console.log(JSON.stringify(reports, null, 2));
+      if (
+        reports.some(
+          (r) =>
+            !r.local.available ||
+            r.native?.ok === false ||
+            r.probe?.status === "failed",
+        )
+      )
+        process.exitCode = 1;
+    } finally {
+      try {
+        await Promise.all(runtimes.map((r) => r.close()));
+      } finally {
+        ownership?.close();
+      }
+    }
+    return;
+  }
+  if (operation === "run") {
+    const runtime = values.runtime
+      ? runtimes.find((r) => r.id === values.runtime)
+      : runtimes[0];
+    if (!runtime) throw new Error("runtime_not_found");
+    const input = positionals.slice(1).join(" ");
+    if (!input.trim()) throw new Error("task_text_required");
+    const sessionId = values.session ?? `cli-${randomUUID()}`,
+      controller = new AbortController();
+    const timeout = setTimeout(
+      () => controller.abort(new Error("run_deadline_exceeded")),
+      values.timeout
+        ? z.coerce.number().int().min(100).max(86_400_000).parse(values.timeout)
+        : 3_600_000,
+    );
+    timeout.unref();
+    const stop = () => controller.abort(new Error("user_cancelled"));
+    process.once("SIGINT", stop);
+    console.error(`Session: ${sessionId}`);
+    const ownership = new TaskStore(join(stateDirectory, "tasks.sqlite"));
+    try {
+      const ready = await runtime.inspect?.();
+      if (ready && !ready.available) throw new Error(ready.reason);
+      const settings = values.settings
+        ? z.record(z.string(), z.json()).parse(JSON.parse(values.settings))
+        : undefined;
+      for await (const event of runtime.run({
+        sessionId,
+        runId: randomUUID(),
+        input,
+        instructions: "",
+        tools: [],
+        signal: controller.signal,
+        mode: "turn",
+        settings,
+        onRequest: (request, context) =>
+          routeInteraction(
+            { onInteraction: terminalInteraction },
+            request,
+            context,
+          ),
+      })) {
+        if (values.json) console.log(JSON.stringify(event));
+        else if (event.type === "assistant.delta")
+          process.stdout.write(event.text);
+        else if (event.type === "turn.finished") {
+          console.log();
+          if (event.outcome.status !== "completed")
+            console.error(event.outcome.error ?? event.outcome.status);
+        }
+        if (
+          event.type === "turn.finished" &&
+          event.outcome.status !== "completed"
+        )
+          process.exitCode = 1;
+      }
+    } finally {
+      clearTimeout(timeout);
+      process.removeListener("SIGINT", stop);
+      try {
+        await Promise.all(runtimes.map((r) => r.close()));
+      } finally {
+        ownership.close();
+      }
+    }
+    return;
+  }
   await mkdir(stateDirectory, { recursive: true, mode: 0o700 });
   const tokenFile = values["token-file"]
     ? resolve(values["token-file"])
@@ -133,72 +206,6 @@ async function main() {
       }
     }
   }
-  const runtimes = config.runtimes.map((profile) => {
-    const base = {
-      id: profile.id,
-      kernel: profile.kernel,
-      cwd: resolve(dirname(filename), profile.cwd),
-      model: profile.model,
-    };
-    const options = {
-      command: profile.command,
-      args: profile.args,
-      env: profile.env,
-    };
-    let native: NativeRuntimeConfig;
-    switch (profile.kernel) {
-      case "codex":
-        native = {
-          ...base,
-          kernel: "codex",
-          options,
-          thread: profile.thread,
-          turn: profile.turn,
-        };
-        break;
-      case "claude":
-        native = {
-          ...base,
-          kernel: "claude",
-          options: { command: profile.command, env: profile.env },
-        };
-        break;
-      case "opencode":
-      case "kimi":
-        native = {
-          ...base,
-          kernel: profile.kernel,
-          options,
-          effort: profile.effort,
-        };
-        break;
-      case "pi":
-        native = { ...base, kernel: "pi" };
-        break;
-      case "hermes":
-        native = {
-          ...base,
-          kernel: "hermes",
-          options: { ...options, command: profile.command! },
-          provider: profile.provider,
-          reasoningEffort: profile.effort,
-        };
-        break;
-      case "openclaw":
-        native = {
-          ...base,
-          kernel: "openclaw",
-          options: {
-            url: profile.gatewayUrl!,
-            token: profile.gatewayTokenEnv
-              ? process.env[profile.gatewayTokenEnv]
-              : undefined,
-          },
-        };
-        break;
-    }
-    return createNativeRuntime(native, stateDirectory);
-  });
   const host = await startAgentHostServer({
     ...config,
     stateDirectory,

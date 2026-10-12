@@ -71,7 +71,19 @@ export class FileBindingStore implements BindingStore {
       throw new Error(
         "Invalid native session binding; refusing to recreate the conversation",
       );
-    return { threadId: value.threadId, fingerprint: value.fingerprint };
+    if (
+      "configurationSessionId" in value &&
+      (typeof value.configurationSessionId !== "string" ||
+        !value.configurationSessionId)
+    )
+      throw new Error("Invalid native session configuration identity");
+    return {
+      threadId: value.threadId,
+      fingerprint: value.fingerprint,
+      ...("configurationSessionId" in value
+        ? { configurationSessionId: value.configurationSessionId as string }
+        : {}),
+    };
   }
   async set(id: string, binding: SessionBinding): Promise<void> {
     await mkdir(this.directory, { recursive: true, mode: 0o700 });

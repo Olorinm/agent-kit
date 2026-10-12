@@ -9,7 +9,7 @@ The service manages transport, task storage and callbacks around the shared adap
 
 ## Start a service
 
-Node.js 24+ is required. From this repository, build an archive with `npm pack`, then install that archive in your consumer. The current archive is `olorinm-agent-host-0.1.0-alpha.5.tgz`; it is not published to the npm registry.
+Node.js 24+ is required. Install a [GitHub Release archive](quickstart.md), or build one from a checkout with `npm pack`. The current archive is `olorinm-agent-host-0.1.0-alpha.6.tgz`; it is not published to the npm registry.
 
 Create `host.json`:
 
@@ -47,9 +47,9 @@ HTTP callers select a configured `runtimeId`. They cannot supply executables, en
 | Kernel             | CLI profile configuration                                                                                                                                                                                |
 | ------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `codex`            | Optional `command`, `args`, `env`, `model`, native `thread` and `turn` options. Defaults to `codex` and a read-only native sandbox.                                                                      |
-| `claude`           | Optional `command`, `env`, `model`; otherwise uses the bundled Claude SDK engine and native authentication.                                                                                              |
-| `opencode`, `kimi` | Optional `command`, `args`, `env`, `model`, `effort`; native ACP startup and login.                                                                                                                      |
-| `pi`               | Required `model` in `provider/model` form, using Pi's built-in model catalog and native provider environment. Its durable storage lives under service state.                                             |
+| `claude`           | Optional `command`, `env`, `model`, SDK `native` settings; otherwise uses the bundled Claude SDK engine and native authentication.                                                                                              |
+| `opencode`, `kimi` | Optional `command`, `args`, `env`, `model`, `effort`, `config`; native ACP startup and login.                                                                                                                      |
+| `pi`               | Required `model` in `provider/model` form, using Pi's built-in model catalog and native provider environment. Optional `thinkingLevel` and `toolApproval`. Its durable storage lives under service state.                                             |
 | `hermes`           | Required Gateway `command`, with `args`, optional `env`, `model`, `provider`, `effort`. Configure/authenticate the profile's persistent `HERMES_HOME`; the profile is exclusively owned by this service. |
 | `openclaw`         | Required `gatewayUrl`, optional `gatewayTokenEnv` naming a server environment variable, optional `model`. Product tools require the existing [Gateway plugin](api.md#openclaw-product-tools).            |
 
@@ -149,7 +149,7 @@ const result = await task.wait({
 console.log(result.status, result.answer);
 ```
 
-Native question and permission replies use the formats documented in [the adapter API](api.md#tools-and-interactions). The service does not treat every interaction as a yes/no prompt. A client may instead poll calls and resolve them using its own UI. The HTTP example implements a limited set of native permission/question forms; unsupported forms are declined, and it never solicits native sudo secrets.
+Native question and permission replies use the formats documented in [the adapter API](api.md#tools-and-interactions). The service does not treat every interaction as a yes/no prompt. A client may instead poll calls and resolve them using its own UI. The HTTP example uses the common `onInteraction` helper for approvals, questions, JSON forms and URL elicitations, with a raw native response escape hatch. It never solicits native sudo secrets. See the [common API](common-api.md).
 
 Session runtime, stable instructions, tool definitions and server configuration are bound on the first task. A mismatch returns `409 session_configuration_conflict`. Mutable product state goes in per-turn `context`. There is one active task per session. Hermes additionally permits one active task per profile. Native sessions and transcript storage stay with the selected adapter/Kernel.
 
@@ -162,7 +162,9 @@ Every operation requires `Authorization: Bearer <token>` and JSON bodies for POS
 | `GET /v1/health`                                | Service protocol version (`1`).                                                                                                |
 | `GET /v1/runtimes`                              | Configured profiles and control availability.                                                                                  |
 | `POST /v1/runtimes/inspect`                     | Check `{ runtimeId }` without running an Agent.                                                                                |
-| `POST /v1/runs`                                 | Submit `{ sessionId, runtimeId, instructions?, input, attachments?, context?, tools?, mode?, timeoutMs? }`; returns `202` with a run record. |
+| `POST /v1/runs`                                 | Submit `{ sessionId, runtimeId, instructions?, input, attachments?, context?, tools?, settings?, mode?, timeoutMs? }`; returns `202` with a run record. |
+| `POST /v1/runtimes/discover` | Explicit native handshake for `{runtimeId}`; static fallback is labelled. |
+| `POST /v1/native-sessions` | `{runtimeId,action:"list"|"bindings"|"history"|"fork"|"delete",sessionId?,targetSessionId?,entryId?,limit?,cursor?}`. Native state is distinct from Host records. |
 | `GET /v1/sessions`                              | Session configurations.                                                                                                        |
 | `GET /v1/runs?sessionId=...`                    | Run records, newest first.                                                                                                     |
 | `GET /v1/runs/:id`                              | Status and independently persisted final answer.                                                                               |
@@ -175,7 +177,7 @@ Every operation requires `Authorization: Bearer <token>` and JSON bodies for POS
 | `GET /v1/sessions/:id/files?list=true&path=...` | List one directory, when enabled.                                                                                              |
 | `POST /v1/sessions/:id/files`                   | Write `{ path, content, encoding?: "utf8" | "base64", expectedRevision? }`, when enabled.                                                                    |
 
-`session.compact()` submits `mode: 'compact'` through the same task machinery. HTTP compaction is implemented for Codex, Pi, OpenCode, Kimi, Hermes and OpenClaw; Hermes requires a live opened session in this service process. OpenCode/Kimi require an existing native binding, reject custom reasons, and use their native summarize/compact operation. OpenCode additionally requires a command supporting `serve` against the same native profile. An acknowledgement alone does not establish success; missing or interrupted completion is reported as unknown. HTTP steering is implemented for Codex, Pi and Hermes. Unsupported controls fail explicitly. Optional controls have protocol coverage unless separately recorded as native-tested.
+`session.compact()` submits `mode: 'compact'` through the same task machinery for all seven Kernels. It uses the native binding, including Hermes continuation after restart. OpenCode/Kimi reject custom reasons and use their native summarize/compact operation; OpenClaw's compact API also has no reason parameter. OpenCode requires a command supporting `serve` against the same native profile. Acknowledgement alone is not completion. Pi may return a confirmed native no-op. Native uncertainty remains explicit. HTTP steering is implemented for Codex, Claude, Pi, Hermes and OpenClaw; OpenClaw preserves native interrupt-and-replace semantics. Unsupported controls fail explicitly. See [controls](common-api.md#controls) and [native verification](native-verification.md).
 
 Workspace file access is opt-in via `workspaceFiles: true`. Paths stay under the selected profile's workspace; symlinks are rejected. `expectedRevision: null` requires a new file; a prior revision prevents overwriting a change already observed by this process. This is an optimistic check, not a transaction with unrelated filesystem writers or an OS sandbox for native tools. The client exposes `readFile`, `writeFile`, `readBinaryFile`, `writeBinaryFile`, and `listFiles`. Text files are limited to 1 MB; binary files to 30 MiB. Binary content is canonical base64 and revisions hash the decoded bytes.
 
@@ -199,11 +201,11 @@ Custom runtimes must explicitly enable attachment delivery through `inputs.attac
 
 | Runtime | Image input | Other attachments |
 | --- | --- | --- |
-| Codex | Native image input items | Workspace file paths |
-| Claude | Native SDK image blocks (PNG/JPEG/GIF/WebP) | Workspace file paths |
+| Codex | Native image input items | Native audio input items; other files keep workspace paths |
+| Claude | Native SDK image blocks (PNG/JPEG/GIF/WebP) | Native PDF document blocks; other files keep workspace paths |
 | Pi 1.1 | Native image content | Workspace file paths |
-| OpenCode / Kimi ACP | Image blocks, subject to negotiated capability | Workspace file paths |
-| Hermes | Workspace file paths | Workspace file paths |
+| OpenCode / Kimi ACP | Image blocks, subject to negotiated capability | Negotiated audio and embedded resource blocks; original files also remain in the workspace |
+| Hermes | Native `image.attach_bytes` | Native `pdf.attach` and `file.attach`, plus workspace files |
 | OpenClaw | Native Gateway attachment payload | Workspace file paths and Gateway payload |
 
 `runtimes` / `runtimes/inspect` include `inputs.attachments` and `inputs.images` (`native`, `negotiated`, or `workspace`). This describes the adapter path, not the selected model's vision, audio, video or speech capabilities. Those remain native runtime/model/tool capabilities. Unsupported image formats or negotiated capabilities fail explicitly. Product `inputImage` results retain image content through Codex, Claude, Pi and the MCP bridges; inline `data:image/...;base64,...` avoids an additional fetch. Pi requires an inline image, since its native tool results do not accept remote image URLs.
@@ -222,3 +224,6 @@ AGENT_HOST_HTTP_NATIVE=1 npm run test:package
 Tests distinguish deterministic Agent/provider fixtures from native model-backed probes. The HTTP fixture matrix covers all seven existing adapters, approve/reject and native binding continuation across Host restart. Additional tests cover native interaction response shapes, observation disconnects, deadlines, duplicate results, authentication, file revisions and hard-process-crash recovery. The package test installs the archive in an independent consumer, starts its CLI and exercises the copied product example. Existing embedded consumer tests remain required.
 
 Products own their domain models, workflows, knowledge management, accounts and application distribution. These are not runtime dependencies of the service. Skills and MCP integrations already configured in a Kernel remain native capabilities; product extension administration is outside this HTTP contract.
+
+
+Native session management, selectable settings, trusted hooks and receipt-based controls are documented in [common API](common-api.md). `allowedSettings` is configured by the owner, included in the runtime description and checked before side effects. Native session deletion retains a Host tombstone; it never silently turns continuation into a fresh conversation. The [native verification matrix](native-verification.md) records the separate model-backed HTTP results.

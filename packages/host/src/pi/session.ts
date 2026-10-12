@@ -1,3 +1,6 @@
+import { SessionManager, sessionPage } from "../sessions.js";
+import { projectProgress } from "../progress.js";
+import { routeInteraction, type InteractionHandler } from "../interactions.js";
 import { inlineImage } from "../image-content.js";
 import { createHash, randomUUID } from "node:crypto";
 import { join } from "node:path";
@@ -61,6 +64,11 @@ export interface PiAgentOptions {
   env?: Parameters<typeof Harness.open>[1]["env"];
 }
 export interface PiRunRequest {
+  onInteraction?: InteractionHandler;
+  onRequest?(
+    request: { method: string; params?: JsonValue },
+    context: InteractionContext,
+  ): Promise<JsonValue | undefined>;
   sessionId: string;
   runId?: string;
   cwd: string;
@@ -96,6 +104,76 @@ export class PiAgent {
   private readonly active = new Map<string, AbortController>();
   private retired = false;
   private closing?: Promise<void>;
+  get sessions(): SessionManager {
+    const ctx = (signal?: AbortSignal) =>
+      signal ? withAbortSignal(signal, background) : background;
+    return (this.sessionManager ??= new SessionManager(
+      this.bindings,
+      (id) => this.active.has(id),
+      {
+        list: async (o) => {
+          const h = await this.open();
+          const page = await h.commit(
+            (tx) =>
+              tx.scanConversations(
+                { order: "descending" },
+                o.limit ?? 100,
+                o.cursor ? JSON.parse(o.cursor) : undefined,
+              ),
+            ctx(o.signal),
+          );
+          return sessionPage(
+            json(page.items),
+            undefined,
+            page.next ? JSON.stringify(page.next) : undefined,
+          );
+        },
+        history: async (id, o) => {
+          const c = await (
+            await this.open()
+          ).conversation(parseConversationId(id), ctx(o.signal));
+          if (!c) throw new Error("native_session_not_found");
+          const page = await c.entries(
+            { order: "ascending" },
+            o.limit ?? 100,
+            o.cursor ? JSON.parse(o.cursor) : undefined,
+            ctx(o.signal),
+          );
+          return sessionPage(
+            json(page.items),
+            undefined,
+            page.next ? JSON.stringify(page.next) : undefined,
+          );
+        },
+        fork: async (id, o) => {
+          const c = await (
+            await this.open()
+          ).conversation(parseConversationId(id), ctx(o.signal));
+          if (!c) throw new Error("native_session_not_found");
+          const entries = await c.entries(
+            { order: "descending" },
+            1,
+            undefined,
+            ctx(o.signal),
+          );
+          const at = o.entryId
+            ? (Number(o.entryId) as Parameters<Conversation["fork"]>[0])
+            : entries.items[0]?.id;
+          if (!at) throw new Error("empty_session_cannot_fork");
+          return String(
+            (
+              await c.fork(
+                at,
+                { ownership: { kind: "ownerless" } },
+                ctx(o.signal),
+              )
+            ).id,
+          );
+        },
+      },
+    ));
+  }
+  private sessionManager?: SessionManager;
   constructor(private readonly options: PiAgentOptions = {}) {
     this.bindings =
       options.bindings ??
@@ -186,29 +264,68 @@ export class PiAgent {
   async deleteSession(_id: string): Promise<never> {
     throw new Error("pi_durable_native_delete_unsupported");
   }
-  async compact(sessionId: string, reason?: string) {
-    const conversation = await this.conversation(sessionId);
-    if (!conversation)
-      return { ok: false, compacted: false, error: "session_not_found" };
-    const harness = await this.open();
-    const id = await conversation.compact(reason, background);
-    const task = await harness.waitForTask(id, background);
-    const outcome = task.state.outcome;
-    if (outcome.status !== "completed")
+  async compact(sessionId: string, reason?: string, signal?: AbortSignal) {
+    this.sessions.assertIdle(sessionId);
+    const controller = new AbortController(),
+      waitController = new AbortController();
+    const combined = signal
+      ? AbortSignal.any([signal, controller.signal])
+      : controller.signal;
+    this.active.set(sessionId, controller);
+    let stop: (() => void) | undefined,
+      timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      combined.throwIfAborted();
+      const conversation = await this.conversation(sessionId);
+      if (!conversation)
+        return { ok: false, compacted: false, error: "session_not_found" };
+      const harness = await this.open();
+      const id = await conversation.compact(reason, background);
+      stop = () => {
+        timer ??= setTimeout(
+          () =>
+            waitController.abort(new Error("pi_compaction_cancel_unsettled")),
+          this.options.abortSettleTimeoutMs ?? 15_000,
+        );
+        void harness
+          .abortTask(id, background)
+          .catch((error) => waitController.abort(error));
+      };
+      combined.addEventListener("abort", stop, { once: true });
+      if (combined.aborted) stop();
+      const context = withAbortSignal(waitController.signal, background);
+      const task = await harness.waitForTask(id, context);
+      const outcome = task.state.outcome;
+      if (outcome.status !== "completed")
+        return {
+          ok: false,
+          compacted: false,
+          cancelled: outcome.status === "aborted",
+          error: `compaction_${outcome.status}`,
+        };
+      if (outcome.result.entryId) return { ok: true, compacted: true };
+      // Native completed {} is a confirmed no-op, not a missing receipt.
+      if (!outcome.result.submissionId) return { ok: true, compacted: false };
+      const submission = await harness.submission(
+        outcome.result.submissionId,
+        context,
+      );
+      const receipt = await submission?.wait(context);
+      return receipt?.status === "done"
+        ? { ok: true, compacted: true }
+        : { ok: false, compacted: false, error: "compaction_not_placed" };
+    } catch (error) {
       return {
         ok: false,
         compacted: false,
-        error: `compaction_${outcome.status}`,
+        error: error instanceof Error ? error.message : String(error),
+        outcomeUnknown: true,
       };
-    if (!outcome.result.submissionId) return { ok: true, compacted: false };
-    const submission = await harness.submission(
-      outcome.result.submissionId,
-      background,
-    );
-    const receipt = await submission?.wait(background);
-    return receipt?.status === "done"
-      ? { ok: true, compacted: true }
-      : { ok: false, compacted: false, error: "compaction_not_placed" };
+    } finally {
+      if (stop) combined.removeEventListener("abort", stop);
+      if (timer) clearTimeout(timer);
+      this.active.delete(sessionId);
+    }
   }
   async steer(sessionId: string, input: string) {
     const conversation = await this.conversation(sessionId);
@@ -251,7 +368,7 @@ export class PiAgent {
       queue.close(),
     );
     try {
-      for await (const event of queue) yield event;
+      for await (const event of queue) yield* projectProgress(event);
     } finally {
       controller.abort();
       request.signal?.removeEventListener("abort", abort);
@@ -281,6 +398,7 @@ export class PiAgent {
     const waitController = new AbortController();
     queue.push({ type: "turn.started", runId });
     try {
+      this.sessionManager?.assertIdle(request.sessionId);
       if (this.active.has(request.sessionId)) throw new Error("session_busy");
       if (this.retired || this.closing) throw new Error("pi_producer_retiring");
       this.active.set(request.sessionId, controller);
@@ -387,14 +505,31 @@ export class PiAgent {
                     controller.signal,
                   ])
                 : controller.signal;
-              return await abortable(
-                () =>
-                  request.onBeforeTool?.(
-                    { name: call.name, arguments: json(call.arguments) },
-                    { ...interaction, signal },
-                  ),
-                signal,
-              );
+              return await abortable(async () => {
+                const policy = await request.onBeforeTool?.(
+                  { name: call.name, arguments: json(call.arguments) },
+                  { ...interaction, signal },
+                );
+                if (
+                  policy?.block ||
+                  (!request.onInteraction && !request.onRequest)
+                )
+                  return policy;
+                const answer = await routeInteraction(
+                  request,
+                  {
+                    method: "pi/toolApproval",
+                    params: { name: call.name, input: json(call.arguments) },
+                  },
+                  { ...interaction, signal },
+                );
+                return answer &&
+                  typeof answer === "object" &&
+                  !Array.isArray(answer) &&
+                  typeof answer.block === "string"
+                  ? { block: answer.block }
+                  : undefined;
+              }, signal);
             },
           }),
           hook(GenerationTask, {

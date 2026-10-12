@@ -14,7 +14,6 @@ import { AgentHostClient } from "../dist/service/client.js";
 const command = resolve("test/fixtures/acp-control-server.mjs");
 async function setup(t, kernel, receipt = "confirmed") {
   const root = await mkdtemp(join(tmpdir(), "agent-host-compact-"));
-  t.after(() => rm(root, { recursive: true, force: true }));
   const log = join(root, "native.jsonl");
   const options = {
     command,
@@ -50,7 +49,15 @@ for (const kernel of ["opencode", "kimi"]) {
         token: "compaction-owner-token",
       });
     };
-    t.after(() => host?.close());
+    t.after(async () => {
+      await host?.close();
+      await rm(root, {
+        recursive: true,
+        force: true,
+        maxRetries: 10,
+        retryDelay: 100,
+      });
+    });
     const first = await launch();
     assert.equal((await first.inspect(kernel)).controls.compact, true);
     assert.equal(
@@ -119,7 +126,15 @@ for (const kernel of ["opencode", "kimi"]) {
         bindings: new FileBindingStore(join(root, "bindings")),
       },
     });
-    t.after(() => agent.close());
+    t.after(async () => {
+      await agent.close();
+      await rm(root, {
+        recursive: true,
+        force: true,
+        maxRetries: 10,
+        retryDelay: 100,
+      });
+    });
     const request = {
       sessionId: "product",
       cwd: root,
@@ -157,7 +172,15 @@ for (const kernel of ["opencode", "kimi"]) {
   test(`${kernel} interrupted compaction settles with an unknown native outcome`, async (t) => {
     const { root, options } = await setup(t, kernel, "hang");
     const agent = createAgent({ kernel, options });
-    t.after(() => agent.close());
+    t.after(async () => {
+      await agent.close();
+      await rm(root, {
+        recursive: true,
+        force: true,
+        maxRetries: 10,
+        retryDelay: 100,
+      });
+    });
     const request = {
       sessionId: "product",
       cwd: root,
@@ -178,3 +201,32 @@ for (const kernel of ["opencode", "kimi"]) {
     assert.equal(result.outcomeUnknown, true);
   });
 }
+
+test("Kimi accepts confirmed native compaction even when the summary grows", async (t) => {
+  const { root, options } = await setup(t, "kimi", "larger");
+  const agent = createAgent({ kernel: "kimi", options });
+  t.after(async () => {
+    await agent.close();
+    await rm(root, {
+      recursive: true,
+      force: true,
+      maxRetries: 10,
+      retryDelay: 100,
+    });
+  });
+  const request = {
+    sessionId: "larger",
+    cwd: root,
+    instructions: "",
+    input: "hello",
+  };
+  await Array.fromAsync(agent.run(request));
+  assert.equal(
+    outcome(
+      await Array.fromAsync(
+        agent.run({ ...request, input: "", mode: "compact" }),
+      ),
+    ).status,
+    "completed",
+  );
+});

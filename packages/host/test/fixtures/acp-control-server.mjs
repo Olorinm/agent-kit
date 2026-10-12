@@ -12,6 +12,15 @@ function record(method, params) {
 const behavior = process.env.ACP_CONTROL_RECEIPT ?? "confirmed";
 if (process.argv.includes("serve")) {
   const server = createServer(async (request, response) => {
+    const expected =
+      "Basic " +
+      Buffer.from(
+        `${process.env.OPENCODE_SERVER_USERNAME}:${process.env.OPENCODE_SERVER_PASSWORD}`,
+      ).toString("base64");
+    if (request.headers.authorization !== expected) {
+      response.writeHead(401).end();
+      return;
+    }
     if (request.url === "/config/providers") {
       response.end(JSON.stringify({ default: { fixture: "model" } }));
       return;
@@ -71,7 +80,7 @@ if (process.argv.includes("serve")) {
               () =>
                 update(
                   params.sessionId,
-                  "Compaction completed. Tokens before: 1,000 Tokens after: 200",
+                  `Compaction completed. Tokens before: 1,000 Tokens after: ${behavior === "larger" ? "1,200" : "200"}`,
                 ),
               80,
             );

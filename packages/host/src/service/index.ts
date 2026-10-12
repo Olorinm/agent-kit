@@ -14,3 +14,6 @@ export type {
   EventPage,
   RuntimeDescription,
 } from "./protocol.js";
+
+export { diagnoseRuntime, type DiagnosticReport } from "./diagnostics.js";
+export { configSchema, createConfiguredRuntimes } from "./config.js";

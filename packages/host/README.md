@@ -6,7 +6,7 @@ Agent Host is an open-source integration layer that makes native coding Agents e
 
 **Seven native integrations, two deployment modes:** Codex, Claude Agent, Pi, OpenCode, Kimi Code, Hermes and OpenClaw. Embed the package in your backend or run a standalone HTTP service. Both modes use the same adapters.
 
-**Status: alpha.** Source is public and the package installs from a built archive; it is not yet published to npm. See the [tested versions and verification limits](docs/kernel-support.md).
+**Status: alpha.** Install the tested archive from [GitHub Releases](https://github.com/Olorinm/agent-host/releases); no source checkout is needed. It is not yet published to npm. See the [tested versions and verification limits](docs/kernel-support.md).
 
 The HTTP service preserves attachment bytes, supported native image inputs and image tool results. See [media input](docs/http-service.md#media-input) for runtime differences and limits.
 
@@ -19,11 +19,14 @@ The HTTP service preserves attachment bytes, supported native image inputs and i
 
 **Unify how Agents are used while keeping their capability differences visible.** Common operations belong in shared interfaces; native features remain accessible through explicit extensions. Support claims need implementation and verification evidence, and the integration must report any loss or limitation clearly.
 
-These principles guide the project; the alpha does not yet meet them everywhere. The [implementation gap review](docs/capability-gaps.md) records what is missing and the proposed order of work.
+The [gap checklist](docs/capability-gaps.md) records implementation, verification and remaining native/environment boundaries against these principles.
 
 ## What it provides
 
-- Create and continue native sessions, stream progress and cancel work.
+- Create and continue native sessions; list, read, fork and delete them where the Kernel supports it.
+- Handle approvals, questions and elicitation through common callbacks; receive text, reasoning, usage and native tool progress.
+- Select owner-approved native settings, steer, compact and cancel work.
+- Run personal tasks with `agent-host init`, `doctor` and `run`.
 - Connect product tools and route supported native approvals and structured questions to your UI.
 - Preserve native model loops, tools, transcripts and permission semantics.
 - Expose optional controls such as steering and compaction where supported by each Agent.
@@ -37,7 +40,7 @@ Your product owns its UI, accounts, business permissions, memory strategy and da
 - **Embedded:** install `@olorinm/agent-host` from its archive and call an adapter from your Node.js backend. Your product manages lifecycle and storage.
 - **Standalone service:** run `agent-host serve --config host.json` and connect through `@olorinm/agent-host/client`. The service persists tasks and results and routes product-tool and interaction callbacks.
 
-Start with the [installation and API guide](docs/api.md) or the [HTTP service guide](docs/http-service.md). Native installations and authentication are configured separately.
+Start with the [quickstart](docs/quickstart.md), [common API](docs/common-api.md) or [HTTP service guide](docs/http-service.md). Native installations and authentication are configured separately.
 
 See [capability discovery](docs/capabilities.md) to distinguish implemented operations, setup requirements, native negotiation and missing integrations before presenting features to users.
 

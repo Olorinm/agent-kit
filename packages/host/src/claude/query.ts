@@ -88,14 +88,21 @@ export class ClaudeQueryHost {
             } catch (error) {
               await switchToAsk(error);
             }
-            if (typeof request.prompt === "string")
-              input.push(userMessage(request.prompt, request.sessionId));
-            else
-              for await (const message of request.prompt) {
-                controller.signal.throwIfAborted();
-                input.push(message);
+            // An interactive input remains open while native output arrives.
+            void (async () => {
+              try {
+                if (typeof request.prompt === "string")
+                  input.push(userMessage(request.prompt, request.sessionId));
+                else
+                  for await (const message of request.prompt) {
+                    controller.signal.throwIfAborted();
+                    input.push(message);
+                  }
+                input.close();
+              } catch (error) {
+                input.fail(error);
               }
-            input.close();
+            })();
           }
           for await (const message of query) {
             if (

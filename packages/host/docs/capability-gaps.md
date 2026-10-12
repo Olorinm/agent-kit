@@ -1,93 +1,36 @@
-# Implementation gaps against the core principles
+# Gap checklist against the core principles
 
-Reviewed on **2026-10-12**, against `main` commit `270cff8d4e6d546d1387a6ac93ed001bf70a34f5` (`0.1.0-alpha.4`). This is a source review of the existing integrations, not an exhaustive audit of the latest upstream releases. No additional live model probes were run for this review. Existing evidence and tested versions are in the [support matrix](kernel-support.md).
+Reviewed **2026-10-12**, implemented in **0.1.0-alpha.6**, tracked by [issue #16](https://github.com/Olorinm/agent-host/issues/16). This closes the seven integration workstreams from the alpha.4/alpha.5 review. It does not claim that every Kernel has the same native functions or that every provider, media format and operating system has been certified.
 
-The [core principles](../README.md#core-principles) set two expectations: preserve native capabilities as fully as possible, and make them straightforward for products and people to use. The items below are gaps and proposed acceptance criteria, not claims that these features are already implemented.
+The principle remains: **preserve native capabilities, make their use consistent, and keep differences visible**. Native storage, execution, permissions and model loops are not reimplemented by Host.
 
-## Follow-up implementation
+| Original gap | Implementation | Verification / boundary |
+| --- | --- | --- |
+| 1. Media beyond byte transport | Native images for all seven paths; Codex audio; Claude PDF blocks; Hermes image/PDF/file attachment APIs; negotiated ACP audio/resources; OpenClaw native media payloads. | Tests assert bytes at the native boundary. Live image probes and explicit media/provider limits are recorded in [native verification](native-verification.md). Audio/video/document understanding remains provider/native-tool dependent. |
+| 2. Capability discovery | Shared descriptions plus explicit `/runtimes/discover`, real ACP negotiation, Codex models/account readiness, Claude initialization, Hermes capabilities, OpenClaw version/methods. | Static descriptions, native handshakes and actual model execution are separate evidence. Pi has no read-only server handshake and is labelled accordingly. |
+| 3. Too much product-side translation | Typed `onInteraction` covers approvals/scopes, permission grants, questions, forms and URLs; common reasoning/usage/native-tool events; raw native payloads and replies retained. Pi policy and OpenClaw exec approvals are wired. | Common helper, adapter, HTTP and installed-consumer tests cover translation, unknown requests, cancellation and session correlation. Raw escape hatches remain for native forms with no faithful common representation. |
+| 4. Controls/settings differ between access modes | Claude streaming steering and receipt-based compaction; OpenClaw native steering/replacement-run tracking; all seven compaction routes; owner-selected settings; typed owner hooks including Pi extensions and ACP config. | Actual native controls are tested separately from transport. Pi native no-op compaction succeeds explicitly; Kimi completion does not require token reduction. HTTP callers cannot supply executable code, credentials or permission policies. |
+| 5. Native session management missing | Common native list/history/fork/delete and separate Host binding list in adapters and HTTP. Native forks preserve storage identity; deletes preserve Host tombstones. Hermes live/durable IDs and compaction rotation are tracked. | Fixtures, actual SDK/Pi storage operations and live native session probes. Pi delete stays explicitly unsupported by its pinned API; OpenClaw fork requires a native entry ID. |
+| 6. First use too manual | GitHub release archive, source-free [quickstart](quickstart.md), `init`, `doctor`, `run`, interactive terminal handlers and restartable personal sessions. | Independent archive installation, CLI first task and resume tests. Local checks, handshake and opt-in model probe are separate. Native installations/login and OpenClaw Gateway/plugin setup remain explicit prerequisites. |
+| 7. Evidence too narrow | Versioned [evidence matrix](native-verification.md), reusable opt-in probe runner, more failure-path tests, installed consumer tests and Linux/macOS/Windows CI. | CI is deterministic. Local live probes are macOS arm64; other platforms and provider/media combinations are not implied by passing fixtures. |
 
-[Issue #13](https://github.com/Olorinm/agent-host/issues/13) adds a [shared capability API](capabilities.md), the typed `createAgent()` factory, and OpenCode/Kimi compaction through the ordinary embedded/HTTP turn lifecycle. The installed editor now uses the factory for all seven Kernels. Capability reports preserve native negotiation and setup conditions and keep unknown custom runtime support explicit. These changes have protocol/installed-consumer coverage, not additional live-model certification.
+## Native and environment limits that remain visible
 
-This addresses the common entry point, initial capability discovery and the ACP HTTP compaction gap below. Interaction helpers, other settings/session operations and onboarding work remain open. The sections below describe the remaining gaps after these additions.
+- **Pi durable 1.1 has no native delete operation.** Host refuses deletion and keeps the binding. It also has no built-in question/elicitation RPC; product tools and native hooks remain available.
+- **OpenCode and Kimi's ACP interfaces do not expose a dedicated active-turn steering operation.** Host does not disguise a new prompt or cancellation/replay as native steering. OpenClaw does have native steering, whose interrupt-and-replace semantics are preserved.
+- **Not every Kernel exposes generic forms or URL elicitation.** Hermes's native clarify/approval and OpenClaw's exec approval are supported; unsupported elicitation remains distinct from an unanswered or omitted Host callback.
+- **Media transport is not universal media understanding.** A configured OpenCode model must declare its modalities; Hermes may use native image/PDF analysis tools; OpenClaw uses its configured media pipeline. The concrete tested combinations are in the evidence matrix. No Host-owned transcription or video model loop is added.
+- **Codex audio requires an audio-capable native model.** Its model list exposes `inputModalities`; models without audio support omit that content in the native engine. Host passes the original native audio item and reports this configuration requirement.
+- **Native readiness is not a promise of account/model access.** `doctor --probe` is an explicit provider request; static checks never pretend to establish access.
+- **OpenClaw product-tool callbacks currently require a local Gateway.** Arbitrary remote sandbox networking, workspace placement and provider provisioning are environment integrations, outside the current callback bridge.
+- **Distribution is a GitHub release archive.** There is no npm-registry package yet. Installation no longer requires cloning/building source.
+- **Live certification remains bounded.** macOS arm64 is exercised locally; Linux/macOS/Windows CI verifies deterministic package contracts, not login or live model execution on all platforms. Optional form types and every native setting are not all model-backed certified.
 
-Alpha.5 also incorporates the media implementation from [issue #11](https://github.com/Olorinm/agent-host/issues/11): bounded attachment transfer and binary workspace access, native image inputs where supported, and inline tool-result images in native MCP/Pi content and public Pi events. Runtime descriptions expose media delivery separately from interpretation; undeclared attachment delivery and attachments on compaction are rejected before starting work. External image URLs remain resource links on MCP paths and are rejected by Pi; use inline data for guaranteed byte delivery. Media has protocol/installed-consumer coverage, not new live-model certification.
+These are documented native/environment or verification boundaries, not features silently replaced with weaker Host behavior. Additional native ports should be added when upstream provides an applicable interface and the same evidence standard can be met.
 
-## What is already in place
+## Implementation and evidence
 
-Seven adapters preserve native execution and conversation identity. Products can submit context and tools, observe progress, cancel work and continue a native conversation through embedded adapters or the HTTP service. Native notifications and several extension hooks remain accessible. Failures to resume, unconfirmed cancellation and uncertain outcomes are reported explicitly.
-
-This is a useful foundation. The remaining work is to preserve more information across each boundary and reduce the differences that every consuming product currently has to handle.
-
-## 1. Media transport and image bridges are implemented; native certification remains
-
-**Updated behavior:** HTTP turns accept bounded base64 attachments, including attachment-only input. The workspace file API supports binary reads/writes. Codex, Claude, Pi 1.1 and OpenClaw receive native image inputs; ACP negotiates its image capability, while Hermes receives workspace files. Native model/tool interpretation remains distinct from file delivery. [Issue #11](https://github.com/Olorinm/agent-host/issues/11) tracks this implementation.
-
-Inline product `inputImage` results retain native image content in Pi (including the explicit 0.85 compatibility adapter), Claude and the shared MCP bridge used by ACP, Hermes and OpenClaw. Remote URLs remain MCP resource links where applicable; Pi reports that it requires inline data instead of converting a URL to text. Model-backed vision, speech and video probes have not been added.
-
-**Evidence:** HTTP fixture tests verify actual media at the native interfaces, not just an HTTP acknowledgement. Independent archive-consumer tests verify image submission and binary read/write. Format and capability errors are explicit; limits and native differences are documented in [media input](http-service.md#media-input). Remaining work is native model-backed certification and any further media types supported by specific Kernels.
-
-Sources: [HTTP contracts](../src/service/protocol.ts), [workspace files](../src/service/files.ts), [runtime composition](../src/service/native-runtimes.ts), [Pi](../src/pi/session.ts), [Claude](../src/claude/session.ts), [shared tool bridge](../src/product-tool-bridge.ts), [HTTP tests](../test/service.test.mjs), [installed HTTP consumer](../scripts/test-http-package.mjs).
-
-## 2. Shared discovery exists; native negotiation and model verification remain separate
-
-**Updated behavior:** embedded and HTTP consumers share a capability schema covering inputs, tool results, interactions, session operations, controls and native extensions. Reports distinguish Host omissions, known native limits, conditional support and undeclared runtimes. ACP image/resume support remains conditional until the native handshake; provider/model interpretation and live verification still require separate evidence.
-
-**Acceptance:** products can discover supported operations, relevant configuration or environment requirements, and the reason an operation is unavailable before presenting it to a user. Distinguish a missing Host integration from a native limitation or a configuration problem. Record verification evidence separately: an unverified path is not automatically an unsupported path. Embedded and HTTP consumers should use the same descriptions.
-
-Evidence: [RuntimeDescription](../src/service/protocol.ts), [runtime inspection](../src/service/native-runtimes.ts), [ACP negotiation](../src/acp/session.ts).
-
-## 3. Shared usage still requires adapter-specific glue
-
-**Updated behavior:** the typed `createAgent()` factory selects all seven existing adapters, and the guide and installed editor use it. HTTP has a common client. Approvals and questions still retain raw native method names and response formats; the browser example handles some forms and declines or leaves others unanswered.
-
-Shared events cover lifecycle, text and tool events, but do not define common usage or reasoning event types. Further details remain in native notifications and require native-specific interpretation by the product.
-
-**Acceptance:** provide a small documented common entry point for routine embedded use, reusing existing composition where appropriate. Supply typed helpers for common progress events, approvals and questions, including choices, scope and cancellation. Preserve native event/request details and an explicit extension path for forms that cannot be represented faithfully. A product should not need its own seven-Kernel constructor switch or protocol translator for basic use.
-
-OpenClaw native command approvals and questions are not currently exposed as common callbacks. Pi uses an embedded `onBeforeTool` hook instead of the common `onRequest` path; the standard HTTP runtime does not wire that hook. These require explicit capability reporting and adapter-specific implementation review, rather than assuming every Kernel has the same permission model.
-
-Evidence: [shared types](../src/agent.ts), [embedded example](../examples/file-editor/editor.mjs), [runtime composition](../src/service/native-runtimes.ts), [HTTP client](../src/service/client.ts), [browser interaction handlers](../examples/http-editor/app.js), [Pi](../src/pi/session.ts), [OpenClaw](../src/openclaw/session.ts).
-
-## 4. HTTP exposes fewer controls and native settings
-
-**Updated behavior:** HTTP steering is wired for Codex, Pi and Hermes; compaction is wired for Codex, Pi, OpenCode, Kimi, Hermes and OpenClaw. ACP compaction uses the existing native binding, including after restart, and requires confirmed native receipts. Claude has a lower-level native Query entry point, but no dedicated steering or compaction operation in the common adapter/service.
-
-Native extension access also varies. Codex has `thread`/`turn` settings, Claude has native SDK options, Pi has per-run extensions and hooks, and ACP has per-run configuration. Some options are available in programmatic service profiles, but the CLI configuration and common HTTP request expose only a subset. For example, Pi's per-run extensions and thinking level are not forwarded by the standard service runtime.
-
-**Acceptance:** carry already implemented controls into both deployment modes when their lifecycle requirements can be satisfied. Provide explicit, typed native settings under a consistent configuration structure, with runtime capabilities describing what is allowed. Review native APIs before promising additional controls. Execution credentials, commands and trusted extension code remain service-owner configuration; callers may select only options the owner exposes.
-
-Evidence: [service runtime composition](../src/service/native-runtimes.ts), [CLI profiles](../src/service/cli.ts), [ACP compaction helpers](../src/acp/compaction.ts), [Claude Query access](../src/claude/query.ts), [Pi run options](../src/pi/session.ts).
-
-## 5. Native session management is only partly exposed
-
-**Current behavior:** continuing a bound native conversation works. HTTP lists Host session configurations and run records; it has no shared native transcript, fork or delete API. Pi exposes an embedded fork operation, and its `listSessions()` lists Host bindings. Its delete method explicitly fails because the pinned native API has no supported delete operation.
-
-**Acceptance:** expose supported native history and session operations through a common, capability-aware interface. Keep Host records, native transcripts and native deletion distinct. A fork must use the native operation; deleting a Host binding must not be presented as deleting a native conversation. Differences in what Kernels expose remain visible.
-
-Evidence: [HTTP routes](../src/service/server.ts), [binding store](../src/agent.ts), [Pi session operations](../src/pi/session.ts), [documented native limits](kernel-support.md#upgrade-boundaries).
-
-## 6. First use still requires substantial manual setup
-
-**Current behavior:** installation starts from a source checkout and a built archive; the package is not published to npm. Users configure native installation, authentication and runtime profiles separately. `inspect()` checks the workspace, executable and basic model selection, but not login, model access or successful native execution. The packaged CLI starts the service; direct interactive use is demonstrated by an example editor rather than a general task CLI.
-
-**Acceptance:** provide a documented short path from installation to a first task and actionable setup diagnostics. Separate local configuration checks from explicit, opt-in checks that execute a native Agent or contact a provider. Offer a simple personal-use entry point if the existing native CLI and examples do not cover the workflow. Preserve users' native authentication and configuration instead of replacing them.
-
-OpenClaw product tools additionally require a local Gateway and the bundled plugin. The existing callback bridge does not provide remote sandbox connectivity. Surface this requirement during setup; broader remote execution needs its own environment implementation and verification.
-
-Evidence: [installation guide](api.md#install-and-run-the-example), [CLI](../src/service/cli.ts), [inspection](../src/service/native-runtimes.ts), [OpenClaw tool setup](api.md#openclaw-product-tools).
-
-## 7. Verification does not yet cover the whole promise
-
-**Current evidence:** all seven Kernels have live embedded editor probes for reject, approve/save and native continuation. All seven HTTP profiles have deterministic fixture coverage; only Codex has the recorded full live HTTP consumer probe. Many optional controls and interaction forms have protocol coverage only. Native probes ran on macOS arm64; Linux CI covers deterministic tests, and Windows native execution is not certified.
-
-**Acceptance:** maintain a versioned capability/evidence matrix across embedded and HTTP access. For each feature, distinguish protocol fixtures, independent installed-consumer tests and live native probes. Add native coverage for newly exposed media, interactions and controls, including failure and cancellation. Broaden platform claims only when the corresponding execution paths have been verified.
-
-Evidence: [support matrix](kernel-support.md#what-was-exercised), [HTTP verification](http-service.md#example-and-verification), [CI](../.github/workflows/ci.yml).
-
-## Proposed order
-
-1. Extend native media verification beyond the implemented attachment, image and discovery paths.
-2. Reduce routine integration work with interaction helpers, then carry remaining native settings and controls across embedded and HTTP access.
-3. Expand supported session operations and improve installation and diagnostics.
-
-Verification accompanies every step. These priorities do not add product accounts, billing, business permissions, long-term memory strategy or multi-tenant scheduling to Agent Host. Those remain the responsibilities defined in [scope](scope.md).
+- [Interactions](../src/interactions.ts), [progress](../src/progress.ts), [settings](../src/settings.ts), [native sessions](../src/sessions.ts).
+- [Runtime composition](../src/service/native-runtimes.ts), [HTTP operations](http-service.md), [common API](common-api.md).
+- [Gap regression tests](../test/gaps.test.mjs), [installed consumer](../scripts/test-gaps-package.mjs), [native probe runner](../scripts/probe-native-http.mjs).
+- [Kernel pins](kernel-support.md), [scope](scope.md), [CI](../.github/workflows/ci.yml).
