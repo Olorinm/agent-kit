@@ -1,6 +1,6 @@
 # Capability evidence — alpha.8
 
-Date: **2026-10-12**. Runtime: **macOS arm64, Node.js 24.18.0**. Kernel pins are unchanged from the [support matrix](kernel-support.md). The alpha.7 follow-up is tracked by [issue #18](https://github.com/Olorinm/agent-host/issues/18). The alpha.8 attachment/settings matrix is tracked by [issue #20](https://github.com/Olorinm/agent-host/issues/20). No Kernel version changed.
+Date: **2026-10-12**. Runtimes: **macOS arm64 / Node.js 24.18.0** and **Debian 12 Linux arm64 / Node.js 24.21.0**; platform scope is recorded per matrix. Kernel pins are unchanged from the [support matrix](kernel-support.md). The alpha.7 follow-up is tracked by [issue #18](https://github.com/Olorinm/agent-host/issues/18). The alpha.8 attachment/settings matrix is tracked by [issue #20](https://github.com/Olorinm/agent-host/issues/20). No Kernel version changed.
 
 ## Evidence levels
 
@@ -70,6 +70,22 @@ Three integration regressions were found and fixed:
 
 The initial OpenClaw thinking failures were a test-profile error: the configured model had been declared non-reasoning. Correcting that native model flag made all five applicable levels pass. No Host reasoning loop or native permission bypass was added.
 
+## Linux native follow-up — alpha.8
+
+**23 distinct model-backed HTTP cases passed on Debian 12 arm64**, using the installed archive in an isolated Linux container. The [reviewed Linux case list](evidence/alpha8-linux-live-matrix.json) is separate from macOS evidence and deterministic CI.
+
+| Kernel | Live Linux cases |
+| --- | --- |
+| Codex | Same-session continuation/recall, image tool result, two input images (3) |
+| Claude | Same-session continuation/recall, image tool result, two input images, PDF + image (4) |
+| Pi | Same-session continuation/recall, image tool result, two input images (3) |
+| OpenCode | Same-session continuation/recall, image tool result, two input images, TXT/JSON/CSV, PDF + image (7) |
+| Kimi | Same-session continuation/recall, image tool result, two input images, TXT/JSON/CSV (6) |
+
+Continuation checks preserve the native session ID and recover an exact random receipt on the next turn. This particular Linux matrix does not test process-restart recovery or repeat the macOS parameter matrix. Media checks use the same synthetic scenarios and assertions as macOS.
+
+The minimal Linux image initially lacked Git: all three Codex cases stopped at native `thread/start` with `workspace routing discovery failed`. Installing Git and CA certificates allowed all three to pass; this is a native environment prerequisite, not a Host adapter change. Hermes/OpenClaw native execution on Linux and native execution on Windows remain unverified. Three-platform CI covers deterministic contracts and independent archive consumption separately.
+
 ## Bounds of the evidence
 
 The alpha.8 matrix now includes live generic-file, ACP text-resource and image tool-result checks. Codex direct audio still lacks a capable model on the tested account. The actual pinned OpenCode/Kimi handshakes do not advertise audio input; negotiated ACP audio has contract coverage for a future/other capable server, not a missing live test for these pins. Media probes do not certify every format or provider.
@@ -105,7 +121,7 @@ OpenCode and Kimi's pinned **MCP clients** reject generic MCP form/URL elicitati
 - OpenClaw connections declare `exec-approvals` as well as approval scope. Without that delivery capability, Gateway rejected commands as headless before Host could receive the prompt.
 - OpenClaw approval choices now honor native `allowedDecisions` and `unavailableDecisions`; an unavailable permanent approval is not offered.
 
-Linux/macOS/Windows CI runs deterministic tests and independent archive installation. That is not native login/model certification on Linux or Windows. Pi's discovery response is a static description, not a native server handshake. A live marker probe is what establishes model access for its configured provider.
+Linux/macOS/Windows CI runs deterministic tests and independent archive installation. The separate Linux native matrix above covers five kernels; CI itself does not establish native login/model access, and Windows native execution remains unverified. Pi's discovery response is a static description, not a native server handshake. A live marker probe is what establishes model access for its configured provider.
 
 ## Repeat the opt-in probe
 

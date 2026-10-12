@@ -14,7 +14,9 @@ The archive is published on [GitHub Releases](https://github.com/Olorinm/agent-h
 
 ## Run a task yourself
 
-For an existing Codex installation:
+For an existing Codex installation, make sure Git is on `PATH`. Minimal Linux images also need CA certificates; without Git, the tested native Codex engine failed at thread creation with `workspace routing discovery failed`.
+
+Run:
 
 ```sh
 npx agent-host init --kernel codex --cwd . --config host.json
