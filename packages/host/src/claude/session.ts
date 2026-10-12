@@ -1,3 +1,4 @@
+import { mcpImage } from "../image-content.js";
 import { createHash, randomUUID } from "node:crypto";
 import { type Options } from "@anthropic-ai/claude-agent-sdk";
 import { AsyncEventQueue } from "../async-event-queue.js";
@@ -11,6 +12,7 @@ import {
 } from "../agent.js";
 import type { JsonObject, JsonValue } from "../types.js";
 import { ClaudeQueryHost, type ClaudeQueryFunction } from "./query.js";
+import { userMessage } from "./query.js";
 import { createClaudeMcpServer } from "./schema.js";
 
 export interface ClaudeRunRequest {
@@ -20,6 +22,7 @@ export interface ClaudeRunRequest {
   instructions: string;
   context?: string;
   input: string;
+  images?: Array<{ mediaType: string; data: string }>;
   tools?: ProductTool[];
   signal?: AbortSignal;
   model?: string;
@@ -166,11 +169,7 @@ export class ClaudeAgent {
                 content: result.contentItems.map((item) =>
                   item.type === "inputText"
                     ? { type: "text" as const, text: item.text }
-                    : {
-                        type: "resource_link" as const,
-                        uri: item.imageUrl,
-                        name: "image",
-                      },
+                    : mcpImage(item.imageUrl),
                 ),
               };
             },
@@ -290,10 +289,18 @@ export class ClaudeAgent {
       const prompt = [request.context, request.input]
         .filter(Boolean)
         .join("\n\n");
+      if (request.images?.some((image) => !["image/png", "image/jpeg", "image/gif", "image/webp"].includes(image.mediaType)))
+        throw new Error("claude_image_type_unsupported");
       started = true;
       for await (const message of this.host.stream({
         sessionId,
-        prompt,
+        prompt: request.images?.length ? (async function* () {
+          const message = userMessage(prompt, sessionId);
+          message.message.content = [{ type: "text", text: prompt }, ...request.images!.map((image) => ({
+            type: "image" as const, source: { type: "base64" as const, media_type: image.mediaType as "image/png" | "image/jpeg" | "image/gif" | "image/webp", data: image.data },
+          }))];
+          yield message;
+        })() : prompt,
         options,
         cancellationGraceMs: this.options.cancellationGraceMs,
       })) {

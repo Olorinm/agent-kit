@@ -3,6 +3,7 @@
 import type { ProductToolResult } from "../agent.js";
 import type { JsonValue } from "../types.js";
 import type {
+  RunAttachment,
   StartRunInput,
   RunRecord,
   SessionRecord,
@@ -11,6 +12,7 @@ import type {
   RuntimeDescription,
 } from "./protocol.js";
 export type {
+  RunAttachment,
   StartRunInput,
   RunRecord,
   SessionRecord,
@@ -118,8 +120,8 @@ export class AgentHostClient {
       ({ execute: _execute, ...definition }) => definition,
     );
     return {
-      run: (input: string, context?: StartRunInput["context"]) =>
-        this.start({ ...settings, tools: definitions, input, context }, tools),
+      run: (input: string, context?: StartRunInput["context"], attachments?: RunAttachment[]) =>
+        this.start({ ...settings, tools: definitions, input, context, ...(attachments ? { attachments } : {}) }, tools),
       compact: (reason = "") =>
         this.start(
           { ...settings, tools: definitions, input: reason, mode: "compact" },
@@ -215,6 +217,11 @@ export class AgentHostClient {
       ),
     );
   }
+  async readBinaryFile(sessionId: string, path: string): Promise<{ path: string; content: string; revision: string; encoding: "base64" }> {
+    const value = await this.request(`/sessions/${encodeURIComponent(sessionId)}/files?encoding=base64&path=${encodeURIComponent(path)}`);
+    if (value.encoding !== "base64") throw new Error("invalid_binary_file_response");
+    return { ...this.fileResponse(value), encoding: "base64" };
+  }
   async writeFile(
     sessionId: string,
     path: string,
@@ -228,6 +235,11 @@ export class AgentHostClient {
         expectedRevision,
       }),
     );
+  }
+  async writeBinaryFile(sessionId: string, path: string, content: string, expectedRevision?: string | null) {
+    const value = await this.request(`/sessions/${encodeURIComponent(sessionId)}/files`, { path, content, encoding: "base64", expectedRevision });
+    if (value.encoding !== "base64") throw new Error("invalid_binary_file_response");
+    return { ...this.fileResponse(value), encoding: "base64" as const };
   }
   async listFiles(
     sessionId: string,

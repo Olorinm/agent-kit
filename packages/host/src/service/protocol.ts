@@ -23,12 +23,19 @@ export const toolSchema = z
   })
   .strict();
 export type ToolDefinition = z.output<typeof toolSchema>;
+export const attachmentSchema = z.object({
+  name: z.string().min(1).max(255),
+  mediaType: z.string().min(1).max(100),
+  data: z.string().max(42_000_000).refine((data) => data.length % 4 === 0 && !/[^A-Za-z0-9+/=]/.test(data) && Buffer.from(data, "base64").toString("base64") === data, "invalid_base64"),
+}).strict();
+export type RunAttachment = z.infer<typeof attachmentSchema>;
 export const startRunSchema = z
   .object({
     sessionId: idSchema,
     runtimeId: idSchema,
     instructions: z.string().max(200_000).default(""),
     input: z.string().max(1_000_000),
+    attachments: z.array(attachmentSchema).max(30).default([]),
     context: z.union([z.string(), z.record(z.string(), z.json())]).optional(),
     tools: z.array(toolSchema).max(100).default([]),
     mode: z.enum(["turn", "compact"]).default("turn"),
@@ -41,7 +48,9 @@ export const startRunSchema = z
         .size !== value.tools.length
     )
       ctx.addIssue({ code: "custom", message: "duplicate_tool_name" });
-    if (value.mode === "turn" && !value.input.trim())
+    if (value.attachments.reduce((size, item) => size + Buffer.byteLength(item.data, "base64"), 0) > 30 * 1024 * 1024)
+      ctx.addIssue({ code: "custom", message: "attachments_too_large" });
+    if (value.mode === "turn" && !value.input.trim() && !value.attachments.length)
       ctx.addIssue({ code: "custom", message: "input_required" });
   });
 export type StartRunInput = z.input<typeof startRunSchema>;
@@ -126,6 +135,7 @@ export interface RuntimeDescription {
   cwd: string;
   model?: string;
   controls: { steer: boolean; compact: boolean };
+  inputs?: { attachments: boolean; images: "native" | "negotiated" | "workspace" };
   available: boolean;
   reason?: string;
 }

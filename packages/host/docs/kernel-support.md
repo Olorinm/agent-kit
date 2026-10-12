@@ -32,3 +32,7 @@ The standalone HTTP service adds a separate consumer path. Its seven-adapter mat
 - **Codex uses native receipts and native controls.** Compaction may return an empty acknowledgement; completion comes from its correlated events. Early native requests are correlated before the start acknowledgement arrives.
 
 The package does not replace global CLIs, migrate personal login state or provision remote sandboxes. Native installations and authentication remain explicit environment responsibilities. See [API](api.md) and [Rivet backend decision](rivet.md).
+
+## Media through the HTTP service
+
+The service preserves attachment bytes and workspace paths for all configured runtimes. Codex, Claude, Pi 1.1 and OpenClaw have native image input paths; ACP negotiates image input, and Hermes uses workspace files. The HTTP fixture suite checks these paths and native image tool results; the independent installed-package consumer checks image submission and binary file read/write. These are protocol/SDK fixtures, not model-backed vision or speech certification. See [media input](http-service.md#media-input) for limits and model boundaries.

@@ -57,7 +57,7 @@ createInterface({ input: process.stdin }).on("line", async (line) => {
     return reply(m.id, {});
   const threadId = p.threadId;
   const turnId = `turn-${++id}`;
-  const fullInput = p.input?.map((i) => i.text ?? "").join("\n") ?? "compact";
+  const fullInput = p.input?.some((item) => item.type === "image") ? JSON.stringify(p.input) : p.input?.map((i) => i.text ?? "").join("\n") ?? "compact";
   const input = p.input?.at(-1)?.text ?? "compact";
   active.set(threadId, turnId);
   if (input === "stale-tool") {

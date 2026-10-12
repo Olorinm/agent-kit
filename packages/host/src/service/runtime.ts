@@ -6,6 +6,7 @@ export interface RuntimeTurn {
   sessionId: string;
   runId: string;
   input: string;
+  attachments?: Array<{ name: string; mediaType: string; data: string; path: string }>;
   instructions: string;
   context?: string;
   tools: ProductTool[];
@@ -28,6 +29,7 @@ export interface ServiceRuntime {
   steer?(sessionId: string, input: string): Promise<unknown>;
   supportsCompaction?: boolean;
   maxConcurrentRuns?: number;
+  inputs?: RuntimeDescription["inputs"];
   inspect?(): Promise<Pick<RuntimeDescription, "available" | "reason">>;
   close(): void | Promise<void>;
 }

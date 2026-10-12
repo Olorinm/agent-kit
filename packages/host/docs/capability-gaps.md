@@ -10,19 +10,19 @@ Seven adapters preserve native execution and conversation identity. Products can
 
 This is a useful foundation. The remaining work is to preserve more information across each boundary and reduce the differences that every consuming product currently has to handle.
 
-## 1. Media does not survive every path
+## 1. Media transport and image bridges are implemented; native certification remains
 
-**Current behavior:** HTTP run input is a string, and the optional workspace file API reads and writes UTF-8 text. Embedded Codex and Pi accept image inputs; ACP accepts richer input blocks subject to native capability negotiation. These paths are unavailable through the current HTTP input contract. Inbound media is tracked in [issue #11](https://github.com/Olorinm/agent-host/issues/11).
+**Updated behavior:** HTTP turns accept bounded base64 attachments, including attachment-only input. The workspace file API supports binary reads/writes. Codex, Claude, Pi 1.1 and OpenClaw receive native image inputs; ACP negotiates its image capability, while Hermes receives workspace files. Native model/tool interpretation remains distinct from file delivery. [Issue #11](https://github.com/Olorinm/agent-host/issues/11) tracks this implementation.
 
-There is also an output gap: `ProductToolResult` accepts `inputImage`, but Pi converts it to text containing the image URL. Claude and the shared MCP bridge used by ACP, Hermes and OpenClaw convert it to a resource link. A link does not establish that image content was delivered to the model. The public result type alone therefore cannot promise equivalent image handling across adapters.
+Inline product `inputImage` results retain native image content in Pi (including the explicit 0.85 compatibility adapter), Claude and the shared MCP bridge used by ACP, Hermes and OpenClaw. Remote URLs remain MCP resource links where applicable; Pi reports that it requires inline data instead of converting a URL to text. Model-backed vision, speech and video probes have not been added.
 
-**Acceptance:** preserve attachments through transport and deliver native image content where supported. Make file delivery and model interpretation separate capabilities. Cover both user input and product-tool results. Return an explicit limitation for unsupported content; any conversion to text or a link must be an intentional, documented choice. Verify media content at the native boundary, not only the HTTP response.
+**Evidence:** HTTP fixture tests verify actual media at the native interfaces, not just an HTTP acknowledgement. Independent archive-consumer tests verify image submission and binary read/write. Format and capability errors are explicit; limits and native differences are documented in [media input](http-service.md#media-input). Remaining work is native model-backed certification and any further media types supported by specific Kernels.
 
-Evidence: [HTTP contracts](../src/service/protocol.ts), [workspace files](../src/service/files.ts), [Codex](../src/codex/session.ts), [Pi](../src/pi/session.ts), [ACP](../src/acp/session.ts), [Claude](../src/claude/session.ts), [shared tool bridge](../src/product-tool-bridge.ts).
+Sources: [HTTP contracts](../src/service/protocol.ts), [workspace files](../src/service/files.ts), [runtime composition](../src/service/native-runtimes.ts), [Pi](../src/pi/session.ts), [Claude](../src/claude/session.ts), [shared tool bridge](../src/product-tool-bridge.ts), [HTTP tests](../test/service.test.mjs), [installed HTTP consumer](../scripts/test-http-package.mjs).
 
 ## 2. Products cannot query a complete capability description
 
-**Current behavior:** HTTP runtime descriptions advertise availability plus two control flags, `steer` and `compact`. They do not describe supported input/output content, native interactions, session operations or extension settings. ACP performs useful native negotiation internally, but that information does not become a complete shared capability description.
+**Current behavior:** HTTP runtime descriptions advertise availability, `steer` / `compact` and an attachment/image input descriptor. They still do not provide a complete description of native model interpretation, output content, interactions, session operations or extension settings. ACP performs useful native negotiation internally, but that information does not become a complete shared capability description.
 
 **Acceptance:** products can discover supported operations, relevant configuration or environment requirements, and the reason an operation is unavailable before presenting it to a user. Distinguish a missing Host integration from a native limitation or a configuration problem. Record verification evidence separately: an unverified path is not automatically an unsupported path. Embedded and HTTP consumers should use the same descriptions.
 
@@ -78,7 +78,7 @@ Evidence: [support matrix](kernel-support.md#what-was-exercised), [HTTP verifica
 
 ## Proposed order
 
-1. Preserve media and describe capabilities clearly: address HTTP input and tool-result image handling together, with explicit unsupported cases.
+1. Extend capability descriptions and native media verification beyond the implemented attachment and image transport paths.
 2. Reduce routine integration work: common entry points and interaction helpers, then carry existing native controls/settings across embedded and HTTP access.
 3. Expand supported session operations and improve installation and diagnostics.
 

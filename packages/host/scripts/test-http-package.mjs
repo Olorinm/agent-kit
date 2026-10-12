@@ -3,6 +3,7 @@ import { spawn } from "node:child_process";
 import { cp, mkdir, readFile, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
+import { createHash } from "node:crypto";
 
 /** Tests only the installed package and copied product, never repository-relative runtime imports. */
 export async function testHttpPackage(consumer, { native = false } = {}) {
@@ -26,6 +27,7 @@ export async function testHttpPackage(consumer, { native = false } = {}) {
     config,
     JSON.stringify({
       stateDirectory,
+      workspaceFiles: true,
       port: 0,
       runtimes: [
         {
@@ -221,9 +223,20 @@ export async function testHttpPackage(consumer, { native = false } = {}) {
     );
     assert.equal(binding.threadId, threadId);
     assert.equal(binding.resumed, true);
+    if (!native) {
+      const bytes = Buffer.from([0, 255, 137, 80, 78, 71]);
+      const data = bytes.toString("base64");
+      const media = await wait(await client.session({ sessionId: "media-check", runtimeId: "codex" }).run("", undefined,
+        [{ name: "image.png", mediaType: "image/png", data }]));
+      assert.equal(JSON.parse(media.result.answer)[1].url, `data:image/png;base64,${data}`);
+      const path = `.agent-host/attachments/media-check/${createHash("sha256").update(bytes).digest("hex")}/image.png`;
+      assert.equal((await client.readBinaryFile("media-check", path)).content, data);
+      await client.writeBinaryFile("media-check", "results/copy.png", data);
+      assert.equal((await client.readBinaryFile("media-check", "results/copy.png")).content, data);
+    }
     if (native) assert.match(resumed.result.answer, /reject|denied|拒绝/i);
     console.log(
-      `PASS installed HTTP CLI + independent browser product: approve/reject, durable business receipts, Host restart and native continuation (${native ? "native Codex" : "protocol fixture"})`,
+      `PASS installed HTTP CLI + independent browser product: approve/reject, durable business receipts, Host restart, native continuation and media transfer (${native ? "native Codex" : "protocol fixture"})`,
     );
   } finally {
     await editor?.close();
