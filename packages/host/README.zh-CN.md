@@ -35,6 +35,12 @@ HTTP 服务保留附件的实际字节、内核支持的原生图片输入与图
 
 产品拥有自己的界面、账号、业务权限、长期记忆策略和数据；Agent Host 负责与原生 Agent 的接入。不同内核的能力并不完全相同，具体以[支持清单](docs/kernel-support.md)为准。
 
+## 可选的 React 聊天组件
+
+`@olorinm/agent-ui` 提供可复用的消息、Markdown、输入框、执行过程、审批、提问和资源卡片。它是独立安装包，Agent Host 核心不依赖 React。产品继续管理自己的数据、权限和文件操作。
+
+接入方式见 [React UI 说明](docs/react-ui.md)，也可以运行[独立文档编辑器](examples/react-editor/README.md)。
+
 ## 两种使用方式
 
 - **嵌入式**：从构建包安装 `@olorinm/agent-host`，在产品的 Node.js 后台直接调用，由产品管理启动、停止和存储。

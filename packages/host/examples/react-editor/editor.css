@@ -1,0 +1,78 @@
+body {
+  margin: 0;
+}
+.editor {
+  min-height: 100vh;
+  padding: 32px;
+}
+.editor-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  max-width: 1200px;
+  margin: 0 auto 32px;
+}
+.editor h1 {
+  margin: 0;
+  font-size: 24px;
+}
+.editor h2 {
+  font-size: 14px;
+  color: var(--c-muted);
+}
+.editor-header p {
+  color: var(--c-muted);
+}
+.editor-columns {
+  display: grid;
+  grid-template-columns: minmax(220px, 1fr) minmax(0, 2fr);
+  gap: 40px;
+  max-width: 1200px;
+  margin: auto;
+}
+.editor aside {
+  border-right: 1px solid var(--c-border);
+  padding-right: 24px;
+}
+.editor pre {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.editor [role="alert"] {
+  color: var(--c-error);
+}
+.editor-attachments {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.editor-attachment {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+.editor input[type="file"] {
+  max-width: 180px;
+  font-size: 12px;
+  color: var(--c-text);
+}
+.editor .thread-image-lightbox {
+  z-index: 100;
+}
+@media (max-width: 700px) {
+  .editor {
+    padding: 16px;
+  }
+  .editor-columns {
+    grid-template-columns: 1fr;
+    gap: 20px;
+  }
+  .editor aside {
+    border-right: 0;
+    border-bottom: 1px solid var(--c-border);
+    padding-bottom: 12px;
+  }
+  .agent-composer-footer-left {
+    flex-wrap: wrap;
+  }
+}

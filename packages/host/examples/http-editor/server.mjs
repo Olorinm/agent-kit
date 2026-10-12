@@ -11,6 +11,8 @@ export async function startEditor({
   token,
   directory = resolve("editor-project"),
   port = 37430,
+  // A sibling frontend can reuse the same authenticated product companion.
+  assetsDirectory,
 } = {}) {
   if (!token)
     throw new Error(
@@ -149,8 +151,21 @@ export async function startEditor({
       if (request.method !== "GET")
         return reply(405, { error: "method_not_allowed" });
       const assets = {
-        "/": [new URL("./index.html", import.meta.url), "text/html"],
-        "/app.js": [new URL("./app.js", import.meta.url), "text/javascript"],
+        "/": [
+          assetsDirectory
+            ? join(assetsDirectory, "index.html")
+            : new URL("./index.html", import.meta.url),
+          "text/html",
+        ],
+        "/app.js": [
+          assetsDirectory
+            ? join(assetsDirectory, "app.js")
+            : new URL("./app.js", import.meta.url),
+          "text/javascript",
+        ],
+        ...(assetsDirectory
+          ? { "/app.css": [join(assetsDirectory, "app.css"), "text/css"] }
+          : {}),
         "/client.js": [
           new URL(import.meta.resolve("@olorinm/agent-host/client")),
           "text/javascript",
@@ -159,7 +174,10 @@ export async function startEditor({
           new URL(import.meta.resolve("@olorinm/agent-host/capabilities")),
           "text/javascript",
         ],
-        "/interactions.js": [new URL(import.meta.resolve("@olorinm/agent-host/interactions")), "text/javascript"],
+        "/interactions.js": [
+          new URL(import.meta.resolve("@olorinm/agent-host/interactions")),
+          "text/javascript",
+        ],
       };
       const asset = assets[url.pathname];
       if (!asset) return reply(404, { error: "not_found" });
@@ -168,7 +186,7 @@ export async function startEditor({
         "cache-control": "no-store",
         "x-content-type-options": "nosniff",
         "content-security-policy":
-          "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self'; frame-ancestors 'none'",
+          "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self'; frame-ancestors 'none'",
       });
       response.end(await readFile(asset[0]));
     })().catch((error) => {

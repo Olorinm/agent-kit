@@ -18,9 +18,22 @@
     "README.md",
     "README.zh-CN.md",
     "docs",
-    "examples/file-editor",
-    "examples/http-editor",
-    "plugins"
+    "examples/file-editor/cli.mjs",
+    "examples/file-editor/editor.mjs",
+    "examples/file-editor/package.json",
+    "examples/http-editor/app.js",
+    "examples/http-editor/server.mjs",
+    "examples/http-editor/index.html",
+    "examples/http-editor/README.md",
+    "examples/http-editor/package.json",
+    "examples/http-editor/host.example.json",
+    "plugins",
+    "examples/react-editor/app.jsx",
+    "examples/react-editor/build.mjs",
+    "examples/react-editor/editor.css",
+    "examples/react-editor/index.html",
+    "examples/react-editor/README.md",
+    "examples/react-editor/server.mjs"
   ],
   "exports": {
     "./server": {
@@ -105,7 +118,10 @@
     "test": "npm run build && node --test test/*.test.mjs",
     "prepack": "npm run build",
     "test:package": "node scripts/test-package.mjs",
-    "probe:codex": "node scripts/probe-codex.mjs"
+    "probe:codex": "node scripts/probe-codex.mjs",
+    "test:ui": "npm --workspace @olorinm/agent-ui test",
+    "test:ui:browser": "npm --workspace @olorinm/agent-ui run build && node scripts/test-ui-browser.mjs",
+    "test:ui:package": "node scripts/test-ui-package.mjs"
   },
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "0.3.295",
@@ -126,6 +142,11 @@
     "@types/node": "24.10.1",
     "opencode-ai": "1.18.35",
     "typescript": "5.9.3",
-    "ws": "8.22.0"
-  }
+    "ws": "8.22.0",
+    "@playwright/test": "1.63.0",
+    "esbuild": "0.28.2"
+  },
+  "workspaces": [
+    "packages/react"
+  ]
 }

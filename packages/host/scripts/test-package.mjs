@@ -6,7 +6,7 @@ import { model, fixture as piStream } from "../test/fixtures/pi-stream.mjs";
 import { startOpenClawFixture } from "../test/fixtures/openclaw-gateway.mjs";
 import { createClaudeQueryFixture } from "../test/fixtures/claude-query.mjs";
 import { execFileSync } from "node:child_process";
-import { cp, mkdtemp, mkdir, readFile, writeFile } from "node:fs/promises";
+import { cp, mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { resolve, join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { tmpdir } from "node:os";
@@ -14,14 +14,30 @@ import { tmpdir } from "node:os";
 const root = process.cwd();
 const consumer = await mkdtemp(join(tmpdir(), "agent-host-consumer-"));
 await mkdir(resolve(".local"), { recursive: true });
-execFileSync(process.execPath, [process.env.npm_execpath, "pack", "--pack-destination", consumer, "--silent"], {
-  stdio: "pipe",
-});
+console.log("Packing the distributable archive");
+// Exercise a developer checkout that has installed the companion's dependencies.
+const exampleDependencies = resolve("examples/http-editor/node_modules");
+await mkdir(exampleDependencies, { recursive: true });
+const packSentinel = await mkdtemp(join(exampleDependencies, "agent-host-pack-sentinel-"));
+try {
+  await writeFile(join(packSentinel, "package.json"), JSON.stringify({ name: "agent-host-pack-sentinel", version: "1.0.0" }));
+  const [archive] = JSON.parse(execFileSync(process.execPath, [process.env.npm_execpath, "pack", "--pack-destination", consumer, "--json"], {
+    encoding: "utf8",
+    stdio: "pipe",
+  }));
+  assert.ok(
+    archive.files.every(({ path }) => !path.split(/[\\/]/).includes("node_modules")),
+    "The distributable must not include installed example dependencies",
+  );
+} finally {
+  await rm(packSentinel, { recursive: true, force: true });
+}
 await cp("examples/file-editor", consumer, { recursive: true });
 await writeFile(
   join(consumer, "package.json"),
   JSON.stringify({ private: true, type: "module" }),
 );
+console.log("Installing the archive into an independent consumer");
 execFileSync(
   process.execPath,
   [
@@ -32,8 +48,9 @@ execFileSync(
     "--no-fund",
     `./olorinm-agent-host-${JSON.parse(await readFile(join(root,"package.json"),"utf8")).version}.tgz`,
   ],
-  { cwd: consumer, stdio: "pipe" },
+  { cwd: consumer, stdio: "inherit" },
 );
+console.log("Checking the installed editor and native contracts");
 const { createEditor } = await import(
   pathToFileURL(join(consumer, "editor.mjs"))
 );

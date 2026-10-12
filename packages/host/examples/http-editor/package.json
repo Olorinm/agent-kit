@@ -6,6 +6,6 @@
     "start": "node server.mjs"
   },
   "dependencies": {
-    "@olorinm/agent-host": "file:../../olorinm-agent-host-0.1.0-alpha.6.tgz"
+    "@olorinm/agent-host": "file:../../olorinm-agent-host-0.1.0-alpha.8.tgz"
   }
 }

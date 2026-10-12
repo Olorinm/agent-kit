@@ -35,6 +35,12 @@ The [gap checklist](docs/capability-gaps.md) records implementation, verificatio
 
 Your product owns its UI, accounts, business permissions, memory strategy and data. Agent Host owns the integration with the native Agent. Capabilities differ by Kernel; the [support matrix](docs/kernel-support.md) records those boundaries.
 
+## Optional React UI
+
+`@olorinm/agent-ui` supplies reusable chat messages, Markdown, a composer, process details, approvals, questions and resources. It is a separate package; Agent Host itself does not depend on React. Products keep their own data, permissions and file operations.
+
+See the [React UI guide](docs/react-ui.md) and [independent document editor](examples/react-editor/README.md).
+
 ## Two ways to integrate
 
 - **Embedded:** install `@olorinm/agent-host` from its archive and call an adapter from your Node.js backend. Your product manages lifecycle and storage.
