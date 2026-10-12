@@ -260,8 +260,9 @@ export function getKernelCapabilities(
         "The pinned native prompt interface has no matching inline content type; HTTP still preserves the file bytes in the workspace.",
     };
   if (kernel === "codex")
-    f["input.audio"] = supported(
-      "Native audio/localAudio input items; provider interpretation requires native support.",
+    f["input.audio"] = conditional(
+      "configuration_required",
+      "Native audio/localAudio input items. The selected native model must declare audio in model/list inputModalities; Codex omits audio content for models without it.",
     );
   if (kernel === "claude")
     f["input.documents"] = supported("Native PDF document content blocks.");

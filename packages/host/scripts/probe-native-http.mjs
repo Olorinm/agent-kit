@@ -1,7 +1,7 @@
 /** Opt-in model-backed probe. Profiles are trusted JS owned by the operator; secrets never enter reports. */
 import { parseArgs } from "node:util";
 import { mkdir, writeFile, readFile } from "node:fs/promises";
-import { resolve, dirname, join } from "node:path";
+import { resolve, dirname, join, basename } from "node:path";
 import { pathToFileURL } from "node:url";
 import { randomUUID, randomBytes } from "node:crypto";
 import {
@@ -16,6 +16,7 @@ const { values } = parseArgs({
     out: { type: "string" },
     only: { type: "string" },
     media: { type: "string" },
+    "media-cases": { type: "string" },
     controls: { type: "boolean" },
     interactions: { type: "boolean" },
   },
@@ -24,6 +25,24 @@ if (!values.profiles || !values.out)
   throw Error(
     "Usage: node probe-native-http.mjs --profiles local-profiles.mjs --out local-report.json [--only kernel] [--media image.png] [--controls]",
   );
+const mediaCases = values["media-cases"]
+  ? JSON.parse(await readFile(values["media-cases"], "utf8"))
+  : [];
+if (
+  !Array.isArray(mediaCases) ||
+  mediaCases.some(
+    (c) =>
+      !c ||
+      ["name", "file", "mediaType", "prompt", "expectedText"].some(
+        (key) => typeof c[key] !== "string" || !c[key],
+      ) ||
+      !Array.isArray(c.kernels) ||
+      c.kernels.some((kernel) => typeof kernel !== "string"),
+  )
+)
+  throw Error("invalid_media_cases");
+const output = resolve(values.out);
+await mkdir(dirname(output), { recursive: true });
 const setup = await (
   await import(pathToFileURL(resolve(values.profiles)))
 ).default();
@@ -35,8 +54,6 @@ const report = {
   node: process.version,
   results: [],
 };
-const output = resolve(values.out);
-await mkdir(dirname(output), { recursive: true });
 try {
   for (const profile of setup.profiles.filter(
     (p) => !values.only || values.only.split(",").includes(p.kernel),
@@ -304,6 +321,28 @@ try {
             if (!/red|红/i.test(r.answer))
               throw Error("vision_answer_mismatch");
           });
+        for (const media of mediaCases.filter((c) =>
+          c.kernels.includes(profile.kernel),
+        )) {
+          await check(`media:${media.name}`, async () => {
+            const data = (await readFile(media.file)).toString("base64");
+            const { r } = await run(
+              media.prompt,
+              [
+                {
+                  name: basename(media.file),
+                  mediaType: media.mediaType,
+                  data,
+                },
+              ],
+              `media-${randomUUID()}`,
+            );
+            if (
+              !r.answer.toLowerCase().includes(media.expectedText.toLowerCase())
+            )
+              throw Error("native_media_answer_mismatch");
+          });
+        }
       }
     } catch (error) {
       result.checks.setup = {

@@ -73,7 +73,8 @@ export class FileBindingStore implements BindingStore {
       );
     if (
       "configurationSessionId" in value &&
-      (typeof value.configurationSessionId !== "string" || !value.configurationSessionId)
+      (typeof value.configurationSessionId !== "string" ||
+        !value.configurationSessionId)
     )
       throw new Error("Invalid native session configuration identity");
     return {

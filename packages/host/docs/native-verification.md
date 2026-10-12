@@ -16,8 +16,8 @@ The probe creates isolated Host state and test sessions, asks the model to retai
 | --- | --- |
 | Text, native identity, Host restart and recall | Codex, Claude, Pi, OpenCode, Kimi, Hermes, OpenClaw |
 | Native list/history | All seven |
-| Native fork and child recall | Codex, Claude, Pi, OpenCode, Kimi, Hermes; OpenClaw requires a selected native entry ID |
-| Native delete of the test child | Codex, Claude, OpenCode, Kimi, Hermes; Pi has no native delete API |
+| Native fork and child recall | All seven; OpenClaw uses a selected native user-message entry ID |
+| Native delete of the test child | Codex, Claude, OpenCode, Kimi, Hermes, OpenClaw; Pi has no native delete API |
 | Native compaction completion | All seven, including Pi's confirmed no-op result |
 | Image bytes and model answer | All seven, with the configured native model or native media tools |
 | Product callback accept/reject/cancel | Codex, Claude, Pi, OpenCode, Kimi, Hermes and OpenClaw |
@@ -32,6 +32,7 @@ Codex uses its existing native login. Kimi uses its native authenticated configu
 - Hermes history requires the live handle for a durable session. Host now resolves/resumes that handle. Compaction rotation also updates the saved durable binding.
 - An existing OpenCode database was incompatible with the tested executable. Isolated native test state resolved the environment conflict; this was not hidden as an adapter fix. Custom model image capability also needs native model configuration.
 - OpenClaw has native `sessions.steer` with interrupt-and-replace semantics. Host tracks the replacement run and buffers events that arrive before its acknowledgement.
+- OpenClaw forks change native storage identity without changing the source configuration. Bindings now retain the original configuration identity, including after restart and nested forks. Continued native turns still reject genuine configuration changes.
 
 ## Bounds of the evidence
 
@@ -52,3 +53,5 @@ node scripts/probe-native-http.mjs \
 ```
 
 `--only codex,claude` limits the selected profiles. `--checks history,fork,compact` selects additional checks while retaining the initial turn/restart prerequisites. The report distinguishes static discovery from native handshake, retains capability descriptions and records checks independently. It stores short errors, not native transcripts or credentials. Inspect/redact reports before sharing them; do not commit machine-local logs. For a single explicit readiness check use `agent-host doctor --config host.json --probe`.
+
+For document, audio or video checks, pass `--media-cases /absolute/path/cases.json`. The JSON array contains `{name, kernels, file, mediaType, prompt, expectedText}` for each local test file. Each case runs in a fresh native conversation; its answer must contain `expectedText` (case-insensitive). Do not include the expected answer in the prompt. Select a case with `--checks media:pdf`, for example. Synthetic fixtures and the selected model/media configuration belong to the operator; the runner never installs transcription or video dependencies.

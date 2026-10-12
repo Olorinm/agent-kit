@@ -204,7 +204,9 @@ export class OpenClawAgent {
       const configurationKey =
         request.sessionKey ??
         this.options.sessionKey ??
-        `agent:main:agent-host-${createHash("sha256").update(binding?.configurationSessionId ?? request.sessionId).digest("hex")}`;
+        `agent:main:agent-host-${createHash("sha256")
+          .update(binding?.configurationSessionId ?? request.sessionId)
+          .digest("hex")}`;
       const fingerprint =
         request.bindingFingerprint ??
         createHash("sha256")

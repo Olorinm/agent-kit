@@ -25,19 +25,42 @@ test("OpenClaw native forks survive restart and retain configuration checks acro
   });
   const run = async (input) => {
     const events = await Array.fromAsync(agent.run({ ...request, ...input }));
-    return { outcome: events.at(-1).outcome, binding: events.find((e) => e.type === "session.bound") };
+    return {
+      outcome: events.at(-1).outcome,
+      binding: events.find((e) => e.type === "session.bound"),
+    };
   };
   assert.equal((await run({})).outcome.status, "completed");
-  const child = await agent.sessions.fork(request.sessionId, "child", { entryId: "entry-1" });
+  const child = await agent.sessions.fork(request.sessionId, "child", {
+    entryId: "entry-1",
+  });
   agent.close();
-  agent = new OpenClawAgent({ ...gateway, bindings: new FileBindingStore(directory) });
+  agent = new OpenClawAgent({
+    ...gateway,
+    bindings: new FileBindingStore(directory),
+  });
   const resumed = await run({ sessionId: "child" });
-  assert.equal(resumed.outcome.status, "completed", JSON.stringify(resumed.outcome));
+  assert.equal(
+    resumed.outcome.status,
+    "completed",
+    JSON.stringify(resumed.outcome),
+  );
   assert.equal(resumed.binding.threadId, child.nativeSessionId);
-  const grandchild = await agent.sessions.fork("child", "grandchild", { entryId: "entry-1" });
-  assert.equal((await run({ sessionId: "grandchild" })).binding.threadId, grandchild.nativeSessionId);
-  for (const changed of [{ instructions: "Changed" }, { sessionKey: "another-key" }]) {
-    assert.equal((await run({ sessionId: "child", ...changed })).outcome.error, "session_configuration_changed");
+  const grandchild = await agent.sessions.fork("child", "grandchild", {
+    entryId: "entry-1",
+  });
+  assert.equal(
+    (await run({ sessionId: "grandchild" })).binding.threadId,
+    grandchild.nativeSessionId,
+  );
+  for (const changed of [
+    { instructions: "Changed" },
+    { sessionKey: "another-key" },
+  ]) {
+    assert.equal(
+      (await run({ sessionId: "child", ...changed })).outcome.error,
+      "session_configuration_changed",
+    );
   }
 });
 test("OpenClaw correlates early events and overlapping agent/chat streams without replaying stale history", async () => {
@@ -226,19 +249,34 @@ test("OpenClaw persists the canonical native key and refuses to recreate deleted
 
 for (const ignoreCancel of [false, true]) {
   test(`OpenClaw error after abort requires a native cancellation receipt (${ignoreCancel})`, async () => {
-    const gateway = await startOpenClawFixture({ cancelStatus: "error", ignoreCancel });
+    const gateway = await startOpenClawFixture({
+      cancelStatus: "error",
+      ignoreCancel,
+    });
     const agent = new OpenClawAgent({ ...gateway, cancellationGraceMs: 40 });
     try {
       const controller = new AbortController();
       const events = [];
-      for await (const event of agent.run({ ...request, method: "agent", input: "HANG", signal: controller.signal })) {
+      for await (const event of agent.run({
+        ...request,
+        method: "agent",
+        input: "HANG",
+        signal: controller.signal,
+      })) {
         events.push(event);
-        if (event.type === "session.bound") setTimeout(() => controller.abort(), 20);
+        if (event.type === "session.bound")
+          setTimeout(() => controller.abort(), 20);
       }
       assert.equal(events.at(-1).outcome.status, "cancelled");
       assert.equal(events.at(-1).outcome.outcomeUnknown === true, ignoreCancel);
-      assert.equal(events.filter((event) => event.type === "turn.finished").length, 1);
-      assert.equal(gateway.calls.filter((call) => call.method === "chat.abort").length, 1);
+      assert.equal(
+        events.filter((event) => event.type === "turn.finished").length,
+        1,
+      );
+      assert.equal(
+        gateway.calls.filter((call) => call.method === "chat.abort").length,
+        1,
+      );
     } finally {
       agent.close();
       await gateway.close();
