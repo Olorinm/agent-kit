@@ -229,6 +229,96 @@ test("progress keeps raw messages and marks usage scope rather than inventing to
   assert.equal(projectProgress(usage)[1].inputTokens, 15);
 });
 
+test("tool progress projects actual Claude, Pi, Hermes and OpenClaw event shapes with stable call IDs", () => {
+  const cases = [
+    [
+      "claude.message",
+      {
+        type: "assistant",
+        message: {
+          content: [{ type: "tool_use", id: "call", name: "read", input: {} }],
+        },
+      },
+      "started",
+    ],
+    [
+      "claude.message",
+      {
+        type: "user",
+        message: {
+          content: [
+            { type: "tool_result", tool_use_id: "call", content: "done" },
+          ],
+        },
+      },
+      "finished",
+    ],
+    [
+      "claude.message",
+      { type: "tool_progress", tool_use_id: "call", tool_name: "read" },
+      "updated",
+    ],
+    [
+      "pi/tool_execution_start",
+      {
+        event: {
+          type: "tool_execution_start",
+          toolCallId: "call",
+          toolName: "read",
+          args: {},
+        },
+      },
+      "started",
+    ],
+    [
+      "pi/tool_execution_end",
+      {
+        event: {
+          type: "tool_execution_end",
+          toolCallId: "call",
+          toolName: "read",
+          entry: {},
+        },
+      },
+      "finished",
+    ],
+    [
+      "event",
+      {
+        type: "tool.complete",
+        payload: { tool_id: "call", name: "read", result: "done" },
+      },
+      "finished",
+    ],
+    [
+      "agent",
+      {
+        stream: "tool",
+        data: {
+          phase: "result",
+          toolCallId: "call",
+          name: "read",
+          result: "done",
+        },
+      },
+      "finished",
+    ],
+  ];
+  for (const [method, params, phase] of cases) {
+    const event = {
+      type: "native.notification",
+      runId: "r",
+      notification: { method, params },
+    };
+    const projected = projectProgress(event);
+    assert.equal(projected[0], event);
+    assert.equal(projected.length, 2);
+    assert.equal(projected[1].type, "native.tool");
+    assert.equal(projected[1].callId, "call");
+    assert.equal(projected[1].phase, phase);
+  }
+});
+
 test("session manager never drops a binding on unsupported/failed deletion and blocks concurrent native mutations", async () => {
   const bindings = new MemoryBindingStore();
   await bindings.set("s", { threadId: "native", fingerprint: "f" });

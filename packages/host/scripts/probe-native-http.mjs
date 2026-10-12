@@ -9,6 +9,16 @@ import {
   startAgentHostServer,
 } from "@olorinm/agent-host/server";
 import { AgentHostClient } from "@olorinm/agent-host/client";
+// Match complete words/phrases: "configured" is not evidence for the color "red".
+function matchesExpected(actual, expected) {
+  const words = (text) =>
+    (text.toLowerCase().match(/[\p{L}\p{N}_]+/gu) ?? []).join(" ");
+  const wanted = words(expected);
+  return (
+    wanted.length > 0 &&
+    (" " + words(actual) + " ").includes(" " + wanted + " ")
+  );
+}
 const { values } = parseArgs({
   options: {
     profiles: { type: "string" },
@@ -318,7 +328,10 @@ try {
               "What is the dominant color of this attached image? Say the color only.",
               [{ name: "probe.png", mediaType: "image/png", data }],
             );
-            if (!/red|红/i.test(r.answer))
+            if (
+              !matchesExpected(r.answer, "red") &&
+              !matchesExpected(r.answer, "红色")
+            )
               throw Error("vision_answer_mismatch");
           });
         for (const media of mediaCases.filter((c) =>
@@ -337,9 +350,7 @@ try {
               ],
               `media-${randomUUID()}`,
             );
-            if (
-              !r.answer.toLowerCase().includes(media.expectedText.toLowerCase())
-            )
+            if (!matchesExpected(r.answer, media.expectedText))
               throw Error("native_media_answer_mismatch");
           });
         }

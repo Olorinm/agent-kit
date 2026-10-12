@@ -60,13 +60,15 @@ export function projectProgress(event: AgentEvent): AgentEvent[] {
       type: "native.tool",
       runId: event.runId,
       phase,
-      callId: typeof native.id === "string" ? native.id : undefined,
-      tool:
-        typeof native.name === "string"
-          ? native.name
-          : typeof native.type === "string"
-            ? native.type
-            : undefined,
+      callId: [
+        native.id,
+        native.toolCallId,
+        native.tool_use_id,
+        native.tool_id,
+      ].find((value): value is string => typeof value === "string"),
+      tool: [native.name, native.toolName, native.tool_name, native.tool].find(
+        (value): value is string => typeof value === "string",
+      ),
       native,
     });
   if (
@@ -105,9 +107,33 @@ export function projectProgress(event: AgentEvent): AgentEvent[] {
         costUsd: "cost",
       });
     if (p.type === "tool_progress") tool(p, "updated");
+    const content = obj(p.message).content;
+    if (Array.isArray(content))
+      for (const item of content) {
+        const block = obj(item);
+        if (p.type === "assistant" && block.type === "tool_use")
+          tool(block, "started");
+        if (p.type === "user" && block.type === "tool_result")
+          tool(block, "finished");
+      }
   }
   if (method.startsWith("pi/")) {
     const native = obj(p.event);
+    if (
+      [
+        "tool_execution_start",
+        "tool_execution_update",
+        "tool_execution_end",
+      ].includes(String(native.type))
+    )
+      tool(
+        native,
+        native.type === "tool_execution_start"
+          ? "started"
+          : native.type === "tool_execution_end"
+            ? "finished"
+            : "updated",
+      );
     if (native.type === "message_update" && Array.isArray(native.changes))
       for (const change of native.changes)
         if (obj(change).type === "thinking_delta") reason(obj(change).delta);
@@ -157,7 +183,7 @@ export function projectProgress(event: AgentEvent): AgentEvent[] {
             typeof u.output_tokens === "number" ? "output_tokens" : "output",
         });
     }
-    if (["tool.start", "tool.result"].includes(String(p.type)))
+    if (["tool.start", "tool.result", "tool.complete"].includes(String(p.type)))
       tool(payload, p.type === "tool.start" ? "started" : "finished");
   }
   if (method === "agent") {
