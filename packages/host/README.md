@@ -2,11 +2,22 @@
 
 [中文](README.zh-CN.md)
 
-Agent Host is an open-source integration layer for adding native coding Agents to any product. Your product supplies context, tools and interaction handlers; Agent Host connects to the selected Agent and returns progress and results.
+Agent Host is an open-source integration layer that makes native coding Agents easier to use in any product or personal workflow. Products supply context, tools and interaction handlers; Agent Host connects to the selected Agent and returns progress and results.
 
 **Seven native integrations, two deployment modes:** Codex, Claude Agent, Pi, OpenCode, Kimi Code, Hermes and OpenClaw. Embed the package in your backend or run a standalone HTTP service. Both modes use the same adapters.
 
 **Status: alpha.** Source is public and the package installs from a built archive; it is not yet published to npm. See the [tested versions and verification limits](docs/kernel-support.md).
+
+## Core principles
+
+**Preserve native Agent capabilities as fully as possible, and make them simple to use through a clear, consistent integration layer.**
+
+1. **Respect the native Kernel.** Keep execution, tools, sessions and permissions under the Kernel's control. Carry supported inputs, outputs and controls through the integration faithfully. Give distinctive native features an explicit extension path, and explain when a capability is unavailable or has not yet been integrated.
+2. **Make integration straightforward for products and people.** Provide consistent ways to configure an Agent, start and continue work, receive progress, handle approvals and questions, and cancel execution. Embedded and HTTP access should deliver the same native capability wherever the environment permits it, with differences discoverable before use.
+
+**Unify how Agents are used while keeping their capability differences visible.** Common operations belong in shared interfaces; native features remain accessible through explicit extensions. Support claims need implementation and verification evidence, and the integration must report any loss or limitation clearly.
+
+These principles guide the project; the alpha does not yet meet them everywhere. The [implementation gap review](docs/capability-gaps.md) records what is missing and the proposed order of work.
 
 ## What it provides
 

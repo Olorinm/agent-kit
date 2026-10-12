@@ -2,9 +2,11 @@
 
 ## Outcome
 
-A developer can add a native Agent to any product through a shared integration layer, supplying that product’s own context, tools, interaction handlers and storage.
+A developer can add a native Agent to any product or personal workflow through a shared integration layer, supplying its context, tools, interaction handlers and storage.
 
 This repository owns the reusable integration. Products consume its public package API; terminal and browser file editors demonstrate embedded and HTTP use.
+
+The [core principles](../README.md#core-principles) govern this boundary: preserve native capabilities and make their use straightforward. Common operations should have consistent interfaces, while native features retain explicit extension paths. Embedded and HTTP access should expose equivalent capabilities where the environment permits them. Report differences and unsupported paths before use where possible, and never silently turn richer input or output into a weaker representation. See the [implementation gap review](capability-gaps.md) for the current shortfalls.
 
 ## Public boundary
 
