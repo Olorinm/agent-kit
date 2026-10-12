@@ -7,7 +7,7 @@ Use Node.js 24 or later and an installed, authenticated native Kernel. Agent Hos
 ```sh
 mkdir my-agent && cd my-agent
 npm init -y
-npm install https://github.com/Olorinm/agent-host/releases/download/v0.1.0-alpha.6/olorinm-agent-host-0.1.0-alpha.6.tgz
+npm install https://github.com/Olorinm/agent-host/releases/download/v0.1.0-alpha.7/olorinm-agent-host-0.1.0-alpha.7.tgz
 ```
 
 The archive is published on [GitHub Releases](https://github.com/Olorinm/agent-host/releases). The package is not on the npm registry yet. Native binaries other than Claude's SDK engine are separate prerequisites. The release has the same contents tested by the independent archive consumer.

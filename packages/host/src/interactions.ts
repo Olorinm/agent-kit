@@ -64,6 +64,24 @@ export function describeInteraction(native: NativeRequest): Interaction {
   const p = object(native.params),
     method = native.method;
   if (
+    method === "mcpServer/elicitation/request" &&
+    object(p._meta).codex_approval_kind === "mcp_tool_call"
+  ) {
+    const persist = object(p._meta).persist;
+    const scopes = Array.isArray(persist) ? persist : [persist];
+    return approval(native, string(p.message, "Allow MCP tool?"), [
+      choice("accept", "Allow once", true, "once"),
+      ...(scopes.includes("session")
+        ? [choice("session", "Allow for session", true, "session")]
+        : []),
+      ...(scopes.includes("always")
+        ? [choice("always", "Always allow", true, "always")]
+        : []),
+      choice("decline", "Deny", false),
+      choice("cancel", "Cancel", false),
+    ]);
+  }
+  if (
     ["session/request_permission", "session/requestPermission"].includes(method)
   )
     return approval(
@@ -103,16 +121,24 @@ export function describeInteraction(native: NativeRequest): Interaction {
         choice("deny", "Deny", false),
       ].filter((c) => !Array.isArray(p.choices) || p.choices.includes(c.id)),
     );
-  if (method === "exec.approval.requested")
+  if (method === "exec.approval.requested") {
+    const request = object(p.request);
     return approval(
       native,
-      string(object(p.request).command, "Allow command?"),
+      string(request.command, "Allow command?"),
       [
         choice("allow-once", "Allow once", true, "once"),
         choice("allow-always", "Always allow", true, "always"),
         choice("deny", "Deny", false),
-      ],
+      ].filter(
+        (c) =>
+          (!Array.isArray(request.allowedDecisions) ||
+            request.allowedDecisions.includes(c.id)) &&
+          (!Array.isArray(request.unavailableDecisions) ||
+            !request.unavailableDecisions.includes(c.id)),
+      ),
     );
+  }
   if (
     [
       "item/commandExecution/requestApproval",
@@ -203,6 +229,15 @@ export function answerInteraction(
         ? interaction.choices?.find((c) => c.id === answer.choice)
         : undefined;
     if (!selected && !cancel) throw new Error("invalid_interaction_choice");
+    if (method === "mcpServer/elicitation/request")
+      return {
+        action: selected?.allows
+          ? "accept"
+          : (selected?.id ?? ("action" in answer ? answer.action : "cancel")),
+        ...(selected?.scope === "session" || selected?.scope === "always"
+          ? { _meta: { persist: selected.scope } }
+          : {}),
+      };
     if (method === "item/permissions/requestApproval")
       return {
         permissions: selected?.allows ? object(p.permissions) : {},
