@@ -20,8 +20,8 @@ The probe creates isolated Host state and test sessions, asks the model to retai
 | Native delete of the test child | Codex, Claude, OpenCode, Kimi, Hermes; Pi has no native delete API |
 | Native compaction completion | All seven, including Pi's confirmed no-op result |
 | Image bytes and model answer | All seven, with the configured native model or native media tools |
-| Product callback accept/reject/cancel | Extended live HTTP probes; final per-Kernel results are recorded with the release validation |
-| Active-turn steer | Codex, Claude, Pi; Hermes and OpenClaw are checked in the extended control probe |
+| Product callback accept/reject/cancel | Codex, Claude, Pi, OpenCode, Kimi, Hermes and OpenClaw |
+| Active-turn steer | Codex, Claude, Pi, Hermes and OpenClaw |
 
 Codex uses its existing native login. Kimi uses its native authenticated configuration. Claude/Pi/Hermes/OpenClaw use an existing local Anthropic-compatible route; OpenCode uses a configured native provider. OpenCode's test profile has its own native database and explicit model modalities. Hermes uses a dedicated native home; OpenClaw uses a dedicated local Gateway with the bundled product-tool plugin. No personal configuration or global installation is modified by the probe.
 
@@ -51,4 +51,4 @@ node scripts/probe-native-http.mjs \
   --media /absolute/path/test-red.png --controls --interactions
 ```
 
-`--only codex,claude` limits the selected profiles. The report distinguishes static discovery from native handshake, retains capability descriptions and records checks independently. It stores short errors, not native transcripts or credentials. Inspect/redact reports before sharing them; do not commit machine-local logs. For a single explicit readiness check use `agent-host doctor --config host.json --probe`.
+`--only codex,claude` limits the selected profiles. `--checks history,fork,compact` selects additional checks while retaining the initial turn/restart prerequisites. The report distinguishes static discovery from native handshake, retains capability descriptions and records checks independently. It stores short errors, not native transcripts or credentials. Inspect/redact reports before sharing them; do not commit machine-local logs. For a single explicit readiness check use `agent-host doctor --config host.json --probe`.

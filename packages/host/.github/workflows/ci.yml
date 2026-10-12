@@ -1,9 +1,14 @@
 name: Package contracts
 on:
   push:
+    branches: [main]
   pull_request:
+concurrency:
+  group: package-${{ github.ref }}
+  cancel-in-progress: true
 jobs:
   package:
+    timeout-minutes: 15
     strategy:
       fail-fast: false
       matrix:
@@ -17,4 +22,5 @@ jobs:
           cache: npm
       - run: npm ci --ignore-scripts
       - run: npm test
+        timeout-minutes: 3
       - run: npm run test:package

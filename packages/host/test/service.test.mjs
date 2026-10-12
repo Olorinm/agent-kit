@@ -458,10 +458,10 @@ test("HTTP attachments preserve binary bytes, reject oversized input and stay wi
     () => api(`/runs/${run.id}`),
     (value) => value.status === "completed",
   );
-  const { relative } = await import("node:path");
+  const { relative, sep } = await import("node:path");
   const { realpath } = await import("node:fs/promises");
   const path = relative(await realpath(root), received.attachments[0].path);
-  assert.ok(path.startsWith(".agent-host/attachments/media/"));
+  assert.ok(path.startsWith(join(".agent-host", "attachments", "media") + sep));
   const output = await api(
     `/sessions/media/files?encoding=base64&path=${encodeURIComponent(path)}`,
   );

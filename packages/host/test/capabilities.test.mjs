@@ -71,7 +71,6 @@ test("capability discovery distinguishes native limits, negotiation and Host omi
 
 test("HTTP advertises the same capability vocabulary without guessing custom runtime support from its name", async (t) => {
   const root = await mkdtemp(join(tmpdir(), "agent-host-capabilities-"));
-  t.after(() => rm(root, { recursive: true, force: true }));
   const native = createNativeRuntime(
     {
       id: "native",
@@ -96,7 +95,15 @@ test("HTTP advertises the same capability vocabulary without guessing custom run
     stateDirectory: root,
     token: "capabilities-owner-token",
   });
-  t.after(() => host.close());
+  t.after(async () => {
+    await host.close();
+    await rm(root, {
+      recursive: true,
+      force: true,
+      maxRetries: 10,
+      retryDelay: 100,
+    });
+  });
   const client = new AgentHostClient({
     baseUrl: host.url,
     token: "capabilities-owner-token",

@@ -189,6 +189,24 @@ try {
             if (r.status !== "completed")
               throw Error(r.outcome?.error ?? r.status);
           });
+        if (values.controls)
+          await check("resume-after-compact", async () => {
+            const before = (
+              await client.nativeSessions(profile.id).bindings()
+            ).bindings.find((b) => b.sessionId === sessionId)?.nativeSessionId;
+            await server.close();
+            await open();
+            const { r, events } = await run(
+              "Repeat the test marker from the earlier conversation. No tools.",
+            );
+            if (!r.answer.includes(nonce))
+              throw Error("post_compaction_recall_failed");
+            if (
+              events.find((e) => e.type === "session.bound")?.threadId !==
+              before
+            )
+              throw Error("post_compaction_identity_changed");
+          });
         if (values.interactions) {
           const permission = async (i) => {
             const once = i.choices?.find((c) => c.allows && c.scope === "once");
