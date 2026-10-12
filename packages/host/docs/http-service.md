@@ -55,6 +55,8 @@ HTTP callers select a configured `runtimeId`. They cannot supply executables, en
 
 `GET /v1/runtimes` and `POST /v1/runtimes/inspect` expose profile availability and implemented controls. Inspection checks the configured directory/executable and required model selection. It does not prove login, model access or native execution, and does not scan or install every Agent on the machine. Native request-time failures remain visible in the task outcome.
 
+Each description also includes the shared [capability schema](capabilities.md). It distinguishes adapter support from native negotiation and configuration requirements. Existing `controls.steer` and `controls.compact` flags remain available. Custom runtimes must declare their own capabilities; a custom runtime named `codex` does not automatically inherit the built-in adapter's claims.
+
 For custom Pi providers, Claude SDK settings, native discovery, or additional runtime composition, use the server package from Node:
 
 ```ts
@@ -173,7 +175,7 @@ Every operation requires `Authorization: Bearer <token>` and JSON bodies for POS
 | `GET /v1/sessions/:id/files?list=true&path=...` | List one directory, when enabled.                                                                                              |
 | `POST /v1/sessions/:id/files`                   | Write `{ path, content, expectedRevision? }`, when enabled.                                                                    |
 
-`session.compact()` submits `mode: 'compact'` through the same task machinery. HTTP compaction is implemented for Codex, Pi, Hermes and OpenClaw; Hermes requires a live opened session in this service process. HTTP steering is implemented for Codex, Pi and Hermes. Unsupported controls fail explicitly. Existing embedded ACP compaction helpers remain available; the HTTP service does not create a substitute conversation to invoke them. Optional controls have protocol coverage unless separately recorded as native-tested.
+`session.compact()` submits `mode: 'compact'` through the same task machinery. HTTP compaction is implemented for Codex, Pi, OpenCode, Kimi, Hermes and OpenClaw; Hermes requires a live opened session in this service process. OpenCode/Kimi require an existing native binding, reject custom reasons, and use their native summarize/compact operation. OpenCode additionally requires a command supporting `serve` against the same native profile. An acknowledgement alone does not establish success; missing or interrupted completion is reported as unknown. HTTP steering is implemented for Codex, Pi and Hermes. Unsupported controls fail explicitly. Optional controls have protocol coverage unless separately recorded as native-tested.
 
 Workspace file access is opt-in via `workspaceFiles: true`. Paths stay under the selected profile's workspace; symlinks are rejected. `expectedRevision: null` requires a new file; a prior revision prevents overwriting a change already observed by this process. This is an optimistic check, not a transaction with unrelated filesystem writers or an OS sandbox for native tools. The client exposes `readFile`, `writeFile`, and `listFiles`.
 

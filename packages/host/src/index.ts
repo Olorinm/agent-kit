@@ -3,3 +3,4 @@ export { AsyncEventQueue } from "./async-event-queue.js";
 export { FileBindingStore } from "./file-bindings.js";
 
 export * from "./agent.js";
+export * from "./capabilities.js";

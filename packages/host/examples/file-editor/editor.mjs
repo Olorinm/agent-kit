@@ -1,11 +1,6 @@
 import { readFile, writeFile, mkdir } from "node:fs/promises";
 import { join, resolve } from "node:path";
-import { OpenClawAgent } from "@olorinm/agent-host/openclaw";
-import { HermesAgent } from "@olorinm/agent-host/hermes";
-import { PiAgent } from "@olorinm/agent-host/pi";
-import { ClaudeAgent } from "@olorinm/agent-host/claude";
-import { AcpAgent } from "@olorinm/agent-host/acp";
-import { CodexAgent } from "@olorinm/agent-host/codex";
+import { createAgent } from "@olorinm/agent-host/adapters";
 import { FileBindingStore } from "@olorinm/agent-host";
 
 /** This example product owns its document, approvals and UI. */
@@ -30,42 +25,30 @@ export async function createEditor({
   } catch (error) {
     if (error.code !== "EEXIST") throw error;
   }
-  const Agent =
-    kernel === "codex"
-      ? CodexAgent
-      : kernel === "openclaw"
-        ? OpenClawAgent
-        : kernel === "hermes"
-          ? HermesAgent
-          : kernel === "pi"
-            ? PiAgent
-            : kernel === "claude"
-              ? ClaudeAgent
-              : ["opencode", "kimi", "acp"].includes(kernel)
-                ? AcpAgent
-                : undefined;
-  if (!Agent) throw new Error(`Unsupported kernel: ${kernel}`);
-  const agent = new Agent({
-    ...(kernel === "pi"
-      ? { cwd, sessionRoot: join(cwd, ".agent-host", "pi-native") }
-      : {}),
-    ...(kernel === "hermes" ? { exclusiveProfile: true } : {}),
-    ...adapterOptions,
-    command: command ?? (kernel === "claude" ? undefined : kernel),
-    args,
-    env:
-      kernel === "hermes"
-        ? {
-            ...process.env,
-            ...env,
-            HERMES_HOME:
-              env?.HERMES_HOME ?? join(cwd, ".agent-host", "hermes-home"),
-          }
-        : env,
-    cwd,
-    ...(kernel !== "codex" ? { elicitation: { form: {} } } : {}),
-    bindings:
-      bindings ?? new FileBindingStore(join(cwd, ".agent-host", kernel)),
+  const agent = createAgent({
+    kernel: kernel === "acp" ? "opencode" : kernel,
+    options: {
+      ...(kernel === "pi"
+        ? { cwd, sessionRoot: join(cwd, ".agent-host", "pi-native") }
+        : {}),
+      ...(kernel === "hermes" ? { exclusiveProfile: true } : {}),
+      ...adapterOptions,
+      command: command ?? (kernel === "claude" ? undefined : kernel),
+      args,
+      env:
+        kernel === "hermes"
+          ? {
+              ...process.env,
+              ...env,
+              HERMES_HOME:
+                env?.HERMES_HOME ?? join(cwd, ".agent-host", "hermes-home"),
+            }
+          : env,
+      cwd,
+      ...(kernel !== "codex" ? { elicitation: { form: {} } } : {}),
+      bindings:
+        bindings ?? new FileBindingStore(join(cwd, ".agent-host", kernel)),
+    },
   });
   const tools = [
     {

@@ -1,6 +1,7 @@
 import { z } from "zod";
 import type { AgentEvent, ProductToolResult } from "../agent.js";
 import type { JsonValue } from "../types.js";
+import type { AgentCapabilities } from "../capabilities.js";
 
 /** Native JSON objects may contain undefined fields; the wire format cannot. */
 export function wireJson(value: JsonValue) {
@@ -126,6 +127,7 @@ export interface RuntimeDescription {
   cwd: string;
   model?: string;
   controls: { steer: boolean; compact: boolean };
+  capabilities: AgentCapabilities;
   available: boolean;
   reason?: string;
 }

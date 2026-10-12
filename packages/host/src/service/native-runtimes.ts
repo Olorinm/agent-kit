@@ -14,6 +14,7 @@ import { FileBindingStore } from "../file-bindings.js";
 import type { JsonObject } from "../types.js";
 import type { RuntimeTurn, ServiceRuntime } from "./runtime.js";
 import type { ServiceEvent } from "./protocol.js";
+import { getKernelCapabilities } from "../capabilities.js";
 
 interface BaseConfig {
   id: string;
@@ -70,9 +71,7 @@ export function createNativeRuntime(
   let close: ServiceRuntime["close"];
   let steer: ServiceRuntime["steer"];
   let compact:
-    | ((
-        request: RuntimeTurn,
-      ) => Promise<{
+    | ((request: RuntimeTurn) => Promise<{
         ok: boolean;
         compacted: boolean;
         error?: string;
@@ -118,6 +117,7 @@ export function createNativeRuntime(
         elicitation: { form: {} },
         ...config.options,
         command,
+        compaction: config.kernel,
         cwd,
         bindings,
       });
@@ -129,6 +129,7 @@ export function createNativeRuntime(
           effort: config.effort,
         });
       close = () => agent.close();
+      nativeCompaction = true;
       break;
     }
     case "pi": {
@@ -193,6 +194,7 @@ export function createNativeRuntime(
     cwd,
     model: config.model,
     configurationKey,
+    capabilities: getKernelCapabilities(config.kernel, "http"),
     maxConcurrentRuns: config.kernel === "hermes" ? 1 : 16,
     supportsCompaction: nativeCompaction || Boolean(compact),
     steer,

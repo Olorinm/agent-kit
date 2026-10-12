@@ -25,6 +25,7 @@ These principles guide the project; the alpha does not yet meet them everywhere.
 - Connect product tools and route supported native approvals and structured questions to your UI.
 - Preserve native model loops, tools, transcripts and permission semantics.
 - Expose optional controls such as steering and compaction where supported by each Agent.
+- Query shared capability descriptions and select an embedded adapter through `createAgent()`, while retaining its native methods and options.
 - Keep storage, runtime configuration and product authorization explicit.
 
 Your product owns its UI, accounts, business permissions, memory strategy and data. Agent Host owns the integration with the native Agent. Capabilities differ by Kernel; the [support matrix](docs/kernel-support.md) records those boundaries.
@@ -35,6 +36,8 @@ Your product owns its UI, accounts, business permissions, memory strategy and da
 - **Standalone service:** run `agent-host serve --config host.json` and connect through `@olorinm/agent-host/client`. The service persists tasks and results and routes product-tool and interaction callbacks.
 
 Start with the [installation and API guide](docs/api.md) or the [HTTP service guide](docs/http-service.md). Native installations and authentication are configured separately.
+
+See [capability discovery](docs/capabilities.md) to distinguish implemented operations, setup requirements, native negotiation and missing integrations before presenting features to users.
 
 ## Examples and verification
 

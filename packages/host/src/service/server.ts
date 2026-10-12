@@ -1,3 +1,4 @@
+import { unknownCapabilities } from "../capabilities.js";
 import { randomUUID, timingSafeEqual } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import {
@@ -76,17 +77,37 @@ export async function startAgentHostServer(options: HostServerOptions) {
   };
   const describe = async (
     runtime: ServiceRuntime,
-  ): Promise<RuntimeDescription> => ({
-    id: runtime.id,
-    kernel: runtime.kernel,
-    cwd: runtime.cwd,
-    model: runtime.model,
-    controls: {
-      steer: Boolean(runtime.steer),
-      compact: Boolean(runtime.supportsCompaction),
-    },
-    ...((await runtime.inspect?.()) ?? { available: true }),
-  });
+  ): Promise<RuntimeDescription> => {
+    const capabilities = structuredClone(
+      runtime.capabilities ?? unknownCapabilities(runtime.kernel, "http"),
+    );
+    capabilities.kernel = runtime.kernel;
+    capabilities.mode = "http";
+    for (const [name, enabled] of [
+      ["controls.steer", Boolean(runtime.steer)],
+      ["controls.compact", Boolean(runtime.supportsCompaction)],
+    ] as const) {
+      if (!enabled)
+        capabilities.features[name] = {
+          status: "unsupported",
+          reason: "host_not_integrated",
+        };
+      else if (capabilities.features[name].status === "unknown")
+        capabilities.features[name] = { status: "supported" };
+    }
+    return {
+      id: runtime.id,
+      kernel: runtime.kernel,
+      cwd: runtime.cwd,
+      model: runtime.model,
+      capabilities,
+      controls: {
+        steer: Boolean(runtime.steer),
+        compact: Boolean(runtime.supportsCompaction),
+      },
+      ...((await runtime.inspect?.()) ?? { available: true }),
+    };
+  };
 
   async function execute(task: ActiveRun, input: StartRun) {
     const { record, runtime, controller, broker } = task;

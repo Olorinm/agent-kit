@@ -17,6 +17,7 @@ import {
   type JsonRpcRequestHandler,
 } from "../transport/stdio-json-rpc-client.js";
 import { AcpHostToolBridgeServer } from "./tool-bridge.js";
+import { compactKimi, compactOpenCode } from "./compaction.js";
 
 export type AcpEvent =
   | AgentEvent
@@ -28,6 +29,7 @@ export interface AcpRunRequest {
   instructions: string;
   context?: string;
   input: string | JsonObject[];
+  mode?: "turn" | "compact";
   tools?: ProductTool[];
   mcpServers?: JsonObject[];
   model?: string;
@@ -62,6 +64,8 @@ export interface AcpAgentOptions {
   promptPayload?: "prompt" | "content-and-prompt";
   resumeSessions?: boolean;
   setModelFailure?: "ignore" | "error";
+  /** Select the native compaction implementation; no substitute conversation is created. */
+  compaction?: "opencode" | "kimi";
 }
 
 /** ACP process/session lifecycle extracted from OpenGrove's AcpCliRuntime. */
@@ -233,6 +237,13 @@ export class AcpAgent {
       this.active.set(request.sessionId, controller);
       registered = true;
       signal.throwIfAborted();
+      if (request.mode === "compact" && !this.options.compaction)
+        throw new Error("compaction_unsupported");
+      if (
+        request.mode === "compact" &&
+        (typeof request.input !== "string" || request.input.trim())
+      )
+        throw new Error("compaction_reason_unsupported");
       client = await this.connect();
       this.leases.set(client, (this.leases.get(client) ?? 0) + 1);
       signal.throwIfAborted();
@@ -254,6 +265,8 @@ export class AcpAgent {
           .digest("hex");
       const bindingStore = request.bindings ?? this.bindings;
       const binding = await bindingStore.get(request.sessionId);
+      if (request.mode === "compact" && !binding)
+        throw new Error("session_not_found");
       if (binding && binding.fingerprint !== fingerprint)
         throw new Error("session_configuration_changed");
       const mcpServers = [...(request.mcpServers ?? [])];
@@ -406,6 +419,40 @@ export class AcpAgent {
         imageSupported,
       });
       signal.throwIfAborted();
+      if (request.mode === "compact") {
+        sent = true;
+        const compactSignal = AbortSignal.any([
+          signal,
+          AbortSignal.timeout(this.options.requestTimeoutMs ?? 120_000),
+        ]);
+        const result =
+          this.options.compaction === "kimi"
+            ? await compactKimi({
+                client,
+                sessionId: threadId,
+                signal: compactSignal,
+                timeoutMs: this.options.requestTimeoutMs,
+              })
+            : await compactOpenCode({
+                command: this.options.command,
+                cwd: request.cwd,
+                env: this.options.env,
+                sessionId: threadId,
+                model: request.model,
+                signal: compactSignal,
+              });
+        outcome =
+          result.ok && result.compacted
+            ? { status: "completed" }
+            : {
+                status: "failed",
+                error: result.error ?? "compaction_not_confirmed",
+                // Dispatch occurred; a missing receipt cannot establish that native work stopped.
+                outcomeUnknown: true,
+              };
+        if (outcome.outcomeUnknown) this.retire(client);
+        return;
+      }
       const promptController = new AbortController();
       let grace: ReturnType<typeof setTimeout> | undefined;
       const cancel = () => {

@@ -22,6 +22,8 @@ Native Codex compaction and Kimi structured elicitation have additional live pro
 
 The standalone HTTP service adds a separate consumer path. Its seven-adapter matrix uses deterministic fixtures. A model-backed Codex 0.162.0 probe on macOS also passed through the installed HTTP CLI and independent editor: reject, approve/save, durable operation receipt, process restart and native conversation continuation. This does not certify all seven HTTP profiles or every control against live models. See [HTTP service verification](http-service.md#example-and-verification).
 
+The shared factory is exercised by all seven installed editor fixtures. Capability discovery and OpenCode/Kimi HTTP compaction have protocol and independent installed-consumer coverage, including native binding continuation after service restart. Missing bindings, absent receipts and interrupted compaction have failure-path tests. These additions have not received new live model-backed certification.
+
 ## Upgrade boundaries
 
 - **Pi 1.1 is a storage/API generation change.** New conversations use `pi-durable`. Existing Pi 0.85 JSONL conversations keep the explicit `compat/pi085` adapter and pinned old native engine. There is no invented transcript importer. Remove this compatibility path only after an upstream-supported migration or deliberate retirement of those conversations. Pi 1.1 has no supported native delete API; deletion fails explicitly instead of deleting only a Host binding and pretending the conversation was deleted.

@@ -83,6 +83,14 @@
     "./openclaw/plugin": {
       "types": "./dist/openclaw/plugin.d.ts",
       "import": "./dist/openclaw/plugin.js"
+    },
+    "./adapters": {
+      "types": "./dist/adapters.d.ts",
+      "import": "./dist/adapters.js"
+    },
+    "./capabilities": {
+      "types": "./dist/capabilities.d.ts",
+      "import": "./dist/capabilities.js"
     }
   },
   "bin": {

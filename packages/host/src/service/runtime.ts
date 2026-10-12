@@ -1,6 +1,7 @@
 import type { AgentEvent, InteractionContext, ProductTool } from "../agent.js";
 import type { JsonValue } from "../types.js";
 import type { RuntimeDescription, ServiceEvent } from "./protocol.js";
+import type { AgentCapabilities } from "../capabilities.js";
 
 export interface RuntimeTurn {
   sessionId: string;
@@ -24,6 +25,8 @@ export interface ServiceRuntime {
   model?: string;
   /** Must change when native runtime configuration changes. Contains no credentials. */
   configurationKey: string;
+  /** Omission means unknown support, even if kernel matches a built-in name. */
+  capabilities?: AgentCapabilities;
   run(request: RuntimeTurn): AsyncIterable<ServiceEvent | AgentEvent>;
   steer?(sessionId: string, input: string): Promise<unknown>;
   supportsCompaction?: boolean;

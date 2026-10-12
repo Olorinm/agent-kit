@@ -4,6 +4,12 @@ Reviewed on **2026-10-12**, against `main` commit `270cff8d4e6d546d1387a6ac93ed0
 
 The [core principles](../README.md#core-principles) set two expectations: preserve native capabilities as fully as possible, and make them straightforward for products and people to use. The items below are gaps and proposed acceptance criteria, not claims that these features are already implemented.
 
+## Follow-up implementation
+
+[Issue #13](https://github.com/Olorinm/agent-host/issues/13) adds a [shared capability API](capabilities.md), the typed `createAgent()` factory, and OpenCode/Kimi compaction through the ordinary embedded/HTTP turn lifecycle. The installed editor now uses the factory for all seven Kernels. Capability reports preserve native negotiation and setup conditions and keep unknown custom runtime support explicit. These changes have protocol/installed-consumer coverage, not additional live-model certification.
+
+This addresses the common entry point, initial capability discovery and the ACP HTTP compaction gap below. Interaction helpers, other settings/session operations and onboarding work remain open. The numbered sections retain the original alpha.4 audit as the baseline; follow-up work should update this implementation record.
+
 ## What is already in place
 
 Seven adapters preserve native execution and conversation identity. Products can submit context and tools, observe progress, cancel work and continue a native conversation through embedded adapters or the HTTP service. Native notifications and several extension hooks remain accessible. Failures to resume, unconfirmed cancellation and uncertain outcomes are reported explicitly.
