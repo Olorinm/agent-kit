@@ -10,6 +10,7 @@ import { diagnoseRuntime } from "./diagnostics.js";
 import { terminalInteraction } from "./terminal.js";
 import { routeInteraction } from "../interactions.js";
 import { TaskStore } from "./store.js";
+import { waitForBootstrap } from "./bootstrap.js";
 import { kernels } from "../capabilities.js";
 
 async function main() {
@@ -20,6 +21,7 @@ async function main() {
       port: { type: "string" },
       host: { type: "string" },
       "token-file": { type: "string" },
+      "ready-file": { type: "string" },
       help: { type: "boolean", short: "h" },
       kernel: { type: "string" },
       cwd: { type: "string" },
@@ -40,7 +42,7 @@ async function main() {
   agent-host init --kernel codex [--config host.json] [--cwd .] [--model ID]
   agent-host doctor --config host.json [--native] [--probe]
   agent-host run --config host.json [--runtime ID] [--session ID] [--settings JSON] [--json] "Your task"
-  agent-host serve --config host.json [--host 127.0.0.1] [--port 37420] [--token-file path]
+  agent-host serve --config host.json [--host 127.0.0.1] [--port 37420] [--token-file path] [--ready-file path]
 Native credentials stay in the Kernel's existing configuration. --native starts a native handshake; --probe executes a short model request and may incur provider usage. run prints a session ID to continue later. Noninteractive permission requests are declined.`);
     return;
   }
@@ -76,6 +78,34 @@ Native credentials stay in the Kernel's existing configuration. --native starts 
   }
   if (!["serve", "run", "doctor"].includes(operation ?? ""))
     throw new Error("Unknown command; use agent-host --help");
+  if (values["ready-file"]) {
+    if (
+      operation !== "serve" ||
+      !values["token-file"] ||
+      process.env.AGENT_HOST_TOKEN
+    )
+      throw new Error(
+        "ready_file_requires_serve_and_token_file_without_token_env",
+      );
+    const waiting = new AbortController();
+    const interrupt = () => waiting.abort();
+    process.once("SIGINT", interrupt);
+    process.once("SIGTERM", interrupt);
+    try {
+      await waitForBootstrap(
+        filename,
+        resolve(values["token-file"]),
+        resolve(values["ready-file"]),
+        waiting.signal,
+      );
+    } catch (error) {
+      if (waiting.signal.aborted) return;
+      throw error;
+    } finally {
+      process.removeListener("SIGINT", interrupt);
+      process.removeListener("SIGTERM", interrupt);
+    }
+  }
   const config = configSchema.parse(
     JSON.parse(await readFile(filename, "utf8")),
   );

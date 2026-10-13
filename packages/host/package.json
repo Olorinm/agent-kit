@@ -33,7 +33,8 @@
     "examples/react-editor/editor.css",
     "examples/react-editor/index.html",
     "examples/react-editor/README.md",
-    "examples/react-editor/server.mjs"
+    "examples/react-editor/server.mjs",
+    "examples/cloud"
   ],
   "exports": {
     "./server": {

@@ -58,3 +58,5 @@ npx agent-host serve --config host.json
 ```
 
 The service prints its URL and token-file location. Your product uses `AgentHostClient`, or embeds `createAgent()` in its backend. See the [common API](common-api.md), [HTTP guide](http-service.md) and [capabilities](capabilities.md). OpenClaw's current product-tool callback bridge requires a local Gateway. Remote workspace/sandbox provisioning belongs to your deployment environment.
+
+For cloud images that start before configuration is available, use the [configuration-gated entrypoint](../examples/cloud/README.md). It waits for a complete private bundle and then starts this same HTTP service.
