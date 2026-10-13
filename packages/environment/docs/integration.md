@@ -8,9 +8,11 @@ Do not put cloud keys or all tenants' environment refs inside an agent runtime. 
 
 Images may contain any runtime and shared tools such as lark-cli. Start long-running Host processes using the image's supervisor/entrypoint; `exec` is a command stream, not a distributed supervisor. Put Host state, kernel session files and user workspace data on explicitly durable paths. Bootstrap after a resume must be idempotent because process memory need not survive.
 
-The module and CLI are implemented here. Router onboarding and Host bootstrap are being integrated in their own repositories; this package does not claim those product flows have already been deployed. The trusted Router can use `provider.httpEndpoint(id, port)` to reach Host with its separate per-Agent token. Host images can wait for a verified private configuration bundle before listening; the image/platform owns process restart supervision.
+Router onboarding ([PR #49](https://github.com/Olorinm/agent-router/pull/49)) and Host bootstrap ([PR #25](https://github.com/Olorinm/agent-host/pull/25)) are merged. A Volcengine deployment now uses this module for the complete CLI onboarding flow; see [verification](verification.md) for the actual acceptance scope and [deployment](deployment.md) for the operator recipe. The trusted Router can use `provider.httpEndpoint(id, port)` to reach Host with its separate per-Agent token. Host images can wait for a verified private configuration bundle before listening; the image/platform owns process restart supervision.
 
 ## OMA
+
+This repository supplies a compatibility bridge; OMA itself has not been modified and no upstream integration PR has been submitted. The implementation uses the official E2B SDK and was informed by OMA's interfaces, rather than extracted from OMA source. The package is installed from a built archive and is not yet published to npm.
 
 Keep OMA's `DefaultSandboxManager`, database bindings, idle lifecycle, native filesystem and workspace ownership checks. Replace its low-level `SandboxClient` dependency with `createOmaSandboxClient` from this package's `/oma` export.
 

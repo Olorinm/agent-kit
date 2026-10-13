@@ -5,7 +5,7 @@
   "type": "module",
   "license": "Apache-2.0",
   "engines": { "node": ">=24" },
-  "files": ["dist", "README.md", "README.zh-CN.md", "LICENSE", "NOTICE", "docs", "examples"],
+  "files": ["dist", "README.md", "README.zh-CN.md", "LICENSE", "NOTICE", "docs", "examples", "scripts/private-tcp-forward.mjs"],
   "exports": {
     ".": { "types": "./dist/index.d.ts", "import": "./dist/index.js" },
     "./oma": { "types": "./dist/oma.d.ts", "import": "./dist/oma.js" }

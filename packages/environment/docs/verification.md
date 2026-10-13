@@ -22,3 +22,27 @@ The run exposed three provider details now handled by the module: VCI's string `
 Do not read the adapter capability table as a cloud acceptance report. Use `npm run probe` against a real endpoint and a template with a durable writable directory. It records the environment ID immediately, checks exec/files/list/pause/resume and destroys the created environment in `finally`. A failed create may have succeeded remotely; reconcile using its probe metadata before retrying.
 
 The probe destroys its sandbox, not an existing VKE/ACS cluster, volume, template or gateway. Foundation resources and retained cloud snapshots require separate cleanup and verification. After this acceptance run, cloud queries confirmed removal of the disposable cluster, load balancer, public IP, two security groups, four retained snapshots and image cache. The temporary IAM key was disabled and deleted, and its user and custom policy were deleted. The pre-existing network and five authorized official VKE service roles were retained. The local diagnostic proxy was stopped.
+
+## Router → Environment → Host acceptance
+
+On 2026-10-13 the merged Router and Host integration was deployed against a new
+persistent Volcengine VKE/VCI service. This is separate from the disposable probe
+above. The operator's existing account created a new Agent through
+`agent-router setup NAME --environment PROFILE`; the image started Host after
+Router uploaded the private configuration bundle. An actual Codex 0.162.0 process
+using model `gpt-6.1-sol` completed a Router task with a shell-written marker file.
+
+CLI pause reached `paused` and the original pod was removed. Resume retained the
+same sandbox ID, created a new pod, and restored the Host/native state and file.
+A second Router task in the original context read the unchanged marker through a
+shell tool and recalled the phrase from the first turn. This verifies actual
+model execution and native conversation continuation, beyond HTTP readiness.
+The image also contains lark-cli 1.0.97; no Lark account or channel was added to
+this new Agent as part of acceptance.
+
+The production environment uses a private registry image by digest, automatic
+registry pull-credential refresh, private control/data gateways and a restricted
+SSH tunnel. User-specific native login state and per-Agent Host tokens are
+injected privately; they are absent from the image, repository and package.
+These resources remain deployed. Alibaba and OSS/TOS mount attestation remain
+outside this acceptance scope. See [deployment.md](deployment.md).
