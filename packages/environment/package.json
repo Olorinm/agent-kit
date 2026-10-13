@@ -1,0 +1,24 @@
+{
+  "name": "@olorinm/agent-environment",
+  "version": "0.1.0-alpha.1",
+  "description": "Kernel-independent execution environments for Alibaba Cloud and Volcengine",
+  "type": "module",
+  "license": "Apache-2.0",
+  "engines": { "node": ">=24" },
+  "files": ["dist", "README.md", "README.zh-CN.md", "LICENSE", "NOTICE", "docs", "examples"],
+  "exports": {
+    ".": { "types": "./dist/index.d.ts", "import": "./dist/index.js" },
+    "./oma": { "types": "./dist/oma.d.ts", "import": "./dist/oma.js" }
+  },
+  "bin": { "agent-environment": "dist/cli.js" },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "npm run build && node --test test/*.test.mjs",
+    "test:package": "node scripts/test-package.mjs",
+    "test:oma": "node scripts/test-oma.mjs",
+    "probe": "npm run build && node scripts/probe.mjs",
+    "prepack": "npm run build"
+  },
+  "dependencies": { "e2b": "2.24.0" },
+  "devDependencies": { "@types/node": "24.10.1", "typescript": "5.9.3" }
+}

@@ -1,0 +1,24 @@
+# Verification
+
+## Automated checks
+
+`npm test` passes 19 checks covering both provider adapters, real local command execution and the official E2B SDK against a loopback HTTP fixture. It checks argument quoting, cancellation, nonzero exit, binary files, explicit reconnect, error handling, lifecycle request bodies, authentication, pagination and disk flushing before a VCI snapshot. The HTTP fixture exercises control-plane calls; envd execution is covered separately and by the live probe.
+
+`npm run test:package` installs an actual tarball into a clean consumer and checks both public exports and the CLI. `npm run test:oma -- CHECKOUT` verifies the original OMA interface and native filesystem rather than a copied approximation.
+
+## Live cloud acceptance
+
+| Provider | Status |
+| --- | --- |
+| Alibaba | Credentials deferred by the owner. OMA's prior Alibaba deployment is reference evidence, not a live test of this new module. |
+| Volcengine | Passed on 2026-10-13 using VKE v1.36.1, agent-sandbox v0.4.6-vke.6 and envd 0.2.10. |
+
+The complete Volcengine probe passed create → exact binary write/read → command execution → filtered list → disk flush and pause → reconnect from a new client using the same ID → compare restored bytes → remove file → destroy and confirm missing. Kubernetes events confirmed the original pod was removed and a new pod created during resume.
+
+Separate live checks passed stdout/stderr separation, exit code 7, quoted/empty/Unicode/newline arguments, recursive file listing and command cancellation with an observed remote exit. The live run used a vendor Debian image with a test entrypoint, not an installed Codex/Pi agent, and verified container filesystem snapshots rather than OSS/TOS/NAS mount attestation.
+
+The run exposed three provider details now handled by the module: VCI's string `NOT_FOUND` error code, reconnect not extending a running sandbox's lifetime, and flushing disk writes before a snapshot. Deployment findings are in [providers.md](providers.md): regional image reachability and the Kubernetes proxy's stripped username header. Credentials and raw operational reports remain outside version control and the npm package.
+
+Do not read the adapter capability table as a cloud acceptance report. Use `npm run probe` against a real endpoint and a template with a durable writable directory. It records the environment ID immediately, checks exec/files/list/pause/resume and destroys the created environment in `finally`. A failed create may have succeeded remotely; reconcile using its probe metadata before retrying.
+
+The probe destroys its sandbox, not an existing VKE/ACS cluster, volume, template or gateway. Foundation resources and retained cloud snapshots require separate cleanup and verification. After this acceptance run, cloud queries confirmed removal of the disposable cluster, load balancer, public IP, two security groups, four retained snapshots and image cache. The temporary IAM key was disabled and deleted, and its user and custom policy were deleted. The pre-existing network and five authorized official VKE service roles were retained. The local diagnostic proxy was stopped.

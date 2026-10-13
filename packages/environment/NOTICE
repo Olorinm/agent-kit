@@ -1,0 +1,14 @@
+Agent Environment
+Copyright 2026 Agent Environment contributors.
+
+Uses the official E2B JavaScript SDK (MIT license).
+
+OMA's SandboxClient and SandboxManager boundaries informed the interoperability
+adapter and acceptance cases:
+https://github.com/BroZhong/open-managed-agents
+Reference revision: e04695152219a91c2ecdff41955dfc3fab73b438
+
+No OMA source files are vendored. OMA-specific workspace attestation and native
+filesystem operations remain supplied by OMA through its existing implementations.
+The reference checkout contains no repository license file; this package does
+not relicense or redistribute that repository.
