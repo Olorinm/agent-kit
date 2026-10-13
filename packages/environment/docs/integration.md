@@ -1,6 +1,6 @@
 # Integration
 
-## Agent Host / Router
+## Mau / Agent Host / Router
 
 An upper-level provisioning operation resolves the authenticated user's permitted provider and template, creates an environment, persists `{provider,id}` against the Agent, starts Agent Host inside that environment, then binds its runtime identity to Router. Reconnect uses that persisted ID. Agent Host continues to own native agent execution and sessions.
 
@@ -8,7 +8,11 @@ Do not put cloud keys or all tenants' environment refs inside an agent runtime. 
 
 Images may contain any runtime and shared tools such as lark-cli. Start long-running Host processes using the image's supervisor/entrypoint; `exec` is a command stream, not a distributed supervisor. Put Host state, kernel session files and user workspace data on explicitly durable paths. Bootstrap after a resume must be idempotent because process memory need not survive.
 
-Router onboarding ([PR #49](https://github.com/Olorinm/agent-router/pull/49)) and Host bootstrap ([PR #25](https://github.com/Olorinm/agent-host/pull/25)) are merged. A Volcengine deployment now uses this module for the complete CLI onboarding flow; see [verification](verification.md) for the actual acceptance scope and [deployment](deployment.md) for the operator recipe. The trusted Router can use `provider.httpEndpoint(id, port)` to reach Host with its separate per-Agent token. Host images can wait for a verified private configuration bundle before listening; the image/platform owns process restart supervision.
+Product orchestration now belongs to [Mau](https://github.com/Olorinm/mau): environment profiles, allocation journals, private Host bootstrap, Agent/environment bindings and lifecycle operations. Router supplies account ownership, channel connections and task delivery through its public embedding API. Environment remains independent of both products' account and database models.
+
+Mau can use `provider.httpEndpoint(id, port)` to reach Host with a separate per-Agent token. Host images wait for a verified private configuration bundle before listening; the image/platform owns process restart supervision. See [Mau environment setup](https://github.com/Olorinm/mau/blob/main/docs/environments.md) for the current product recipe.
+
+The [verification report](verification.md) records the live acceptance of the earlier Router-hosted integration. That historical evidence does not establish deployment of the new Mau composition. [Deployment](deployment.md) describes the independently managed sandbox foundation.
 
 ## OMA
 

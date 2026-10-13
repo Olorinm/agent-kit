@@ -24,7 +24,7 @@ Agent Environment
 
 镜像、CPU、内存、网络和持久化目录由云端**模板**定义。环境里运行 Codex、Pi、Claude Code 还是其他内核，由调用方的镜像或启动命令决定。
 
-这是独立库和运维 CLI。账号、用户归属、配额、Agent 绑定与调度仍由上层负责；本模块不负责搭建 VKE/ACS 底座。Router 已接上用户开通和 Host 自动启动，见[接入说明](docs/integration.md)。
+这是独立库和运维 CLI。账号、用户归属、配额、Agent 绑定与调度仍由上层负责；本模块不负责搭建 VKE/ACS 底座。[Mau](https://github.com/Olorinm/mau) 负责产品开通和 Host 自动启动，见[接入说明](docs/integration.md)。
 
 ## 开始使用
 

@@ -24,7 +24,7 @@ Agent Environment
 
 Choose the image, CPU, memory, network and durable mounts in the cloud **template**. Choose Codex, Pi, Claude Code, or another runtime in that image or in your own bootstrap command. This module does not choose an agent kernel.
 
-This is a library and operator CLI. Product login, ownership checks, quotas, durable agent bindings and scheduling belong to the caller. It does not provision the cloud's VKE/ACS foundation. Agent Router now provides the user onboarding and Host startup integration described in [integration.md](docs/integration.md).
+This is a library and operator CLI. Product login, ownership checks, quotas, durable agent bindings and scheduling belong to the caller. It does not provision the cloud's VKE/ACS foundation. [Mau](https://github.com/Olorinm/mau) owns the product onboarding and Host startup integration described in [integration.md](docs/integration.md).
 
 ## Try it
 
