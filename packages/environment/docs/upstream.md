@@ -19,7 +19,9 @@ them, so neither Mau nor this package depends on OMA's database implementation.
 - Reject invalid argv/environment keys before shell interpolation, and recognize
   missing files by typed errors/ENOENT so DNS and gateway failures stay uncertain.
 - Export existing mount/filesystem helpers for consumers that previously imported
-  OMA's private source paths. No old `/oma` bridge remains.
+  OMA's private source paths. `/oma` is an optional structural adapter for
+  consumers supplying an EnvironmentProvider; the primary provider runtime
+  continues to use OMA's extracted implementation directly.
 
 The E2B 2.24.0 patch is copied verbatim. Build applies it to an isolated SDK copy
 and bundles that runtime into the archive, including its MIT license. Installation

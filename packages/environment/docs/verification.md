@@ -2,9 +2,9 @@
 
 ## Automated checks
 
-`npm test` passes 19 checks covering both provider adapters, real local command execution and the official E2B SDK against a loopback HTTP fixture. It checks argument quoting, cancellation, nonzero exit, binary files, explicit reconnect, error handling, lifecycle request bodies, authentication, pagination and disk flushing before a VCI snapshot. The HTTP fixture exercises control-plane calls; envd execution is covered separately and by the live probe.
+`npm test` runs the 119 extracted OMA sandbox tests and provider/workspace checks covering both provider adapters, real local command execution and the official E2B SDK against a loopback HTTP fixture. It checks argument quoting, cancellation, nonzero exit, binary files, explicit reconnect, error handling, lifecycle request bodies, authentication, pagination and disk flushing before a VCI snapshot. The HTTP fixture exercises control-plane calls; envd execution is covered separately and by the live probe.
 
-`npm run test:package` installs an actual tarball into a clean consumer and checks both public exports and the CLI. `npm run test:oma -- CHECKOUT` verifies the original OMA interface and native filesystem rather than a copied approximation.
+`npm run test:package` installs an actual tarball into a clean consumer and checks both public exports and the CLI. `npm run test:workspace:oma -- CHECKOUT` verifies the original OMA interface and native filesystem rather than a copied approximation.
 
 ## Live cloud acceptance
 
@@ -46,3 +46,17 @@ SSH tunnel. User-specific native login state and per-Agent Host tokens are
 injected privately; they are absent from the image, repository and package.
 These resources remain deployed. Alibaba and OSS/TOS mount attestation remain
 outside this acceptance scope. See [deployment.md](deployment.md).
+
+## Shared TOS workspace acceptance — 2026-10-14
+
+A separate live run on the persistent VKE/VCI service passed both actual CSI
+mount attestations, two-container binary/Unicode/percent-literal file sharing,
+owner-prefix isolation, public signed download, same-ID pause/resume preserving
+both private snapshot and shared bytes, and object survival after destroying
+both sandboxes. Both test environments were removed. Retained test volumes,
+templates and snapshots are tracked separately in private operational reports.
+
+This checks real TOS storage and VCI mounts with the Host image (including Python
+3), but does not itself run an LLM turn. The script is
+`scripts/probe-workspace.mjs`; private reports and cloud credentials are excluded
+from the package and Git. Runtime dependency audit reports no known vulnerabilities.

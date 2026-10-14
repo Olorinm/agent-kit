@@ -23,7 +23,8 @@ Agent Environment
 - Create, inspect, list, resume, pause, extend lifetime, and destroy environments.
 - Execute argv commands with streaming stdout/stderr, observed exit status, and cancellation.
 - Read and write exact file bytes; recursively list files.
-- Adapt to OMA's `SandboxClient`, retaining its native filesystem and workspace verification.
+- Reuse OMA's native sandbox implementation and workspace verification.
+- Share persistent workspace files through OSS or Volcengine TOS; see [workspaces](docs/workspaces.md).
 
 Choose the image, CPU, memory, network and durable mounts in the cloud **template**. Choose Codex, Pi, Claude Code, or another runtime in that image or in your own bootstrap command. This module does not choose an agent kernel.
 
