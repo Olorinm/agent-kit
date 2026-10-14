@@ -3,10 +3,9 @@ import assert from 'node:assert/strict';
 import { mkdtemp, rm, symlink } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { createAlibabaProvider, createVolcengineProvider, ExecutionAbortedBeforeStart, EnvironmentManager } from '../dist/index.js';
-import { createOmaSandboxClient } from '../dist/oma.js';
+import { createAlibabaProvider, createVolcengineProvider, ExecAbortedBeforeStartError, EnvironmentManager } from '../dist/index.js';
 import { fixture, collect } from './fixture.mjs';
-import { SandboxError } from 'e2b';
+import { SandboxError } from '../dist/sdk.js';
 
 function setup(factory = createAlibabaProvider) {
   const f = fixture();
@@ -35,12 +34,13 @@ test('provider capabilities reject unsupported lifecycle and foreign mounts befo
   const {provider:p, calls} = setup(createVolcengineProvider);
   await assert.rejects(p.create({template:'node',onTimeout:'pause'}), {code:'unsupported_capability'});
   await assert.rejects(p.create({template:'node',metadata:{'e2b.agents.kruise.io/csi-volume-config':'{}'}}), {code:'foreign_metadata'});
+  await assert.rejects(p.create({template:'registry/image:tag'}), {code:'invalid_template'});
   assert.equal(calls.length,0);
 });
 test('Volcengine flushes completed writes before pause and refuses an unsuccessful flush', async () => {
   const f=setup(createVolcengineProvider);const {id}=await f.provider.create({template:'node'});
   await f.provider.pause(id);
-  assert.ok(f.calls.findIndex(c=>c[0]==='exec'&&c[1]==="exec -- 'sync'") < f.calls.findIndex(c=>c[0]==='pause'));
+  assert.ok(f.calls.findIndex(c=>c[0]==='exec'&&c[1]==="exec 'sync'") < f.calls.findIndex(c=>c[0]==='pause'));
   await f.provider.pause(id);assert.equal(f.calls.filter(c=>c[0]==='pause').length,1);
   const bad=setup(createVolcengineProvider),create=bad.driver.create;
   bad.driver.create=async(...args)=>{const h=await create(...args);return {...h,commands:{run:async()=>({wait:async()=>({exitCode:1}),kill:async()=>true,disconnect:async()=>{}})}};};
@@ -84,13 +84,13 @@ test('argv fidelity, output separation, nonzero exit, and disabled timeout', asy
 });
 test('pre-abort starts nothing; mid-stream abort kills and observes exit', async () => {
   const f=setup(),p=f.provider;const {id}=await p.create({template:'node'});
-  await assert.rejects(collect(p.exec(id,['true'],{signal:AbortSignal.abort()})),ExecutionAbortedBeforeStart);
+  await assert.rejects(collect(p.exec(id,['true'],{signal:AbortSignal.abort()})),ExecAbortedBeforeStartError);
   assert.equal(f.calls.some(c=>c[0]==='exec'),false);
   let exit; const controller=new AbortController();
   await assert.rejects(async()=>{
     for await(const chunk of p.exec(id,[process.execPath,'-e','console.log("ready");setInterval(()=>{},1000)'],{signal:controller.signal,onExit:e=>exit=e})) controller.abort();
   },{name:'AbortError'});
-  assert.equal(f.running.size,0);assert.equal(typeof exit.exitCode,'number');assert.equal(p.hasUncertainExecution(id),false);
+  assert.equal(f.running.size,0);assert.deepEqual(exit,{exitCode:null,signal:'SIGKILL'});assert.equal(p.hasUncertainExecution(id),false);
 });
 test('abandoning output cancels process; transport loss marks uncertain without synthetic exit', async () => {
   const f=setup(),p=f.provider;const {id}=await p.create({template:'node'});
@@ -135,21 +135,6 @@ test('cancel acknowledgement without observed exit has a bounded wait',async t=>
   t.mock.timers.tick(10_001);
   await assert.rejects(result,{code:'execution_unknown'});assert.equal(exit,undefined);
 });
-test('OMA preserves trusted mount coordinates, filesystem hooks and cancellation class', async () => {
-  const {provider}=setup();let checks=[];
-  class OmaAbort extends Error {}
-  const oma=createOmaSandboxClient({provider,defaultTemplate:'node',fileSystem:b=>b,abortedBeforeStart:()=>new OmaAbort(),
-    mapCreate:r=>({...r,metadata:{cloud:'mapped'}}),verifyWorkspaceMount:async(ref,target,metadata)=>{checks.push({...metadata});}});
-  const {id}=await oma.create({metadata:{owner:'a'}});await oma.verifyWorkspaceMount(id,{mountPath:'/w',bucket:'b',prefix:'a/'});
-  await oma.reconnect(id,{owner:'a'});await oma.verifyWorkspaceMount(id,{mountPath:'/w',bucket:'b',prefix:'a/'});
-  assert.deepEqual(checks,[{owner:'a'},{owner:'a'}]);
-  assert.equal(oma.fileSystem(id),oma.fileSystem(id));
-  await assert.rejects(collect(oma.exec(id,['true'],{signal:AbortSignal.abort()})),OmaAbort);
-  await assert.rejects(oma.verifyWorkspaceMount('other',{}),{code:'unbound_environment'});
-  assert.throws(()=>new EnvironmentManager([provider,provider]),{code:'duplicate_provider'});
-});
-
-
 test('application endpoints use SDK host and traffic token, never cloud/envd credentials', async () => {
   const f = fixture();
   const provider = createVolcengineProvider({id: 'volc', apiKey: 'private-cloud-key', domain: 'fixture', driver: f.driver});
@@ -164,4 +149,36 @@ test('application endpoints use SDK host and traffic token, never cloud/envd cre
   assert.equal(routed.headers['E2b-Sandbox-Id'], ref.id);
   assert.equal(routed.headers['E2b-Sandbox-Port'], '37420');
   assert.equal(routed.headers.Authorization, undefined);
+});
+
+test('Alibaba inherits OMA finite lifecycle defaults; Volcengine receives only its policy', async () => {
+  const ali=setup(),volc=setup(createVolcengineProvider);
+  await ali.provider.create({template:'node'});await volc.provider.create({template:'node'});
+  const a=ali.calls.find(c=>c[0]==='create')[2],v=volc.calls.find(c=>c[0]==='create')[2];
+  assert.equal(a.timeoutMs,86400000);
+  assert.deepEqual(a.lifecycle,{onTimeout:'pause',autoResume:false});
+  assert.equal(a.metadata['e2b.agents.kruise.io/reserve-paused-sandbox-duration'],'24h');
+  assert.equal(a.metadata['e2b.agents.kruise.io/claim-timeout-seconds'],'150');
+  assert.equal(a.metadata['e2b.agents.kruise.io/wait-ready-timeout-seconds'],'150');
+  assert.deepEqual(v.metadata,{});assert.deepEqual(v.lifecycle,{onTimeout:'kill',autoResume:false});
+});
+test('OMA stream bounds raw output, cancels the late process and preserves observed termination', async () => {
+  const f=setup();let killed=0,settle,exit;
+  f.driver.create=async()=>({sandboxId:'overflow',commands:{run:async(_cmd,opts)=>{
+    opts.onStdoutBytes(new Uint8Array(9*1024*1024));
+    const wait=new Promise(resolve=>settle=resolve);
+    return {wait:()=>wait,kill:async()=>{killed++;settle({exitCode:137});return true;},disconnect:async()=>{}};
+  }}});
+  await f.provider.create({template:'node'});
+  await assert.rejects(collect(f.provider.exec('overflow',['true'],{onExit:e=>exit=e})),{code:'execution_unknown'});
+  assert.equal(killed,1);assert.deepEqual(exit,{exitCode:null,signal:'SIGKILL'});
+  assert.equal(f.provider.hasUncertainExecution('overflow'),false);
+});
+
+test('file removal never converts DNS or gateway failures into successful absence', async () => {
+  const f=setup(),create=f.driver.create;
+  f.driver.create=async(...args)=>{const h=await create(...args);h.files.remove=async()=>{throw new Error('getaddrinfo ENOTFOUND gateway');};return h;};
+  const {id}=await f.provider.create({template:'node'});
+  await assert.rejects(f.provider.removeFile(id,'/file'),{code:'file_operation_unknown',outcomeUnknown:true});
+  assert.equal(f.provider.hasUncertainExecution(id),true);
 });

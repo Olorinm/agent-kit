@@ -1,0 +1,358 @@
+--- a/src/sandbox/provision-source.ts
++++ b/src/sandbox/provision-source.ts
+@@ -1,5 +1,5 @@
+ import { posix } from "node:path";
+-import type { SkillArtifactStore } from "@oma-server/store";
++import type { SkillArtifactStore } from "../contracts/index.js";
+ import type { SandboxExecChunk, SandboxExecOptions } from "./sandbox-client.js";
+ import type { SandboxFsAccess } from "./sandbox-client.js";
+ 
+--- a/src/sandbox/sandbox-file-system.ts
++++ b/src/sandbox/sandbox-file-system.ts
+@@ -3,7 +3,7 @@
+   ToolFileStat,
+   ToolFileSystem,
+   ToolFileSystemOptions,
+-} from "@open-managed-agents/adapter-core";
++} from "../contracts/tool-executor.js";
+ import type { SandboxExecChunk, SandboxExecOptions } from "./sandbox-client.js";
+ 
+ const RESPONSE_PREFIX = "\u001eoma-fs:";
+--- a/src/sandbox/fake-sandbox-client.ts
++++ b/src/sandbox/fake-sandbox-client.ts
+@@ -1,4 +1,4 @@
+-import { SANDBOX_WORKSPACE_ROOT, ExecAbortedBeforeStartError } from "@open-managed-agents/adapter-core";
++import { SANDBOX_WORKSPACE_ROOT, ExecAbortedBeforeStartError } from "../contracts/tool-executor.js";
+ import {
+   WorkspaceMountUnavailable,
+   type WorkspaceMountTarget,
+--- a/src/sandbox/workspace-mount.ts
++++ b/src/sandbox/workspace-mount.ts
+@@ -1,4 +1,4 @@
+-import { workspaceObjectPrefix } from "@oma-server/store";
++import { workspaceObjectPrefix } from "../contracts/index.js";
+ 
+ /** Host-owned infrastructure recipe; never populated from browser mount paths. */
+ export interface WorkspaceMountSpec {
+--- a/src/sandbox/sandbox-manager.ts
++++ b/src/sandbox/sandbox-manager.ts
+@@ -5,11 +5,11 @@
+   ToolExecutor,
+   ToolFileSystem,
+   ToolFileSystemOptions,
+-} from "@open-managed-agents/adapter-core";
+-import { SANDBOX_WORKSPACE_ROOT, ExecAbortedBeforeStartError } from "@open-managed-agents/adapter-core";
++} from "../contracts/tool-executor.js";
++import { SANDBOX_WORKSPACE_ROOT, ExecAbortedBeforeStartError } from "../contracts/tool-executor.js";
+ import { SANDBOX_RUNNING_SECONDS, SANDBOX_IDLE_SECONDS } from "./sandbox-client.js";
+ import type { SandboxClient, SandboxFsAccess } from "./sandbox-client.js";
+-import type { SandboxActivity, SandboxLifecycleStore } from '@oma-server/store';
++import type { SandboxActivity, SandboxLifecycleStore } from '../contracts/index.js';
+ import { setTimeout as delay } from 'node:timers/promises';
+ import {
+   assertProjectionOutsideWorkspace,
+--- a/src/sandbox/e2b-sandbox-client.ts
++++ b/src/sandbox/e2b-sandbox-client.ts
+@@ -7,8 +7,8 @@
+   WorkspaceMountUnavailable,
+   type WorkspaceMountTarget,
+ } from "./workspace-mount.js";
+-import { ExecAbortedBeforeStartError, SANDBOX_WORKSPACE_ROOT } from "@open-managed-agents/adapter-core";
+-import type { ToolFileSystem } from "@open-managed-agents/adapter-core";
++import { ExecAbortedBeforeStartError, SANDBOX_WORKSPACE_ROOT } from "../contracts/tool-executor.js";
++import type { ToolFileSystem } from "../contracts/tool-executor.js";
+ import { createSandboxFileSystem } from "./sandbox-file-system.js";
+ import { SANDBOX_RUNNING_SECONDS } from "./sandbox-client.js";
+ import type {
+@@ -82,7 +82,7 @@
+     metadata?: Record<string, string>;
+     envs?: Record<string, string>;
+     timeoutMs?: number;
+-    lifecycle: { onTimeout: "pause"; autoResume: false };
++    lifecycle: { onTimeout: "pause" | "kill"; autoResume: false };
+     requestTimeoutMs: number;
+   },
+ ) => Promise<E2BSandbox>;
+@@ -141,7 +141,7 @@
+   private readonly verifyWorkspaceProbe: E2BSandboxClientOptions["verifyWorkspaceProbe"];
+   private readonly creationMetadata = new Map<string, Record<string, string>>();
+   /** id -> live sandbox handle, so subsequent ops resolve the instance. */
+-  private readonly sandboxes = new Map<string, E2BSandbox>();
++  protected readonly sandboxes = new Map<string, E2BSandbox>();
+   private readonly fileSystems = new Map<string, ToolFileSystem>();
+ 
+   fileSystem(id: string): ToolFileSystem {
+@@ -185,7 +185,7 @@
+         'e2b.agents.kruise.io/claim-timeout-seconds': '150',
+         'e2b.agents.kruise.io/wait-ready-timeout-seconds': '150',
+       },
+-      lifecycle: { onTimeout: 'pause', autoResume: false },
++      lifecycle: { onTimeout: opts.onTimeout ?? 'pause', autoResume: false },
+       ...(opts.env ? { envs: opts.env } : {}),
+       timeoutMs: (opts.timeoutSeconds ?? SANDBOX_RUNNING_SECONDS) * 1000,
+     });
+@@ -391,11 +391,11 @@
+     await this.setSandboxTimeout(id, seconds * 1000);
+   }
+ 
+-  async reconnect(id: string, metadata: Record<string, string>): Promise<boolean> {
++  async reconnect(id: string, metadata: Record<string, string>, options: { timeoutSeconds?: number } = {}): Promise<boolean> {
+     let sandbox: E2BSandbox;
+     try {
+       sandbox = await this.connectSandbox(id, {
+-        apiKey: this.apiKey, domain: this.domain, requestTimeoutMs: this.requestTimeoutMs, timeoutMs: SANDBOX_RUNNING_SECONDS * 1000,
++        apiKey: this.apiKey, domain: this.domain, requestTimeoutMs: this.requestTimeoutMs, timeoutMs: (options.timeoutSeconds ?? SANDBOX_RUNNING_SECONDS) * 1000,
+       });
+     } catch (error) {
+       if (error instanceof SandboxNotFoundError) { this.forget(id); return false; }
+@@ -476,6 +476,9 @@
+   },
+ ): AsyncIterable<SandboxExecChunk> {
+   const queue: SandboxExecChunk[] = [];
++  let queuedBytes = 0;
++  let overflow: Error | undefined;
++  let cancelDeadline: ReturnType<typeof setTimeout> | undefined;
+   let resolveNext: (() => void) | undefined;
+   let done = false;
+   let error: Error | undefined;
+@@ -502,6 +505,10 @@
+     if (!handle || killPromise) return;
+     // Do not pass the aborted turn signal to the kill request. Its transport
+     // must remain usable until the remote process has actually stopped.
++    cancelDeadline = setTimeout(() => {
++      killError = new Error("Remote exit was not observed after cancellation");
++      reportKillFailure({ reason: killError });
++    }, 10_000);
+     killPromise = handle.kill().then(
+       (didKill) => { killed = didKill; },
+       (reason: unknown) => {
+@@ -517,11 +524,23 @@
+       r();
+     }
+   };
++  const enqueue = (chunk: SandboxExecChunk) => {
++    const size = (chunk.bytes?.byteLength ?? 0) + Buffer.byteLength(chunk.text);
++    if (overflow) return;
++    if (queuedBytes + size > 8 * 1024 * 1024) {
++      overflow = new Error("Command output queue exceeded 8 MiB");
++      cancel();
++      return;
++    }
++    queuedBytes += size;
++    queue.push(chunk);
++    wake();
++  };
+   const push = (stream: "stdout" | "stderr") => (data: string) => {
+     // The patched SDK invokes its raw callback before the legacy text callback.
+     // Test/legacy transports that only provide text still retain their surface.
+     if (rawStreams.has(stream)) return;
+-    queue.push({ stream, text: data });
++    enqueue({ stream, text: data });
+     wake();
+   };
+   const rawStreams = new Set<"stdout" | "stderr">();
+@@ -532,7 +551,7 @@
+   const pushBytes = (stream: "stdout" | "stderr") => (data: Uint8Array) => {
+     rawStreams.add(stream);
+     const bytes = new Uint8Array(data);
+-    queue.push({ stream, bytes, text: decoders[stream].decode(bytes, { stream: true }) });
++    enqueue({ stream, bytes, text: decoders[stream].decode(bytes, { stream: true }) });
+     wake();
+   };
+ 
+@@ -559,7 +578,7 @@
+       );
+       if (cancelRequested) cancel();
+       const outcome = await Promise.race([waiting, killFailure]);
+-      await killPromise;
++      await Promise.race([killPromise, killFailure]);
+       if (killError) throw killError;
+       if (cancelRequested && killed && ('result' in outcome || isCommandExitError(outcome.reason))) {
+         exitResult = { exitCode: null, signal: "SIGKILL" };
+@@ -584,9 +603,11 @@
+       if (exitResult) {
+         for (const stream of rawStreams) {
+           const text = decoders[stream].decode();
+-          if (text) queue.push({ stream, text, bytes: new Uint8Array() });
++          if (text) enqueue({ stream, text, bytes: new Uint8Array() });
+         }
+       }
++      clearTimeout(cancelDeadline);
++      error = overflow ?? error;
+       done = true;
+       wake();
+     }
+@@ -595,7 +616,9 @@
+   try {
+     while (true) {
+       if (queue.length > 0) {
+-        yield queue.shift()!;
++        const chunk = queue.shift()!;
++        queuedBytes -= (chunk.bytes?.byteLength ?? 0) + Buffer.byteLength(chunk.text);
++        yield chunk;
+         continue;
+       }
+       if (done) {
+@@ -624,8 +647,9 @@
+ }
+ 
+ function isMissingFileError(error: unknown): boolean {
+-  const message = error instanceof Error ? error.message : String(error);
+-  return /not[ -]?found|no such file|404/i.test(message);
++  // Transport/DNS failures and a missing Sandbox are not a missing file.
++  return error instanceof FileNotFoundError ||
++    !!error && typeof error === "object" && "code" in error && error.code === "ENOENT";
+ }
+ 
+ /**
+@@ -636,6 +660,10 @@
+   command: string[],
+   opts?: SandboxExecOptions,
+ ): string {
++  if (command.some(value => typeof value !== "string" || value.includes("\0")) || !command[0])
++    throw new Error("Invalid command argv");
++  if (opts?.env && Object.entries(opts.env).some(([key, value]) => !/^[A-Za-z_][A-Za-z0-9_]*$/.test(key) || value.includes("\0")))
++    throw new Error("Invalid command environment");
+   const parts: string[] = [];
+   if (opts?.cwd) {
+     parts.push(`cd ${shellQuote(opts.cwd)}`);
+--- a/src/sandbox/index.ts
++++ b/src/sandbox/index.ts
+@@ -54,3 +54,7 @@
+   type EnvSpec,
+   type SandboxEnvironmentBinding,
+ } from "./sandbox-manager.js";
++
++export { SANDBOX_RUNNING_SECONDS, SANDBOX_IDLE_SECONDS } from "./sandbox-client.js";
++export { workspaceMountMetadata, assertWorkspaceMountSpec } from "./workspace-mount.js";
++export { createSandboxFileSystem } from "./sandbox-file-system.js";
+--- a/src/sandbox/sandbox-client.ts
++++ b/src/sandbox/sandbox-client.ts
+@@ -8,7 +8,7 @@
+  * identity-scoped OSS mount; local HOME and Skill projections are disposable.
+  */
+ 
+-import type { ToolFileSystem } from "@open-managed-agents/adapter-core";
++import type { ToolFileSystem } from "../contracts/tool-executor.js";
+ 
+ /** A chunk of output from a running command inside the sandbox. */
+ export interface SandboxExecChunk {
+@@ -51,6 +51,8 @@
+ 
+ /** Options for creating a sandbox. */
+ export interface SandboxCreateOptions {
++  /** Default remains OMA auto-pause; other products can explicitly opt into kill. */
++  onTimeout?: "pause" | "kill";
+   /** Container image / e2b template the sandbox runtime should use. */
+   image?: string;
+   /** Environment variables baked into the sandbox runtime. */
+--- a/test/sandbox/native-lifecycle.test.ts
++++ b/test/sandbox/native-lifecycle.test.ts
+@@ -1,6 +1,6 @@
+ import { describe, it, expect, vi } from 'vitest';
+-import { DefaultSandboxManager, type EnvSpec } from '../src/sandbox-manager.js';
+-import { FakeSandboxClient } from '../src/fake-sandbox-client.js';
++import { DefaultSandboxManager, type EnvSpec } from '../../src/sandbox/sandbox-manager.js';
++import { FakeSandboxClient } from '../../src/sandbox/fake-sandbox-client.js';
+ const spec: EnvSpec = { tenantId: 't', workspaceId: 'w', workspaceMount: {
+   bucket: 'agentry', prefix: 't/w/', agentName: 'agent', pvName: 'pv', credentialProviderName: 'credentials',
+ } };
+--- a/test/sandbox/sandbox-manager.test.ts
++++ b/test/sandbox/sandbox-manager.test.ts
+@@ -1,14 +1,14 @@
+ import { describe, it, expect, vi } from "vitest";
+-import type { ToolFileSystem } from "@open-managed-agents/adapter-core";
++import type { ToolFileSystem } from "../../src/contracts/tool-executor.js";
+ import {
+   DefaultSandboxManager,
+   SandboxSessionClosed,
+   type EnvSpec,
+   type SandboxEnvironmentBinding,
+-} from "../src/sandbox-manager.js";
+-import { FakeSandboxClient } from "../src/fake-sandbox-client.js";
+-import { FakeProvisionSource } from "../src/provision-source.js";
+-import type { SandboxLifecycleStore } from '@oma-server/store';
++} from "../../src/sandbox/sandbox-manager.js";
++import { FakeSandboxClient } from "../../src/sandbox/fake-sandbox-client.js";
++import { FakeProvisionSource } from "../../src/sandbox/provision-source.js";
++import type { SandboxLifecycleStore } from '../../src/contracts/index.js';
+ 
+ const mount = {
+   bucket: "agentry",
+--- a/test/sandbox/e2b-sandbox-client.test.ts
++++ b/test/sandbox/e2b-sandbox-client.test.ts
+@@ -1,5 +1,5 @@
+ import { describe, it, expect, vi } from "vitest";
+-import { ExecAbortedBeforeStartError } from "@open-managed-agents/adapter-core";
++import { ExecAbortedBeforeStartError } from "../../src/contracts/tool-executor.js";
+ import { SandboxNotFoundError } from 'e2b';
+ import {
+   E2BSandboxClient,
+@@ -9,8 +9,8 @@
+   type E2BSandbox,
+   type E2BCommandResult,
+   type E2BCommandHandle,
+-} from "../src/e2b-sandbox-client.js";
+-import type { SandboxExecChunk } from "../src/sandbox-client.js";
++} from "../../src/sandbox/e2b-sandbox-client.js";
++import type { SandboxExecChunk } from "../../src/sandbox/sandbox-client.js";
+ 
+ /** A recorded `commands.run` call. */
+ interface RunCall {
+--- a/test/sandbox/provision-source.test.ts
++++ b/test/sandbox/provision-source.test.ts
+@@ -1,7 +1,7 @@
+ import { describe, it, expect } from "vitest";
+-import type { SkillArtifactStore, SkillFile } from "@oma-server/store";
+-import { FakeSandboxClient } from "../src/fake-sandbox-client.js";
+-import type { SandboxFsAccess } from "../src/sandbox-client.js";
++import type { SkillArtifactStore, SkillFile } from "../../src/contracts/index.js";
++import { FakeSandboxClient } from "../../src/sandbox/fake-sandbox-client.js";
++import type { SandboxFsAccess } from "../../src/sandbox/sandbox-client.js";
+ 
+ import {
+   S3ProvisionSource,
+@@ -11,7 +11,7 @@
+   type ProvisionCoordinate,
+   type ProvisionSource,
+   type ProjectionTarget,
+-} from "../src/provision-source.js";
++} from "../../src/sandbox/provision-source.js";
+ 
+ const TENANT = "tenant_1";
+ const WORKSPACE_DIR = "/workspace";
+--- a/test/sandbox/e2b-command-stream.test.ts
++++ b/test/sandbox/e2b-command-stream.test.ts
+@@ -14,8 +14,8 @@
+ beforeAll(async () => {
+   // Exercise both published runtime bundles, not a replacement decoder or a
+   // mocked Sandbox. Node and bundlers can select different SDK entrypoints.
+-  const cjs = require("e2b") as typeof import("e2b");
+-  const esm = await import(new URL("./index.mjs", pathToFileURL(require.resolve("e2b"))).href) as typeof import("e2b");
++  const cjs = require("../../.build/e2b/dist/index.js") as typeof import("e2b");
++  const esm = await import(new URL("./index.mjs", pathToFileURL(require.resolve("../../.build/e2b/dist/index.js"))).href) as typeof import("e2b");
+   // CommandHandle is exported by the declarations but not the JS bundles.
+   // Obtain each bundle's real constructor through Commands.run; only the RPC
+   // event source is replaced, so setup, parsing, callbacks and wait are real.
+--- a/test/sandbox/sandbox-file-system.test.ts
++++ b/test/sandbox/sandbox-file-system.test.ts
+@@ -4,8 +4,8 @@
+ import { tmpdir } from "node:os";
+ import { dirname, join } from "node:path";
+ import { afterEach, describe, expect, it } from "vitest";
+-import { createSandboxFileSystem } from "../src/sandbox-file-system.js";
+-import type { SandboxExecChunk, SandboxExecOptions } from "../src/sandbox-client.js";
++import { createSandboxFileSystem } from "../../src/sandbox/sandbox-file-system.js";
++import type { SandboxExecChunk, SandboxExecOptions } from "../../src/sandbox/sandbox-client.js";
+ 
+ const directories: string[] = [];
+ const transportFiles: string[] = [];
+--- a/src/contracts/sandbox-lifecycle-store.ts
++++ b/src/contracts/sandbox-lifecycle-store.ts
+@@ -1,4 +1,5 @@
+-import type { PendingEventFence } from './pending-event-store.js';
++// Extracted from OMA pending-event-store.ts; no database dependency.
++export interface PendingEventFence { ownerId: string; generation: number; eventId: string }
+ 
+ /** A Turn's business execution identity, not an independent resource lease. */
+ export interface SandboxActivity {

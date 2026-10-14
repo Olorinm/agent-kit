@@ -5,3 +5,4 @@ state/
 .env
 .env.*
 coverage/
+.build/

@@ -1,5 +1,8 @@
 # Agent Environment
 
+
+本版直接复用 OMA 的 sandbox 源码，见[来源和更新方式](docs/upstream.md)。衍生版本目前仅用于本地／私有验证，公开分发需先确认上游授权。
+
 [English](README.md) | [简体中文](README.zh-CN.md)
 
 用一套 TypeScript API 和 CLI，为任意 Agent 创建和管理云端执行环境。
@@ -24,7 +27,7 @@ Agent Environment
 
 镜像、CPU、内存、网络和持久化目录由云端**模板**定义。环境里运行 Codex、Pi、Claude Code 还是其他内核，由调用方的镜像或启动命令决定。
 
-这是独立库和运维 CLI。账号、用户归属、配额、Agent 绑定与调度仍由上层负责；本模块不负责搭建 VKE/ACS 底座。Router 已接上用户开通和 Host 自动启动，见[接入说明](docs/integration.md)。
+这是独立库和运维 CLI。账号、用户归属、配额、Agent 绑定与调度仍由上层负责；本模块不负责搭建 VKE/ACS 底座。[Mau](https://github.com/Olorinm/mau) 负责产品开通和 Host 自动启动，见[接入说明](docs/integration.md)。
 
 ## 开始使用
 
@@ -72,7 +75,8 @@ node dist/cli.js destroy --config /secure/providers.json --provider volc --id SA
 ```sh
 npm test
 npm run test:package
-npm run test:oma -- /path/to/open-managed-agents
+npm run test:oma
+npm run check:upstream -- /path/to/open-managed-agents
 # 创建一个计费沙箱，验证执行、文件、暂停恢复，然后销毁：
 npm run probe -- --config /secure/providers.json --provider volc --template node-tools \
   --workspace /home/user/workspace --report state/probe.json

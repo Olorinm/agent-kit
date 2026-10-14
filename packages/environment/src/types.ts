@@ -22,7 +22,7 @@ export interface ExecOptions {
   signal?: AbortSignal;
   onExit?: (result: { exitCode: number | null; signal?: string }) => void;
 }
-export interface OutputChunk { stream: "stdout" | "stderr"; text: string }
+export interface OutputChunk { stream: "stdout" | "stderr"; text: string; bytes?: Uint8Array }
 /** Ephemeral server-side connection details. Never return headers to end users. */
 export interface HttpEndpoint { url: string; headers: Record<string, string> }
 export interface FileEntry { path: string; size: number; mtimeMs: number }

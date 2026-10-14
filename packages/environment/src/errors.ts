@@ -5,9 +5,6 @@ export class EnvironmentError extends Error {
     public readonly outcomeUnknown = false,
   ) { super(message); this.name = "EnvironmentError"; }
 }
-export class ExecutionAbortedBeforeStart extends EnvironmentError {
-  constructor() { super("aborted_before_start", "Command was cancelled before it started."); }
-}
 export function required(value: string, label: string): string {
   if (typeof value !== "string" || !value.trim() || value.includes("\0"))
     throw new EnvironmentError("invalid_argument", label + " must be a nonempty string without NUL.");
