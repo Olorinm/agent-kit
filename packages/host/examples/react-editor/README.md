@@ -1,6 +1,6 @@
 # React document editor
 
-A small independent product using Agent UI and Agent Host. The product owns its document, attachment handling, tool authorization and persistence. It uses the same authenticated companion as the plain [HTTP editor](../http-editor/README.md), with a React frontend.
+A small independent product using [Agent UI](https://github.com/Olorinm/agent-ui) and Agent Host. `npm ci` installs the pinned Agent UI release. The product owns its document, attachment handling, tool authorization and persistence. It uses the same authenticated companion as the plain [HTTP editor](../http-editor/README.md), with a React frontend.
 
 From the repository root:
 
@@ -9,7 +9,6 @@ npm ci
 npm run build
 npm pack
 npm --prefix examples/http-editor install --ignore-scripts --no-package-lock
-npm --workspace @olorinm/agent-ui run build
 node examples/react-editor/build.mjs
 # Start/configure Agent Host first using the HTTP editor guide.
 AGENT_HOST_TOKEN_FILE=/path/to/host/token node examples/react-editor/server.mjs

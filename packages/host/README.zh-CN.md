@@ -37,7 +37,7 @@ HTTP 服务保留附件的实际字节、内核支持的原生图片输入与图
 
 ## 可选的 React 聊天组件
 
-`@olorinm/agent-ui` 提供可复用的消息、Markdown、输入框、执行过程、审批、提问和资源卡片。它是独立安装包，Agent Host 核心不依赖 React。产品继续管理自己的数据、权限和文件操作。
+`@olorinm/agent-ui` 提供可复用的消息、Markdown、输入框、执行过程、审批、提问和资源卡片。它是独立仓库 [Olorinm/agent-ui](https://github.com/Olorinm/agent-ui) 的安装包，Agent Host 核心不依赖 React。产品继续管理自己的数据、权限和文件操作。
 
 接入方式见 [React UI 说明](docs/react-ui.md)，也可以运行[独立文档编辑器](examples/react-editor/README.md)。
 

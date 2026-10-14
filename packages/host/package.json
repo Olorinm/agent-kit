@@ -120,8 +120,6 @@
     "prepack": "npm run build",
     "test:package": "node scripts/test-package.mjs",
     "probe:codex": "node scripts/probe-codex.mjs",
-    "test:ui": "npm --workspace @olorinm/agent-ui test",
-    "test:ui:browser": "npm --workspace @olorinm/agent-ui run build && node scripts/test-ui-browser.mjs",
     "test:ui:package": "node scripts/test-ui-package.mjs"
   },
   "dependencies": {
@@ -145,9 +143,9 @@
     "typescript": "5.9.3",
     "ws": "8.22.0",
     "@playwright/test": "1.63.0",
-    "esbuild": "0.28.2"
-  },
-  "workspaces": [
-    "packages/react"
-  ]
+    "esbuild": "0.28.2",
+    "@olorinm/agent-ui": "https://github.com/Olorinm/agent-ui/releases/download/v0.1.0-alpha.2/olorinm-agent-ui-0.1.0-alpha.2.tgz",
+    "react": "19.3.0",
+    "react-dom": "19.3.0"
+  }
 }

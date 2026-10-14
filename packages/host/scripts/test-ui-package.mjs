@@ -3,9 +3,7 @@ import { execFileSync } from "node:child_process";
 import { cp, mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { basename, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
-import { createRequire } from "node:module";
 import { chromium, expect } from "@playwright/test";
-import { checkUiBrowser } from "./test-ui-browser.mjs";
 
 const root = process.cwd();
 await mkdir(".local", { recursive: true });
@@ -20,20 +18,10 @@ try {
     });
   }
   const coreManifest = JSON.parse(await readFile("package.json", "utf8"));
-  const uiManifest = JSON.parse(
-    await readFile("packages/react/package.json", "utf8"),
-  );
+  // Agent UI is a separate repository; this test pairs its pinned release with this Host build.
+  const uiArchive = coreManifest.devDependencies["@olorinm/agent-ui"];
   assert.equal(coreManifest.dependencies.react, undefined);
   assert.equal(coreManifest.dependencies["@olorinm/agent-ui"], undefined);
-  assert.equal(uiManifest.dependencies["@olorinm/agent-host"], undefined);
-  npm([
-    "pack",
-    "--workspace",
-    "@olorinm/agent-ui",
-    "--pack-destination",
-    consumer,
-    "--silent",
-  ]);
   npm(["pack", "--pack-destination", consumer, "--silent"]);
   await writeFile(
     join(consumer, "package.json"),
@@ -45,7 +33,7 @@ try {
       "--ignore-scripts",
       "--no-audit",
       "--no-fund",
-      "./olorinm-agent-ui-" + uiManifest.version + ".tgz",
+      uiArchive,
       "./olorinm-agent-host-" + coreManifest.version + ".tgz",
       "react@19.3.0",
       "react-dom@19.3.0",
@@ -55,13 +43,13 @@ try {
     ],
     consumer,
   );
-  const require = createRequire(join(consumer, "package.json"));
   const installedUi = JSON.parse(
     await readFile(
       join(consumer, "node_modules/@olorinm/agent-ui/package.json"),
       "utf8",
     ),
   );
+  assert.equal(installedUi.dependencies["@olorinm/agent-host"], undefined);
   for (const entry of Object.values(installedUi.exports)) {
     const path = typeof entry === "string" ? entry : entry.import;
     await readFile(join(consumer, "node_modules/@olorinm/agent-ui", path));
@@ -104,37 +92,6 @@ void [assignHandler,assignRequest,assignAnswer];
       join(consumer, "contract.ts"),
     ],
     { cwd: consumer, stdio: "inherit" },
-  );
-  const { build } = require("esbuild");
-  await cp(
-    "packages/react/test/browser-fixture.tsx",
-    join(consumer, "fixture.tsx"),
-  );
-  await build({
-    entryPoints: [join(consumer, "fixture.tsx")],
-    outfile: join(consumer, "fixture.js"),
-    bundle: true,
-    format: "iife",
-    platform: "browser",
-    target: "es2022",
-    jsx: "automatic",
-    metafile: true,
-  }).then((result) => {
-    assert.ok(
-      Object.keys(result.metafile.inputs).some((path) =>
-        path.includes("node_modules/@olorinm/agent-ui/dist"),
-      ),
-    );
-    assert.ok(
-      Object.keys(result.metafile.inputs).every(
-        (path) =>
-          !path.includes("web/src/") && !path.includes("packages/react/src"),
-      ),
-    );
-  });
-  await writeFile(
-    join(consumer, "fixture.html"),
-    '<meta name="viewport" content="width=device-width,initial-scale=1"><link rel="stylesheet" href="./fixture.css"><div id="root"></div><script src="./fixture.js"></script>',
   );
   await cp("examples/react-editor", join(consumer, "examples/react-editor"), {
     recursive: true,
@@ -192,8 +149,6 @@ void [assignHandler,assignRequest,assignAnswer];
   });
   const errors = [];
   page.on("pageerror", (error) => errors.push(error.message));
-  await page.goto(pathToFileURL(join(consumer, "fixture.html")).href);
-  await checkUiBrowser(page);
   await page.setViewportSize({ width: 1280, height: 900 });
   const browserAuth = [];
   page.on("request", (request) => {
