@@ -22,15 +22,26 @@ await build({
 });
 await cp('.build/e2b/LICENSE', 'dist/E2B-LICENSE');
 await cp('.build/e2b/dist/index.d.ts', 'dist/sdk.d.ts');
+// Bundle only the server TOS client and the pinned HTTP dependency. Consumers
+// need neither the SDK's browser proxy stack nor root-only npm overrides.
+await writeFile('.build/tos-entry.mjs', "export { TosClient } from '@volcengine/tos-sdk';\n");
+await build({ entryPoints: ['.build/tos-entry.mjs'], outfile: 'dist/tos-sdk.js',
+  bundle: true, platform: 'node', target: 'node22', format: 'esm',
+  banner: { js: 'import { createRequire } from "node:module"; const require = createRequire(import.meta.url); const __dirname = import.meta.dirname; const __filename = import.meta.filename;' },
+  legalComments: 'linked' });
+await cp('node_modules/@volcengine/tos-sdk/LICENSE', 'dist/TOS-LICENSE');
 async function wire(directory) {
   for (const entry of await readdir(directory, { withFileTypes: true })) {
     const path = join(directory, entry.name);
     if (entry.isDirectory()) await wire(path);
-    else if ((entry.name.endsWith('.js') || entry.name.endsWith('.d.ts')) && !['dist/sdk.js', 'dist/sdk.d.ts'].includes(path)) {
+    else if ((entry.name.endsWith('.js') || entry.name.endsWith('.d.ts')) && !['dist/sdk.js', 'dist/sdk.d.ts', 'dist/tos-sdk.js'].includes(path)) {
       let sdk = relative(dirname(path), 'dist/sdk.js').replaceAll('\\', '/');
       if (!sdk.startsWith('.')) sdk = './' + sdk;
       const text = await readFile(path, 'utf8');
-      await writeFile(path, text.replace(/from (["'])e2b\1/g, `from "${sdk}"`));
+      let tos = relative(dirname(path), 'dist/tos-sdk.js').replaceAll('\\', '/');
+      if (!tos.startsWith('.')) tos = './' + tos;
+      await writeFile(path, text.replace(/from (["'])e2b\1/g, `from "${sdk}"`)
+        .replace(/from (["'])@volcengine\/tos-sdk\1/g, `from "${tos}"`));
     }
   }
 }

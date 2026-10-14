@@ -1,6 +1,6 @@
 {
   "name": "@olorinm/agent-environment",
-  "version": "0.2.0-alpha.1",
+  "version": "0.2.0-alpha.2",
   "description": "OMA sandbox implementation with Alibaba and Volcengine environment adapters",
   "type": "module",
   "license": "UNLICENSED",
@@ -36,6 +36,14 @@
     "./sdk": {
       "types": "./dist/sdk.d.ts",
       "import": "./dist/sdk.js"
+    },
+    "./workspace": {
+      "types": "./dist/workspace/index.d.ts",
+      "import": "./dist/workspace/index.js"
+    },
+    "./oma": {
+      "types": "./dist/oma.d.ts",
+      "import": "./dist/oma.js"
     }
   },
   "bin": {
@@ -48,19 +56,27 @@
     "test:oma": "vitest run",
     "probe": "npm run build && node scripts/probe.mjs",
     "prepack": "npm run build",
-    "check:upstream": "node scripts/check-upstream.mjs"
+    "check:upstream": "node scripts/check-upstream.mjs",
+    "test:workspace:oma": "node scripts/test-oma.mjs"
   },
   "dependencies": {
     "@bufbuild/protobuf": "2.12.1",
     "@connectrpc/connect": "2.0.0-rc.3",
+    "@kubernetes/client-node": "2.0.0",
+    "ali-oss": "6.23.0",
     "openapi-fetch": "0.14.1"
   },
   "devDependencies": {
+    "@types/ali-oss": "6.23.3",
     "@types/node": "24.10.1",
+    "@volcengine/tos-sdk": "2.9.1",
+    "e2b": "2.24.0",
+    "esbuild": "0.28.2",
     "typescript": "5.9.3",
-    "esbuild": "0.28.0",
-    "vitest": "4.1.11",
-    "e2b": "2.24.0"
+    "vitest": "4.1.11"
   },
-  "private": true
+  "private": true,
+  "overrides": {
+    "axios": "0.34.0"
+  }
 }
