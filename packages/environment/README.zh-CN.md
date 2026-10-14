@@ -1,5 +1,8 @@
 # Agent Environment
 
+
+本版直接复用 OMA 的 sandbox 源码，见[来源和更新方式](docs/upstream.md)。衍生版本目前仅用于本地／私有验证，公开分发需先确认上游授权。
+
 [English](README.md) | [简体中文](README.zh-CN.md)
 
 用一套 TypeScript API 和 CLI，为任意 Agent 创建和管理云端执行环境。
@@ -72,7 +75,8 @@ node dist/cli.js destroy --config /secure/providers.json --provider volc --id SA
 ```sh
 npm test
 npm run test:package
-npm run test:oma -- /path/to/open-managed-agents
+npm run test:oma
+npm run check:upstream -- /path/to/open-managed-agents
 # 创建一个计费沙箱，验证执行、文件、暂停恢复，然后销毁：
 npm run probe -- --config /secure/providers.json --provider volc --template node-tools \
   --workspace /home/user/workspace --report state/probe.json

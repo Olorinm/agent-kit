@@ -16,52 +16,21 @@ The [verification report](verification.md) records the live acceptance of the ea
 
 ## OMA
 
-This repository supplies a compatibility bridge; OMA itself has not been modified and no upstream integration PR has been submitted. The implementation uses the official E2B SDK and was informed by OMA's interfaces, rather than extracted from OMA source. The package is installed from a built archive and is not yet published to npm.
+`@olorinm/agent-environment/sandbox` is the extracted OMA implementation:
+E2BSandboxClient, DefaultSandboxManager, native filesystem, workspace mount
+attestation and Skill provisioning. The implementation and all six original
+sandbox suites come from the pinned revision in `upstream.json`.
 
-Keep OMA's `DefaultSandboxManager`, database bindings, idle lifecycle, native filesystem and workspace ownership checks. Replace its low-level `SandboxClient` dependency with `createOmaSandboxClient` from this package's `/oma` export.
+OMA imports this package directly and supplies its existing store, binding locks
+and OSS readback verifier. Mau uses the provider API, which delegates execution,
+file bytes and uncertainty to the same E2BSandboxClient. Mau retains its persistent
+Host lifecycle; OMA retains per-Turn preparation and event-driven idle handling.
 
-The bridge matches OMA at `e04695152219a91c2ecdff41955dfc3fab73b438`. It requires the real native filesystem factory and real storage verifier. This prevents a successful-looking integration that drops native errno or workspace identity verification.
+`/contracts` contains the extracted ToolExecutor contracts and the one shared
+ExecAbortedBeforeStartError class. `/sdk` exposes the OMA-patched E2B runtime for
+transport integrations; use its error classes when injecting a driver.
+There is no `/oma` reverse bridge or second command execution implementation.
 
-Inside OMA's sandbox package, the wiring is:
-
-```ts
-import { createOmaSandboxClient } from '@olorinm/agent-environment/oma';
-import { ExecAbortedBeforeStartError } from '@open-managed-agents/adapter-core';
-import { createSandboxFileSystem } from './sandbox-file-system.js';
-import type { SandboxClient } from './sandbox-client.js';
-
-const client: SandboxClient = createOmaSandboxClient({
-  provider,                         // configured by the trusted Host
-  defaultTemplate: templateId,
-  onTimeout: 'pause',                // Alibaba; Volcengine requires explicit pause
-  fileSystem: createSandboxFileSystem,
-  abortedBeforeStart: () => new ExecAbortedBeforeStartError(),
-  verifyWorkspaceMount: verifyActualWorkspaceMount,
-});
-```
-
-`verifyActualWorkspaceMount` above is an **integration dependency**, not an exported helper here. Supply OMA's real verification: check control-plane storage authorization, actual mount identity and ordinary-user read/write access, then verify the random probe in the correct object-store prefix and clean it up. Never replace it with a successful no-op.
-
-For an incremental Alibaba integration, keep an existing OMA `E2BSandboxClient` configured with its real `verifyWorkspaceProbe`, and delegate the required hook:
-
-```ts
-verifyWorkspaceMount: async (ref, target, trustedMetadata) => {
-  if (!await existingOmaClient.reconnect(ref.id, { ...trustedMetadata })) {
-    throw new Error('Environment disappeared before mount verification');
-  }
-  await existingOmaClient.verifyWorkspaceMount(ref.id, target);
-}
-```
-
-This reuses the actual verifier but opens an additional SDK handle. A later upstream refactor can extract that verifier as a reusable helper. Both create and reconnect pass the original trusted OMA metadata to the hook, independently of provider metadata mapping.
-
-OMA's current mount recipe and idle-timeout behavior are Alibaba-specific. For Volcengine, OMA must provide a VCI template/storage recipe and corresponding verifier, map its trusted creation request with `mapCreate`, and explicitly pause after idleness. Silently dropping Alibaba mount metadata or using `kill` as a substitute for OMA's pause policy loses important behavior. The bridge alone does not complete that upstream migration.
-
-Run the actual compatibility check against a checkout:
-
-```sh
-npm run build
-npm run test:oma -- /path/to/open-managed-agents
-```
-
-It type-checks against OMA's original `SandboxClient`, then executes its unmodified filesystem helper over real local processes. It verifies binary writes/appends, missing-parent errno, symlink stat/lstat and its original cancellation error class. It does not claim a live OSS/TOS storage attestation.
+Run `npm test` for the original suites plus provider tests, and
+`npm run test:package` for a separate installation with install scripts disabled.
+See [upstream.md](upstream.md) for provenance, update procedure and distribution status.

@@ -1,7 +1,8 @@
-import type { ConnectionOpts, SandboxOpts } from "e2b";
+import { SandboxNotFoundError, type ConnectionOpts } from "e2b";
 import { sdkDriver, isMissingSandbox, isMissingFile, type E2BDriver, type RemoteSandbox, type RemoteInfo } from "./driver.js";
-import { execute } from "./exec.js";
-import { EnvironmentError, ExecutionAbortedBeforeStart, required, seconds, absolutePath } from "./errors.js";
+import { E2BSandboxClient } from "./sandbox/index.js";
+import { ExecAbortedBeforeStartError } from "./contracts/tool-executor.js";
+import { EnvironmentError, required, seconds, absolutePath } from "./errors.js";
 import type { CreateEnvironment, EnvironmentProvider, EnvironmentInfo, EnvironmentRef, ExecOptions, FileEntry, ProviderCapabilities } from "./types.js";
 
 export interface ProviderOptions {
@@ -30,14 +31,20 @@ export function createVolcengineProvider(options: ProviderOptions): EnvironmentP
   return new E2BProvider("volcengine", options);
 }
 
+// These two operations expose the original client's connection cache only to
+// the provider adapter. Execution, I/O and uncertainty remain in OMA's client.
+class ProviderClient extends E2BSandboxClient {
+  cached(id: string) { return this.sandboxes.get(id) as RemoteSandbox | undefined; }
+  detach(id: string) { this.sandboxes.delete(id); }
+}
 class E2BProvider implements EnvironmentProvider {
   readonly id: string;
   readonly capabilities: ProviderCapabilities;
   private readonly connection: ConnectionOpts;
   private readonly driver: E2BDriver;
-  private readonly handles = new Map<string, RemoteSandbox>();
+  private readonly client: ProviderClient;
   private readonly attaching = new Map<string, Promise<RemoteSandbox>>();
-  private readonly uncertain = new Set<string>();
+
   constructor(private readonly kind: "alibaba" | "volcengine", private readonly options: AlibabaOptions) {
     this.id = required(options.id, "provider id");
     required(options.apiKey, "api key");
@@ -63,35 +70,56 @@ class E2BProvider implements EnvironmentProvider {
     this.capabilities = Object.freeze({
       automaticPause: kind === "alibaba", pause: true, processMemoryResume: false, persistence: "provider-template",
     });
+    const normalize = async <T>(id: string, operation: () => Promise<T>): Promise<T> => {
+      try { return await operation(); }
+      catch (error) {
+        if (isMissingSandbox(error, kind === "volcengine" ? id : undefined)) throw new SandboxNotFoundError("Sandbox is missing");
+        throw error;
+      }
+    };
+    this.client = new ProviderClient({
+      domain: this.connection.domain!, apiKey: options.apiKey, requestTimeoutMs,
+      verifyWorkspaceProbe: async () => { throw new Error("Workspace verification requires an OMA SandboxClient with an OSS readback verifier"); },
+      createSandbox: async (template, opts) => {
+        const metadata = { ...opts.metadata };
+        if (kind === "volcengine") {
+          // Strip only defaults added by OMA; foreign caller metadata was
+          // rejected before create. VCI has an explicit snapshot/pause policy.
+          for (const key of Object.keys(metadata)) if (key.startsWith("e2b.agents.kruise.io/")) delete metadata[key];
+        } else if (options.pausedRetention) metadata["e2b.agents.kruise.io/reserve-paused-sandbox-duration"] = options.pausedRetention;
+        return this.driver.create(template, {
+          ...opts, ...this.connection, secure: true, metadata,
+          lifecycle: kind === "alibaba" ? opts.lifecycle : { onTimeout: "kill", autoResume: false },
+        });
+      },
+      connectSandbox: (id, opts) => normalize(id, () => this.driver.connect(id, { ...opts, ...this.connection })),
+      getSandboxInfo: id => normalize(id, () => this.driver.info(id, this.connection)),
+      killSandbox: id => normalize(id, () => this.driver.kill(id, this.connection)),
+      setSandboxTimeout: (id, ms) => this.driver.setTimeout(id, ms, this.connection),
+    });
   }
   async create(request: CreateEnvironment): Promise<EnvironmentRef> {
     required(request.template, "template");
+    // The product API takes an explicit template ID. Do not allow OMA's
+    // legacy image-name fallback to silently choose its default template.
+    if (/[/:]/.test(request.template)) throw new EnvironmentError("invalid_template", "Use a template ID, not a container image reference.");
     for (const [label, record] of [["metadata", request.metadata], ["env", request.env]] as const) {
       if (record !== undefined && (!record || typeof record !== "object" || Array.isArray(record) ||
         Object.entries(record).some(([key, value]) => !key || key.includes("\0") || typeof value !== "string" || value.includes("\0"))))
         throw new EnvironmentError("invalid_argument", label + " must contain string values without NUL.");
     }
-    seconds(request.timeoutSeconds ?? 3600);
+    seconds(request.timeoutSeconds ?? 86400);
     if (request.onTimeout && !["kill", "pause"].includes(request.onTimeout))
       throw new EnvironmentError("invalid_lifecycle", "Unknown timeout policy.");
     if (request.onTimeout === "pause" && !this.capabilities.automaticPause)
       throw new EnvironmentError("unsupported_capability", "Volcengine does not support automatic pause on create. Use explicit pause.");
     if (this.kind === "volcengine" && Object.keys(request.metadata ?? {}).some(key => key.includes(".kruise.io/")))
       throw new EnvironmentError("foreign_metadata", "Alibaba-specific mount/lifecycle metadata must be adapted before use on Volcengine.");
-    const metadata = { ...request.metadata };
-    if (this.kind === "alibaba" && request.onTimeout === "pause" && this.options.pausedRetention)
-      metadata["e2b.agents.kruise.io/reserve-paused-sandbox-duration"] = this.options.pausedRetention;
-    const options: SandboxOpts = {
-      ...this.connection, secure: true, timeoutMs: (request.timeoutSeconds ?? 3600) * 1000,
-      envs: request.env, metadata,
-      ...(this.kind === "alibaba" && request.onTimeout === "pause"
-        ? { lifecycle: { onTimeout: "pause", autoResume: false } } : {}),
-    };
-    let handle: RemoteSandbox;
-    try { handle = await this.driver.create(request.template, options); }
-    catch { throw new EnvironmentError("create_unknown", "Creation failed or its outcome is unknown. Inspect provider resources before retrying.", true); }
-    this.handles.set(handle.sandboxId, handle);
-    return { provider: this.id, id: handle.sandboxId };
+    try {
+      const ref = await this.client.create({ image: request.template, env: request.env, metadata: request.metadata,
+        timeoutSeconds: request.timeoutSeconds, onTimeout: request.onTimeout ?? (this.kind === "alibaba" ? "pause" : "kill") });
+      return { provider: this.id, id: ref.id };
+    } catch { throw new EnvironmentError("create_unknown", "Creation failed or its outcome is unknown. Inspect provider resources before retrying.", true); }
   }
   private describe(info: RemoteInfo): EnvironmentInfo {
     return {
@@ -105,7 +133,7 @@ class E2BProvider implements EnvironmentProvider {
     try { return this.describe(await this.driver.info(id, this.connection)); }
     catch (error) {
       if (isMissingSandbox(error, this.kind === "volcengine" ? id : undefined)) {
-        this.handles.delete(id);
+        this.client.detach(id);
         return { provider: this.id, id, state: "missing", metadata: {} };
       }
       throw new EnvironmentError("status_unavailable", "Environment status could not be read.");
@@ -119,27 +147,24 @@ class E2BProvider implements EnvironmentProvider {
         .map(item => this.describe(item));
     } catch { throw new EnvironmentError("list_unavailable", "Environment listing failed."); }
   }
-  async resume(id: string, timeoutSeconds = 3600): Promise<EnvironmentInfo> {
+  async resume(id: string, timeoutSeconds = 86400): Promise<EnvironmentInfo> {
     required(id, "environment id"); seconds(timeoutSeconds);
-    let handle: RemoteSandbox;
     try {
-      handle = await this.driver.connect(id, { ...this.connection, timeoutMs: timeoutSeconds * 1000 });
-      // A running VCI sandbox ignores connect's timeout. Explicitly apply the
-      // requested lifetime so reconnect cannot silently expire an active host.
-      await this.driver.setTimeout(id, timeoutSeconds * 1000, this.connection);
-    }
-    catch (error) {
-      if (isMissingSandbox(error, this.kind === "volcengine" ? id : undefined)) throw new EnvironmentError("environment_missing", "Environment was deleted; explicit creation is required.");
+      if (!await this.client.reconnect(id, {}, { timeoutSeconds }))
+        throw new EnvironmentError("environment_missing", "Environment was deleted; explicit creation is required.");
+      // VCI ignores connect's timeout for an already-running environment.
+      await this.client.setTimeout(id, timeoutSeconds);
+    } catch (error) {
+      if (error instanceof EnvironmentError) throw error;
       throw new EnvironmentError("resume_unknown", "Resume outcome is unknown; query status before retrying.", true);
     }
-    this.handles.set(id, handle);
     return this.info(id);
   }
   async pause(id: string): Promise<void> {
     required(id, "environment id");
     if (this.kind === "volcengine") {
       const state = (await this.info(id)).state;
-      if (state === "paused") { this.handles.delete(id); return; }
+      if (state === "paused") { this.client.detach(id); return; }
       if (state !== "running") throw new EnvironmentError("environment_not_running", "Only a running environment can be paused.");
       // VCI snapshots disk state, not process memory. Flush completed writes
       // before requesting the snapshot; the caller must stop concurrent writers.
@@ -149,29 +174,21 @@ class E2BProvider implements EnvironmentProvider {
     }
     try { await this.driver.pause(id, this.connection); }
     catch { throw new EnvironmentError("pause_unknown", "Pause was not confirmed; inspect provider state.", true); }
-    finally { this.handles.delete(id); }
+    finally { this.client.detach(id); }
   }
   async destroy(id: string): Promise<void> {
     required(id, "environment id");
-    try { await this.driver.kill(id, this.connection); }
-    catch (error) {
-      if (!isMissingSandbox(error, this.kind === "volcengine" ? id : undefined)) throw new EnvironmentError("delete_unknown", "Deletion was not confirmed; inspect provider state.", true);
-    } finally { this.handles.delete(id); }
-    let state: EnvironmentInfo["state"];
-    try { state = (await this.info(id)).state; }
-    catch { throw new EnvironmentError("delete_unknown", "Deletion was accepted but its result could not be verified.", true); }
-    if (state !== "missing")
-      throw new EnvironmentError("delete_pending", "Deletion is not yet observed.", true);
-    this.uncertain.delete(id);
+    try { await this.client.destroy(id); }
+    catch { throw new EnvironmentError("delete_unknown", "Deletion was not confirmed; inspect provider state.", true); }
   }
   async setTimeout(id: string, value: number): Promise<void> {
     required(id, "environment id"); seconds(value);
-    try { await this.driver.setTimeout(id, value * 1000, this.connection); }
+    try { await this.client.setTimeout(id, value); }
     catch { throw new EnvironmentError("timeout_unknown", "Timeout update was not confirmed.", true); }
   }
   private async live(id: string): Promise<RemoteSandbox> {
     required(id, "environment id");
-    const existing = this.handles.get(id);
+    const existing = this.client.cached(id);
     if (existing) return existing;
     const inFlight = this.attaching.get(id);
     if (inFlight) return inFlight;
@@ -179,35 +196,33 @@ class E2BProvider implements EnvironmentProvider {
       if ((await this.info(id)).state !== "running")
         throw new EnvironmentError("environment_not_running", "Resume the environment explicitly before executing.");
       // SDK connect reattaches a persisted ID. It never creates a replacement.
-      let handle: RemoteSandbox;
-      try { handle = await this.driver.connect(id, this.connection); }
-      catch { throw new EnvironmentError("attach_unknown", "Reattachment failed; query status before retrying.", true); }
-      this.handles.set(id, handle);
-      return handle;
+      try {
+        if (!await this.client.reconnect(id, {})) throw new Error("missing");
+      } catch { throw new EnvironmentError("attach_unknown", "Reattachment failed; query status before retrying.", true); }
+      return this.client.cached(id)!;
     })();
     this.attaching.set(id, pending);
     try { return await pending; }
     finally { this.attaching.delete(id); }
   }
   async *exec(id: string, argv: string[], options: ExecOptions = {}) {
-    let observed = false;
-    if (options.signal?.aborted) throw new ExecutionAbortedBeforeStart();
-    const handle = await this.live(id);
-    try {
-      yield* execute(handle, argv, { ...options, onExit: exit => {
-        observed = true; options.onExit?.(exit);
-      } });
-    } catch (error) {
-      if (error instanceof ExecutionAbortedBeforeStart || error instanceof EnvironmentError && ["invalid_command", "invalid_argument", "invalid_path", "invalid_timeout"].includes(error.code)) observed = true;
-      throw error;
-    } finally { if (!observed) this.uncertain.add(id); }
+    if (options.signal?.aborted) throw new ExecAbortedBeforeStartError();
+    if (!argv.length || argv.some(value => typeof value !== "string" || value.includes("\0")))
+      throw new EnvironmentError("invalid_command", "Command argv must contain strings without NUL.");
+    if (options.cwd) absolutePath(options.cwd);
+    if (options.timeoutSeconds !== undefined) seconds(options.timeoutSeconds, true);
+    await this.live(id);
+    try { yield* this.client.exec(id, argv, options); }
+    catch (error) {
+      if (error instanceof ExecAbortedBeforeStartError || error instanceof Error && error.name === "AbortError") throw error;
+      throw new EnvironmentError("execution_unknown", "Command outcome is unknown; inspect the environment before retrying.", true);
+    }
   }
-  private async io<T>(id: string, operation: (handle: RemoteSandbox) => Promise<T>): Promise<T> {
-    const handle = await this.live(id);
-    try { return await operation(handle); }
+  private async io<T>(id: string, operation: () => Promise<T>): Promise<T> {
+    await this.live(id);
+    try { return await operation(); }
     catch (error) {
       if (isMissingFile(error)) throw error;
-      this.uncertain.add(id);
       throw new EnvironmentError("file_operation_unknown", "File operation failed; inspect environment state before retrying a write.", true);
     }
   }
@@ -231,16 +246,15 @@ class E2BProvider implements EnvironmentProvider {
   }
   readFile(id: string, path: string): Promise<Uint8Array> {
     absolutePath(path);
-    return this.io(id, handle => handle.files.read(path, { format: "bytes" }));
+    return this.io(id, () => this.client.readFileBytes(id, path));
   }
   async writeFile(id: string, path: string, data: string | Uint8Array): Promise<void> {
     absolutePath(path);
-    const payload = typeof data === "string" ? data : new Uint8Array(data).buffer;
-    await this.io(id, handle => handle.files.write(path, payload));
+    await this.io(id, () => typeof data === "string" ? this.client.writeFile(id, path, data) : this.client.writeFileBytes(id, path, data));
   }
   async removeFile(id: string, path: string): Promise<void> {
     absolutePath(path);
-    try { await this.io(id, handle => handle.files.remove(path)); }
+    try { await this.io(id, () => this.client.remove(id, path)); }
     catch (error) { if (!isMissingFile(error)) throw error; }
   }
   async listFiles(id: string, path: string, missingOk = false): Promise<FileEntry[]> {
@@ -271,6 +285,6 @@ class E2BProvider implements EnvironmentProvider {
     await walk(path);
     return result.sort((a, b) => a.path.localeCompare(b.path));
   }
-  hasUncertainExecution(id: string): boolean { return this.uncertain.has(id); }
-  resetExecutionUncertainty(id: string): void { this.uncertain.delete(id); }
+  hasUncertainExecution(id: string): boolean { return this.client.hasUncertainExecution(id); }
+  resetExecutionUncertainty(id: string): void { this.client.resetExecutionUncertainty(id); }
 }

@@ -19,4 +19,4 @@ jobs:
           repository: BroZhong/open-managed-agents
           ref: e04695152219a91c2ecdff41955dfc3fab73b438
           path: state/oma-reference
-      - run: npm run test:oma -- state/oma-reference
+      - run: npm run check:upstream -- state/oma-reference

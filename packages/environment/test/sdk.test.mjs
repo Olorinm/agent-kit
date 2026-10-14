@@ -32,7 +32,7 @@ for (const factory of [createAlibabaProvider,createVolcengineProvider]) {
     const driver={...sdkDriver,create:async(...args)=>{
       const handle=await sdkDriver.create(...args);
       return {sandboxId:handle.sandboxId,files:handle.files,commands:{run:async command=>{
-        assert.equal(command,"exec -- 'sync'");
+        assert.equal(command,"exec 'sync'");
         return {wait:async()=>({exitCode:0}),kill:async()=>true,disconnect:async()=>{}};
       }}};
     }};

@@ -6,7 +6,7 @@ Both adapters use the official `e2b@2.24.0` package, pinned to the version used 
 
 Use an existing Agent Sandbox service with an E2B endpoint and a compatible template. `domain` resolves the control plane as `https://api.<domain>` unless `apiUrl` is explicitly supplied. OMA's existing templates, CSI mount metadata and storage attestation can be retained.
 
-`onTimeout: 'pause'` maps to E2B auto-pause with automatic resume disabled. `pausedRetention` adds Alibaba's reserve-paused-sandbox-duration metadata. OMA's 150-second claim/readiness annotations remain caller metadata, rather than global defaults for all consumers.
+Alibaba preserves OMA defaults: 24-hour running timeout, automatic pause with automatic resume disabled, 24-hour paused retention, and 150-second claim/readiness budgets. `pausedRetention`, `timeoutSeconds` and `onTimeout` can be explicitly overridden. Volcengine keeps these Alibaba annotations out of its create request and requires explicit pause.
 
 ## Volcengine
 

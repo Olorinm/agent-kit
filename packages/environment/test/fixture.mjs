@@ -1,7 +1,7 @@
 import { spawn } from 'node:child_process';
 import * as fs from 'node:fs/promises';
 import { dirname, join } from 'node:path';
-import { CommandExitError, SandboxNotFoundError, FileNotFoundError } from 'e2b';
+import { CommandExitError, SandboxNotFoundError, FileNotFoundError } from '../dist/sdk.js';
 
 // Runs real local processes; cloud lifecycle remains a deterministic test double.
 export function fixture() {
@@ -21,8 +21,10 @@ export function fixture() {
       calls.push(['exec', command, opts]);
       const child = spawn('/bin/bash', ['-c', command], { cwd: opts.cwd, env: { ...process.env, ...opts.envs } });
       running.add(child);
-      child.stdout.setEncoding('utf8'); child.stderr.setEncoding('utf8');
-      child.stdout.on('data', opts.onStdout); child.stderr.on('data', opts.onStderr);
+      for (const stream of ['stdout','stderr']) child[stream].on('data', bytes => {
+        opts[stream === 'stdout' ? 'onStdoutBytes' : 'onStderrBytes']?.(bytes);
+        opts[stream === 'stdout' ? 'onStdout' : 'onStderr']?.(String(bytes));
+      });
       const finished = new Promise((resolve, reject) => {
         child.once('error', reject);
         child.once('close', (code, signal) => {
@@ -34,7 +36,7 @@ export function fixture() {
       return { wait: () => finished, kill: async () => child.kill('SIGKILL'), disconnect: async () => {} };
     } },
     files: {
-      read: path => native(() => fs.readFile(path)),
+      read: (path, opts) => native(() => fs.readFile(path, opts?.format === "text" ? "utf8" : undefined)),
       write: (path, bytes) => native(async () => {
         await fs.mkdir(dirname(path), {recursive: true});
         await fs.writeFile(path, typeof bytes === 'string' ? bytes : new Uint8Array(bytes));

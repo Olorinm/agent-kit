@@ -1,4 +1,4 @@
-import { Sandbox, SandboxError, SandboxNotFoundError, FileNotFoundError, CommandExitError,
+import { Sandbox, SandboxError, SandboxNotFoundError, FileNotFoundError,
   type SandboxOpts, type SandboxConnectOpts, type SandboxApiOpts } from "e2b";
 import { EnvironmentError } from "./errors.js";
 
@@ -12,25 +12,12 @@ function explicit<T>(options: T): T {
 }
 
 /** Small SDK seam used by contract tests; the default driver calls the real SDK. */
-export interface RemoteProcess {
-  wait(): Promise<{ exitCode: number }>;
-  kill(): Promise<boolean>;
-  disconnect(): Promise<void>;
-}
-export interface RemoteSandbox {
-  sandboxId: string;
+import type { E2BSandbox, E2BCommandHandle } from "./sandbox/e2b-sandbox-client.js";
+export type RemoteProcess = E2BCommandHandle;
+export interface RemoteSandbox extends E2BSandbox {
   getHost(port: number): string;
   trafficAccessToken?: string;
-  commands: {
-    run(command: string, options: {
-      background: true; cwd?: string; envs?: Record<string, string>;
-      timeoutMs?: number; onStdout(data: string): void; onStderr(data: string): void;
-    }): Promise<RemoteProcess>;
-  };
-  files: {
-    read(path: string, options: { format: "bytes" }): Promise<Uint8Array>;
-    write(path: string, data: string | ArrayBuffer): Promise<unknown>;
-    remove(path: string): Promise<void>;
+  files: E2BSandbox["files"] & {
     list(path: string): Promise<Array<{
       path: string; type?: string; size: number; modifiedTime?: Date; symlinkTarget?: string;
     }>>;
@@ -70,6 +57,3 @@ export const isMissingSandbox = (error: unknown, volcengineId?: string): boolean
   volcengineId !== undefined && error instanceof SandboxError &&
     error.message === `404: Sandbox owner not found: ${volcengineId}`;
 export const isMissingFile = (error: unknown): boolean => error instanceof FileNotFoundError;
-export function commandExit(error: unknown): number | undefined {
-  return error instanceof CommandExitError ? error.exitCode : undefined;
-}

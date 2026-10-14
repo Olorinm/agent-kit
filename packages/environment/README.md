@@ -1,5 +1,8 @@
 # Agent Environment
 
+
+OMA sandbox source is reused directly; see [source and update policy](docs/upstream.md). This derived version is local/private pending upstream redistribution permission.
+
 [English](README.md) | [简体中文](README.zh-CN.md)
 
 Create and manage cloud execution environments for any agent, through one TypeScript API and CLI.
@@ -84,7 +87,8 @@ Serialize lifecycle changes and work per environment in your scheduler. Persist 
 ```sh
 npm test
 npm run test:package
-npm run test:oma -- /path/to/open-managed-agents
+npm run test:oma
+npm run check:upstream -- /path/to/open-managed-agents
 # Provisions a billable sandbox, checks exec/files/pause/resume, and destroys it:
 npm run probe -- --config /secure/providers.json --provider volc --template node-tools \
   --workspace /home/user/workspace --report state/probe.json
