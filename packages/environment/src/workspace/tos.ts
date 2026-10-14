@@ -81,7 +81,10 @@ export class TOSArtifactStore implements ArtifactStore {
     let token: string | undefined;
     const seen = new Set<string>(), result: Artifact[] = [];
     for (;;) {
-      const { data } = await this.client.listObjectsType2({ prefix: search, maxKeys: 1000, continuationToken: token, listOnlyOnce: true });
+      // The SDK forwards listOnlyOnce as a signed query parameter; omit that
+      // local option. maxKeys bounds its built-in pagination to this batch.
+      const { data } = await this.client.listObjectsType2({ prefix: search, maxKeys: 1000,
+        ...(token ? { continuationToken: token } : {}) });
       for (const item of data.Contents ?? []) {
         if (!item.Key.startsWith(search)) throw new Error("Object outside Workspace");
         const path = item.Key.slice(root.length);

@@ -31,6 +31,8 @@ try{
   assert.deepEqual(await p.readFile(refs[1].id,path),bytes);
   assert.deepEqual((await backend.store.get(owner,workspaceId,file)).body,bytes);
   assert.equal(await backend.store.get('different-owner',workspaceId,file),null);
+  assert.ok((await backend.store.list(owner,workspaceId)).some(entry=>entry.path===file));
+  assert.equal((await backend.store.stat(owner,workspaceId,file)).size,bytes.length);
   await check('two-containers-shared-bytes-and-owner-isolation');
   const url=await backend.store.createSignedReadUrl(owner,workspaceId,file,60,{download:true});
   const download=await fetch(url);assert.equal(download.status,200);assert.deepEqual(new Uint8Array(await download.arrayBuffer()),bytes);

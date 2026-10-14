@@ -61,3 +61,20 @@ test('TOS signed downloads use public endpoints and storage errors do not become
    await assert.rejects(f.store.get('owner','team','file'),{code:'AccessDenied'});
  }finally{f.close();}
 });
+test('TOS listing follows bounded continuation batches without unsigned local options',async()=>{
+ const f=fixture();try{
+   const calls=[];
+   f.store.client.listObjectsType2=async input=>{
+     calls.push(input);assert.ok(!('listOnlyOnce' in input));
+     return {data:input.continuationToken
+       ?{Contents:[{Key:'owner/team/b',Size:2,LastModified:'2026-01-01'}],IsTruncated:false}
+       :{Contents:[{Key:'owner/team/.oma-workspace-checks/probe',Size:64},{Key:'owner/team/a',Size:1,LastModified:'2026-01-01'}],IsTruncated:true,NextContinuationToken:'next'}};
+   };
+   assert.deepEqual((await f.store.list('owner','team')).map(x=>x.path),['a','b']);
+   assert.equal(calls.length,2);assert.equal(calls[1].continuationToken,'next');
+   f.store.client.listObjectsType2=async()=>({data:{Contents:[],IsTruncated:true,NextContinuationToken:'repeated'}});
+   await assert.rejects(f.store.list('owner','team'),/continuation/);
+   f.store.client.listObjectsType2=async()=>({data:{Contents:[{Key:'other/team/file'}]}});
+   await assert.rejects(f.store.list('owner','team'),/outside/);
+ }finally{f.close();}
+});
