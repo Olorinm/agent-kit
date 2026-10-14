@@ -193,7 +193,19 @@
          continue;
        }
        if (done) {
-@@ -636,6 +659,10 @@
+@@ -624,8 +647,9 @@
+ }
+ 
+ function isMissingFileError(error: unknown): boolean {
+-  const message = error instanceof Error ? error.message : String(error);
+-  return /not[ -]?found|no such file|404/i.test(message);
++  // Transport/DNS failures and a missing Sandbox are not a missing file.
++  return error instanceof FileNotFoundError ||
++    !!error && typeof error === "object" && "code" in error && error.code === "ENOENT";
+ }
+ 
+ /**
+@@ -636,6 +660,10 @@
    command: string[],
    opts?: SandboxExecOptions,
  ): string {

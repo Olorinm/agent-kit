@@ -647,8 +647,9 @@ function isCommandExitError(e: unknown): e is { exitCode: number } {
 }
 
 function isMissingFileError(error: unknown): boolean {
-  const message = error instanceof Error ? error.message : String(error);
-  return /not[ -]?found|no such file|404/i.test(message);
+  // Transport/DNS failures and a missing Sandbox are not a missing file.
+  return error instanceof FileNotFoundError ||
+    !!error && typeof error === "object" && "code" in error && error.code === "ENOENT";
 }
 
 /**

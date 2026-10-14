@@ -16,7 +16,8 @@ them, so neither Mau nor this package depends on OMA's database implementation.
   the original factory hooks for cloud transport differences.
 - Bound command output to 8 MiB and cancellation observation to 10 seconds;
   retain OMA's original byte decoding, cancellation and uncertain-exit handling.
-- Reject invalid argv/environment keys before shell interpolation.
+- Reject invalid argv/environment keys before shell interpolation, and recognize
+  missing files by typed errors/ENOENT so DNS and gateway failures stay uncertain.
 - Export existing mount/filesystem helpers for consumers that previously imported
   OMA's private source paths. No old `/oma` bridge remains.
 

@@ -174,3 +174,11 @@ test('OMA stream bounds raw output, cancels the late process and preserves obser
   assert.equal(killed,1);assert.deepEqual(exit,{exitCode:null,signal:'SIGKILL'});
   assert.equal(f.provider.hasUncertainExecution('overflow'),false);
 });
+
+test('file removal never converts DNS or gateway failures into successful absence', async () => {
+  const f=setup(),create=f.driver.create;
+  f.driver.create=async(...args)=>{const h=await create(...args);h.files.remove=async()=>{throw new Error('getaddrinfo ENOTFOUND gateway');};return h;};
+  const {id}=await f.provider.create({template:'node'});
+  await assert.rejects(f.provider.removeFile(id,'/file'),{code:'file_operation_unknown',outcomeUnknown:true});
+  assert.equal(f.provider.hasUncertainExecution(id),true);
+});
