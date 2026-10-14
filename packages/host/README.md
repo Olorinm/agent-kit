@@ -37,7 +37,7 @@ Your product owns its UI, accounts, business permissions, memory strategy and da
 
 ## Optional React UI
 
-`@olorinm/agent-ui` supplies reusable chat messages, Markdown, a composer, process details, approvals, questions and resources. It is a separate package; Agent Host itself does not depend on React. Products keep their own data, permissions and file operations.
+`@olorinm/agent-ui` supplies reusable chat messages, Markdown, a composer, process details, approvals, questions and resources. It is a separate package in [Olorinm/agent-ui](https://github.com/Olorinm/agent-ui); Agent Host itself does not depend on React. Products keep their own data, permissions and file operations.
 
 See the [React UI guide](docs/react-ui.md) and [independent document editor](examples/react-editor/README.md).
 

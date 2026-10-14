@@ -26,7 +26,6 @@ jobs:
       - run: npm run test:package
         # Fresh Windows consumers can spend several minutes installing native SDK dependencies.
         timeout-minutes: ${{ runner.os == 'Windows' && 10 || 5 }}
-      - run: npm run test:ui
       - if: runner.os == 'Linux'
         run: npx playwright install --with-deps chromium
       - if: runner.os == 'Linux'
