@@ -5,6 +5,9 @@ export async function startOpenClawFixture({
   cancelStatus = "aborted",
   pluginEnabled = true,
   canonicalize = false,
+  protocol = 4,
+  features,
+  rpcError,
 } = {}) {
   const server = new WebSocketServer({ host: "127.0.0.1", port: 0 });
   await new Promise((resolve) => server.once("listening", resolve));
@@ -40,6 +43,8 @@ export async function startOpenClawFixture({
       const respond = (ok, payload, error) =>
         send({ type: "res", id: frame.id, ok, payload, error });
       try {
+        if (rpcError?.method === frame.method)
+          return respond(false, undefined, rpcError.error);
         if (methods.has(frame.method)) {
           methods.get(frame.method)({ params: p, client: { connId }, respond });
           return;
@@ -51,8 +56,9 @@ export async function startOpenClawFixture({
             });
           return respond(true, {
             type: "hello-ok",
-            protocol: 4,
-            server: { version: "2026.9.9" },
+            protocol,
+            server: { version: "2026.10.3" },
+            ...(features ? { features } : {}),
           });
         }
         if (frame.method === "exec.approval.resolve") {
@@ -94,18 +100,22 @@ export async function startOpenClawFixture({
           return respond(true, { ok: true, deleted: sessions.delete(p.key) });
         if (frame.method === "sessions.compact")
           return respond(true, { compacted: true });
-        if (frame.method === "sessions.steer") {
+        if (
+          frame.method === "sessions.steer" ||
+          (frame.method === "chat.send" && p.queueMode === "interrupt")
+        ) {
+          const key = p.sessionKey ?? p.key;
           for (const run of runs.values())
-            if (run.sessionKey === p.key && run.status === "running")
+            if (run.sessionKey === key && run.status === "running")
               run.status = "aborted";
           const runId = `steered-${p.idempotencyKey}`;
-          runs.set(runId, { status: "running", sessionKey: p.key });
+          runs.set(runId, { status: "running", sessionKey: key });
           send({
             type: "event",
             event: "chat",
             payload: {
               runId,
-              sessionKey: p.key,
+              sessionKey: key,
               state: "final",
               message: {
                 role: "assistant",

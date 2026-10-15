@@ -114,7 +114,7 @@ async function handle(rpc) {
         ).messages,
         count: 1,
       };
-    else if (method === "session.branch") {
+    else if (method === "session.branch" || method === "session.branch_whole") {
       const source = live.get(p.session_id);
       const stored_session_id = `stored-fork-${++next}`,
         session_id = `live-fork-${next}`;
@@ -187,12 +187,14 @@ async function handle(rpc) {
       result =
         p.focus_topic === "pending"
           ? { status: "pending" }
-          : {
-              status: "compressed",
-              before_tokens: 100,
-              after_tokens: 20,
-              info: { stored_session_id: state.stored_session_id },
-            };
+          : ["noop", "aborted", "refused_would_grow"].includes(p.focus_topic)
+            ? { status: "compressed", summary: { [p.focus_topic]: true } }
+            : {
+                status: "compressed",
+                before_tokens: 100,
+                after_tokens: 20,
+                info: { stored_session_id: state.stored_session_id },
+              };
     } else if (method === "session.steer")
       result = { status: "queued", text: p.text };
     else throw new Error("unknown method " + method);

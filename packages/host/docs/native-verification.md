@@ -1,6 +1,6 @@
 # Capability evidence — alpha.8
 
-Date: **2026-10-12**. Runtimes: **macOS arm64 / Node.js 24.18.0** and **Debian 12 Linux arm64 / Node.js 24.21.0**; platform scope is recorded per matrix. Kernel pins are unchanged from the [support matrix](kernel-support.md). The alpha.7 follow-up is tracked by [issue #18](https://github.com/Olorinm/agent-host/issues/18). The alpha.8 attachment/settings matrix is tracked by [issue #20](https://github.com/Olorinm/agent-host/issues/20). No Kernel version changed.
+Date: **2026-10-12**. Runtimes: **macOS arm64 / Node.js 24.18.0** and **Debian 12 Linux arm64 / Node.js 24.21.0**; platform scope is recorded per matrix. This historical matrix uses Codex 0.162.0, Claude SDK 0.3.295 / engine 2.1.295, Pi 1.1.0, OpenCode 1.18.35, Kimi 2.1.1, Hermes 0.21.6 and OpenClaw 2026.9.9. Current pins and evidence are in the [2026-10-15 refresh](harness-refresh-20261015.md). The alpha.7 follow-up is tracked by [issue #18](https://github.com/Olorinm/agent-host/issues/18). The alpha.8 attachment/settings matrix is tracked by [issue #20](https://github.com/Olorinm/agent-host/issues/20). No Kernel version changed.
 
 ## Evidence levels
 

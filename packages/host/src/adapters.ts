@@ -4,6 +4,10 @@ import { PiAgent, type PiAgentOptions } from "./pi/session.js";
 import { AcpAgent, type AcpAgentOptions } from "./acp/session.js";
 import { HermesAgent, type HermesAgentOptions } from "./hermes/session.js";
 import {
+  HermesGatewayAgent,
+  type HermesGatewayAgentOptions,
+} from "./hermes/gateway.js";
+import {
   OpenClawAgent,
   type OpenClawAgentOptions,
 } from "./openclaw/session.js";
@@ -15,7 +19,7 @@ export interface AgentsByKernel {
   pi: PiAgent;
   opencode: AcpAgent;
   kimi: AcpAgent;
-  hermes: HermesAgent;
+  hermes: HermesAgent | HermesGatewayAgent;
   openclaw: OpenClawAgent;
 }
 type ConfigByKernel = {
@@ -26,7 +30,9 @@ type ConfigByKernel = {
     options?: Omit<AcpAgentOptions, "command"> & { command?: string };
   };
   kimi: { options?: Omit<AcpAgentOptions, "command"> & { command?: string } };
-  hermes: { options: HermesAgentOptions };
+  hermes:
+    | { transport?: "stdio"; options: HermesAgentOptions }
+    | { transport: "acp"; options?: HermesGatewayAgentOptions };
   openclaw: { options: OpenClawAgentOptions };
 };
 export type AgentConfig<K extends Kernel = Kernel> = {
@@ -34,6 +40,16 @@ export type AgentConfig<K extends Kernel = Kernel> = {
 }[K];
 
 /** Selects the existing adapter without wrapping away native methods or options. */
+export function createAgent(config: {
+  kernel: "hermes";
+  transport: "acp";
+  options?: HermesGatewayAgentOptions;
+}): HermesGatewayAgent;
+export function createAgent(config: {
+  kernel: "hermes";
+  transport?: "stdio";
+  options: HermesAgentOptions;
+}): HermesAgent;
 export function createAgent<K extends Kernel>(
   config: AgentConfig<K>,
 ): AgentsByKernel[K];
@@ -53,7 +69,9 @@ export function createAgent(config: AgentConfig): AgentsByKernel[Kernel] {
         compaction: config.kernel,
       });
     case "hermes":
-      return new HermesAgent(config.options);
+      return config.transport === "acp"
+        ? new HermesGatewayAgent(config.options)
+        : new HermesAgent(config.options);
     case "openclaw":
       return new OpenClawAgent(config.options);
     default:

@@ -151,13 +151,27 @@ export function projectProgress(event: AgentEvent): AgentEvent[] {
   }
   if (method === "session/update") {
     const update = obj(p.update);
+    // Legacy OpenCode carries child events on the root session with native
+    // attribution in _meta. Canonical progress has no child identity field.
+    if (obj(update._meta)["opencode/child-session"]) return output;
     if (update.sessionUpdate === "agent_thought_chunk")
       reason(obj(update.content).text);
-    if (update.sessionUpdate === "usage_update")
-      usage(update, "native", {
+    if (update.sessionUpdate === "usage_update") {
+      // ACP used/size describe context occupancy, not billable input/output tokens.
+      const cost = obj(update.cost);
+      usage(update, "session", {
         inputTokens: "inputTokens",
         outputTokens: "outputTokens",
       });
+      const projected = output.at(-1);
+      if (
+        projected?.type === "usage" &&
+        cost.currency === "USD" &&
+        typeof cost.amount === "number" &&
+        Number.isFinite(cost.amount)
+      )
+        projected.costUsd = cost.amount;
+    }
     if (
       ["tool_call", "tool_call_update"].includes(String(update.sessionUpdate))
     )

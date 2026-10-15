@@ -17,6 +17,89 @@ function readAcpContextUsage(update: Record<string, unknown>) {
     size: typeof update.size === "number" ? update.size : undefined,
   };
 }
+/** OpenCode 2 owns /compact and reports completion over the same ACP session. */
+export async function compactOpenCodeAcp(options: {
+  client: StdioJsonRpcClient;
+  sessionId: string;
+  timeoutMs?: number;
+  signal?: AbortSignal;
+}): Promise<CompactionResult> {
+  const { client, sessionId, signal } = options;
+  let receipt: CompactionResult | undefined;
+  let compactionId: string | undefined;
+  const remove = client.addNotificationHandler((notification) => {
+    if (notification.method !== "session/update") return;
+    const params = asObject(notification.params);
+    if (params.sessionId !== sessionId) return;
+    const update = asObject(params.update);
+    const meta = asObject(update._meta);
+    if (meta["opencode/child-session"]) return;
+    const marker = asObject(meta["opencode/compaction"]);
+    const current =
+      update.sessionUpdate === "compaction_update" ? update : marker;
+    const id =
+      readString(current, "compactionId") ?? readString(current, "messageId");
+    if (!id) return;
+    if (["in_progress", "started"].includes(String(current.status))) {
+      compactionId ??= id;
+      return;
+    }
+    if (compactionId !== id) return;
+    if (current.status === "completed") receipt = { ok: true, compacted: true };
+    if (["failed", "cancelled"].includes(String(current.status)))
+      receipt = {
+        ok: false,
+        compacted: false,
+        error:
+          current.status === "cancelled"
+            ? "opencode_compaction_cancelled"
+            : "opencode_compaction_failed",
+        outcomeUnknown: false,
+      };
+  });
+  const cancel = () => client.notify("session/cancel", { sessionId });
+  signal?.addEventListener("abort", cancel, { once: true });
+  try {
+    signal?.throwIfAborted();
+    // Upstream awaits compaction before its prompt response; an ack without a
+    // correlated started/completed lifecycle never establishes success.
+    const response = asObject(
+      await client.request(
+        "session/prompt",
+        {
+          sessionId,
+          prompt: [{ type: "text", text: "/compact" }],
+        },
+        { signal, timeoutMs: options.timeoutMs ?? 120_000 },
+      ),
+    );
+    if (response.stopReason === "cancelled")
+      return {
+        ok: false,
+        compacted: false,
+        error: "opencode_compaction_cancelled",
+        outcomeUnknown: false,
+      };
+    return (
+      receipt ?? {
+        ok: false,
+        compacted: false,
+        error: "opencode_compaction_not_confirmed",
+        outcomeUnknown: true,
+      }
+    );
+  } catch (error) {
+    return {
+      ok: false,
+      compacted: false,
+      error: error instanceof Error ? error.message : String(error),
+      outcomeUnknown: true,
+    };
+  } finally {
+    remove();
+    signal?.removeEventListener("abort", cancel);
+  }
+}
 export async function compactOpenCode(options: {
   command: string;
   cwd?: string;

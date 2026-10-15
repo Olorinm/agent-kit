@@ -32,7 +32,7 @@ try {
 }
 ```
 
-The factory selects existing native adapters. It preserves their methods and options, and does not invent equivalents for Kernel-specific features. Hermes requires `options.command`; OpenClaw requires `options.url`. Existing imports such as `@olorinm/agent-host/codex` remain supported.
+The factory selects existing native adapters. It preserves their methods and options, and does not invent equivalents for Kernel-specific features. Hermes TUI requires `options.command`; `transport: 'acp'` selects the canonical viewer with default `hermes acp`. Its transport-specific description is `getHermesGatewayCapabilities()` from the Hermes subpath. OpenClaw requires `options.url`. Existing imports such as `@olorinm/agent-host/codex` remain supported.
 
 The capabilities subpath is browser-safe; the adapters subpath is for the Node.js host. `getKernelCapabilities(kernel, 'http')` describes the built-in service adapter. For a running service, use its runtime description so custom compositions and configuration checks are represented.
 

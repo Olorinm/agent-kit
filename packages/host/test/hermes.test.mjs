@@ -13,6 +13,78 @@ const request = {
   instructions: "Stable",
   input: "hello",
 };
+test("Hermes changes native fast mode per session without rewriting creation identity", async () => {
+  const { agent, home } = await setup();
+  try {
+    const identities = [];
+    for (const fastMode of ["normal", "auto", "cold", "fast", "ultrafast"]) {
+      const events = await Array.fromAsync(agent.run({ ...request, fastMode }));
+      assert.equal(events.at(-1).outcome.status, "completed");
+      identities.push(events.find((e) => e.type === "session.bound").threadId);
+    }
+    assert.equal(new Set(identities).size, 1);
+    const calls = (await readFile(join(home, "methods.jsonl"), "utf8"))
+      .trim()
+      .split("\n")
+      .map(JSON.parse);
+    assert.equal(calls.filter((c) => c.method === "session.create").length, 1);
+    const settings = calls.filter(
+      (c) => c.method === "config.set" && c.params.key === "fast",
+    );
+    assert.deepEqual(
+      settings.map((c) => c.params.value),
+      ["normal", "auto", "cold", "fast", "ultrafast"],
+    );
+    assert.ok(
+      settings.every(
+        (c) =>
+          c.params.scope === "session" &&
+          c.params.session_id.startsWith("live-"),
+      ),
+    );
+  } finally {
+    agent.close();
+  }
+});
+
+test("Hermes never reports no-op, refused growth or aborted compression as completed", async () => {
+  const { agent } = await setup();
+  try {
+    await Array.fromAsync(agent.run(request));
+    for (const reason of ["noop", "refused_would_grow", "aborted"]) {
+      const receipt = await agent.compact(request.sessionId, reason);
+      assert.equal(receipt.ok, false);
+      assert.equal(receipt.compacted, false);
+      assert.equal(receipt.error, `hermes_compression_${reason}`);
+      assert.equal(receipt.cancelled, reason === "aborted" ? true : undefined);
+    }
+  } finally {
+    agent.close();
+  }
+});
+
+test("Hermes forks native history without transferring a duplicate transcript", async () => {
+  const { agent, home } = await setup();
+  try {
+    await Array.fromAsync(agent.run(request));
+    const fork = await agent.sessions.fork(request.sessionId, "fork");
+    assert.match(fork.nativeSessionId, /^stored-fork-/);
+    const calls = (await readFile(join(home, "methods.jsonl"), "utf8"))
+      .trim()
+      .split("\n")
+      .map(JSON.parse);
+    assert.equal(
+      calls.some((c) => c.method === "session.branch"),
+      false,
+    );
+    assert.ok(
+      calls.find((c) => c.method === "session.branch_whole").params
+        .idempotency_key,
+    );
+  } finally {
+    agent.close();
+  }
+});
 async function setup(extra = {}) {
   const home = await mkdtemp(join(tmpdir(), "hermes-host-test-"));
   const options = {

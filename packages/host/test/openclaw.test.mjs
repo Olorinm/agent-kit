@@ -3,7 +3,11 @@ import assert from "node:assert/strict";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { OpenClawAgent } from "../dist/openclaw/index.js";
+import {
+  OpenClawAgent,
+  OpenClawGatewayClient,
+  OpenClawGatewayError,
+} from "../dist/openclaw/index.js";
 import { MemoryBindingStore, FileBindingStore } from "../dist/index.js";
 import { startOpenClawFixture } from "./fixtures/openclaw-gateway.mjs";
 const request = {
@@ -13,6 +17,99 @@ const request = {
   input: "hello",
   model: "provider/model",
 };
+test("OpenClaw preserves protocol inventories without refusing hidden compatibility methods", async (t) => {
+  const gateway = await startOpenClawFixture({
+    features: {
+      methods: ["sessions.list"],
+      events: ["chat"],
+      capabilities: ["native-test-capability"],
+    },
+  });
+  const client = new OpenClawGatewayClient(gateway);
+  t.after(async () => {
+    client.close();
+    await gateway.close();
+  });
+  assert.equal(client.supportsMethod("sessions.list"), undefined);
+  await client.ensureConnected();
+  assert.equal(client.protocol, 4);
+  assert.equal(client.serverVersion, "2026.10.3");
+  assert.deepEqual(client.events, ["chat"]);
+  assert.deepEqual(client.capabilities, ["native-test-capability"]);
+  assert.equal(client.supportsMethod("sessions.list"), true);
+  assert.equal(client.supportsMethod("sessions.resolve"), undefined);
+  assert.deepEqual(
+    await client.request("sessions.resolve", {
+      key: "test",
+      allowMissing: true,
+    }),
+    { ok: false, key: "test" },
+  );
+  assert.equal(
+    gateway.calls.some((call) => call.method === "sessions.resolve"),
+    true,
+  );
+  assert.deepEqual(await client.request("sessions.list", {}), { sessions: [] });
+});
+
+test("OpenClaw rejects mismatched handshakes and preserves native structured refusal metadata", async (t) => {
+  const mismatch = await startOpenClawFixture({ protocol: 5 });
+  const wrong = new OpenClawGatewayClient(mismatch);
+  t.after(async () => {
+    wrong.close();
+    await mismatch.close();
+  });
+  await assert.rejects(wrong.ensureConnected(), /protocol_mismatch/);
+  const native = {
+    code: "UNAVAILABLE",
+    message: "gateway draining",
+    details: { reason: "draining" },
+    retryable: true,
+    retryAfterMs: 2000,
+  };
+  const gateway = await startOpenClawFixture({
+    rpcError: { method: "sessions.list", error: native },
+  });
+  const client = new OpenClawGatewayClient(gateway);
+  t.after(async () => {
+    client.close();
+    await gateway.close();
+  });
+  await assert.rejects(client.request("sessions.list", {}), (error) => {
+    assert.ok(error instanceof OpenClawGatewayError);
+    for (const key of Object.keys(native))
+      assert.deepEqual(error[key], native[key]);
+    assert.equal(error.method, "sessions.list");
+    return true;
+  });
+});
+
+test("OpenClaw keeps native fast-mode values including false and refuses a transport that cannot carry them", async (t) => {
+  const gateway = await startOpenClawFixture();
+  const agent = new OpenClawAgent(gateway);
+  t.after(async () => {
+    agent.close();
+    await gateway.close();
+  });
+  for (const fastMode of [true, false, "auto", "ultrafast"]) {
+    const events = await Array.fromAsync(agent.run({ ...request, fastMode }));
+    assert.equal(events.at(-1).outcome.status, "completed");
+  }
+  assert.deepEqual(
+    gateway.calls
+      .filter((c) => c.method === "chat.send")
+      .map((c) => c.params.fastMode),
+    [true, false, "auto", "ultrafast"],
+  );
+  const rejected = await Array.fromAsync(
+    agent.run({ ...request, method: "agent", fastMode: false }),
+  );
+  assert.match(rejected.at(-1).outcome.error, /fast_mode_requires_chat_send/);
+  assert.equal(
+    gateway.calls.some((c) => c.method === "agent"),
+    false,
+  );
+});
 test("OpenClaw native forks survive restart and retain configuration checks across nested forks", async (t) => {
   const directory = await mkdtemp(join(tmpdir(), "openclaw-fork-bindings-"));
   const gateway = await startOpenClawFixture();

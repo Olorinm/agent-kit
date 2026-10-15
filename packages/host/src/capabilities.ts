@@ -164,13 +164,18 @@ export function getKernelCapabilities(
       status: "unsupported",
       reason: "native_not_supported",
       details:
-        "The pinned Pi 1.1 durable API has no supported native delete operation.",
+        "The pinned Pi 1.2 durable API has no supported native delete operation.",
     };
     f["interactions.approval"] = conditional(
       "configuration_required",
       "Pi beforeTool policy callback; HTTP profiles opt in with toolApproval. No built-in permission dialog is invented.",
     );
   } else if (kernel === "opencode" || kernel === "kimi") {
+    if (kernel === "opencode")
+      f["tools.product"] = conditional(
+        "native_negotiation_required",
+        "Native ACP MCP tools; OpenCode 2.0.29 can omit newly registered tools from the first prompt while its tool catalog refreshes. ACP exposes no catalog-ready barrier; Host does not add hidden model turns or sleeps.",
+      );
     f["input.images"] = conditional(
       "native_negotiation_required",
       "ACP initialize must advertise promptCapabilities.image.",
@@ -194,7 +199,7 @@ export function getKernelCapabilities(
       "configuration_required",
       kernel === "kimi"
         ? "Configure compaction: 'kimi'; requires an existing binding and a confirmed native /compact receipt."
-        : "Configure compaction: 'opencode'; requires an existing binding and the same native profile's serve/summarize API.",
+        : "Configure compaction: 'opencode'; OpenCode 2 uses native ACP /compact with a completion receipt. OpenCode 1 retains its native serve/summarize bridge.",
     );
   } else if (kernel === "hermes") {
     f["input.images"] = conditional(
@@ -223,7 +228,7 @@ export function getKernelCapabilities(
     f["controls.compact"] = supported("Requires a native compaction receipt.");
     f["controls.steer"] = conditional(
       "native_negotiation_required",
-      "Gateway sessions.steer interrupts and replaces the active native run; Host follows the returned run ID.",
+      "Gateway chat.send with queueMode: 'interrupt' interrupts and replaces the active native run; Host follows the returned run ID.",
     );
     f["interactions.approval"] = conditional(
       "configuration_required",
@@ -237,10 +242,15 @@ export function getKernelCapabilities(
     };
   }
   if (kernel === "opencode" || kernel === "kimi")
-    for (const name of ["sessions.list", "sessions.fork"] as const)
+    for (const name of [
+      "sessions.list",
+      "sessions.fork",
+      "sessions.history",
+      "sessions.delete",
+    ] as const)
       f[name] = conditional(
         "native_negotiation_required",
-        "Requires the ACP session capability advertised at initialize.",
+        "Requires the corresponding ACP session capability (history uses loadSession); OpenCode 1 retains its native history/delete HTTP bridge. Inspect runtime discovery for the selected native implementation.",
       );
   if (kernel === "kimi")
     f["sessions.delete"] = conditional(
@@ -278,7 +288,9 @@ export function getKernelCapabilities(
     );
     f["input.documents"] = conditional(
       "native_negotiation_required",
-      "ACP promptCapabilities.embeddedContext preserves embedded resource bytes.",
+      kernel === "kimi"
+        ? "ACP embeddedContext accepts text resources. Kimi 2.2 drops binary blobs, so Host rejects them explicitly; the original file remains available in the workspace."
+        : "ACP promptCapabilities.embeddedContext preserves embedded resource bytes.",
     );
   }
   if (kernel === "openclaw")

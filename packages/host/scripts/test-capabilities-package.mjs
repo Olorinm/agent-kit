@@ -15,6 +15,19 @@ export async function testCapabilitiesPackage(consumer) {
   const { AgentHostClient } = await import(
     pathToFileURL(join(installed, "service/client.js"))
   );
+  const { createAgent } = await import(
+    pathToFileURL(join(installed, "adapters.js"))
+  );
+  const { HermesGatewayAgent, getHermesGatewayCapabilities } = await import(
+    pathToFileURL(join(installed, "hermes/index.js"))
+  );
+  const hermes = createAgent({ kernel: "hermes", transport: "acp" });
+  assert.ok(hermes instanceof HermesGatewayAgent);
+  assert.equal(
+    getHermesGatewayCapabilities().features["controls.compact"].status,
+    "unsupported",
+  );
+  await hermes.close();
   assert.equal(
     getKernelCapabilities("pi").features["sessions.delete"].reason,
     "native_not_supported",
@@ -80,5 +93,62 @@ export async function testCapabilitiesPackage(consumer) {
   }
   console.log(
     "PASS installed capability API and OpenCode/Kimi HTTP compaction after restart (protocol fixtures)",
+  );
+  const cwd = join(consumer, "opencode-v2-controls");
+  await mkdir(cwd, { recursive: true });
+  const runtime = createNativeRuntime(
+    {
+      id: "opencode-v2",
+      kernel: "opencode",
+      cwd,
+      options: {
+        command: process.execPath,
+        args: [resolve("test/fixtures/acp-v2-server.mjs")],
+      },
+    },
+    cwd,
+  );
+  const host = await startAgentHostServer({
+    runtimes: [runtime],
+    stateDirectory: cwd,
+    token: "installed-v2-token",
+    port: 0,
+  });
+  const client = new AgentHostClient({
+    baseUrl: host.url,
+    token: "installed-v2-token",
+  });
+  try {
+    const discovered = await client.discover("opencode-v2");
+    assert.equal(discovered.native.initialization.agentInfo.version, "2.0.29");
+    assert.equal(
+      discovered.capabilities.features["sessions.delete"].status,
+      "supported",
+    );
+    const session = client.session({
+      sessionId: "native-v2",
+      runtimeId: "opencode-v2",
+    });
+    assert.equal(
+      (await (await session.run("hello")).wait({ pollMs: 10 })).status,
+      "completed",
+    );
+    assert.equal(
+      (await (await session.compact()).wait({ pollMs: 10 })).status,
+      "completed",
+    );
+    assert.equal(
+      (await client.nativeSessions("opencode-v2").history("native-v2")).source,
+      "native",
+    );
+    assert.equal(
+      (await client.nativeSessions("opencode-v2").delete("native-v2")).deleted,
+      true,
+    );
+  } finally {
+    await host.close();
+  }
+  console.log(
+    "PASS installed Hermes canonical adapter and OpenCode 2 ACP discovery/history/delete/compaction (protocol fixture)",
   );
 }

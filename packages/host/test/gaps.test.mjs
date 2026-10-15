@@ -944,7 +944,7 @@ test("Pi HTTP native no-op compaction completes with an explicit unchanged recei
 
 test("native media types are passed only through negotiated ACP ports and Codex audio input", async (t) => {
   const cwd = await mkdtemp(join(tmpdir(), "agent-host-extra-media-"));
-  for (const kernel of ["codex", "kimi"]) {
+  for (const kernel of ["codex", "opencode", "kimi"]) {
     const log = join(cwd, kernel + ".jsonl");
     const options = {
       ...command(kernel === "codex" ? "codex-server" : "acp-server"),
@@ -968,12 +968,19 @@ test("native media types are passed only through negotiated ACP ports and Codex 
         path: join(cwd, "test.wav"),
       },
     ];
-    if (kernel === "kimi")
+    if (kernel === "opencode")
       attachments.push({
         name: "test.pdf",
         mediaType: "application/pdf",
         data: "JVBERg==",
         path: join(cwd, "test.pdf"),
+      });
+    if (kernel === "kimi")
+      attachments.push({
+        name: "test.txt",
+        mediaType: "text/plain",
+        data: Buffer.from("Kimi text resource").toString("base64"),
+        path: join(cwd, "test.txt"),
       });
     const events = await Array.fromAsync(
       runtime.run({
@@ -1001,11 +1008,37 @@ test("native media types are passed only through negotiated ACP ports and Codex 
       ],
       kernel === "codex" ? "data:audio/wav;base64,UklGRg==" : "UklGRg==",
     );
-    if (kernel === "kimi")
+    if (kernel === "opencode")
       assert.equal(
         input.find((c) => c.type === "resource").resource.blob,
         "JVBERg==",
       );
+    if (kernel === "kimi") {
+      assert.equal(
+        input.find((c) => c.type === "resource").resource.text,
+        "Kimi text resource",
+      );
+      const rejected = await Array.fromAsync(
+        runtime.run({
+          ...base,
+          runId: "binary-media",
+          mode: "turn",
+          tools: [],
+          signal: new AbortController().signal,
+          onRequest: async () => undefined,
+          attachments: [
+            {
+              name: "test.pdf",
+              mediaType: "application/pdf",
+              data: "JVBERg==",
+              path: join(cwd, "test.pdf"),
+            },
+          ],
+        }),
+      );
+      assert.equal(outcome(rejected).status, "failed");
+      assert.match(outcome(rejected).error, /native_blob_resource_unsupported/);
+    }
   }
 });
 

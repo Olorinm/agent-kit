@@ -57,7 +57,10 @@ const setup = await (
   await import(pathToFileURL(resolve(values.profiles)))
 ).default();
 const report = {
-  kind: "live-native-http",
+  kind:
+    setup.modelProvider === "deterministic"
+      ? "native-harness-local-provider-fixture"
+      : "live-native-http",
   timestamp: new Date().toISOString(),
   platform: process.platform,
   arch: process.arch,
