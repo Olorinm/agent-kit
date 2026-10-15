@@ -1,5 +1,5 @@
 import { routeInteraction, type InteractionHandler } from "../interactions.js";
-// Observation and callback flow adapted from OpenGrove PR #126 (Apache-2.0).
+// Observation and callback flow adapted from OpenGrove PR #126; see NOTICE.
 // Browser-safe: no Node imports, credentials discovery, or service startup.
 import { capabilityNames, unknownCapabilities } from "../capabilities.js";
 import type { ProductToolResult } from "../agent.js";

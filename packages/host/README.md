@@ -65,4 +65,6 @@ See [scope and responsibilities](docs/scope.md) for the boundary between a produ
 
 ## License
 
-[Apache-2.0](LICENSE). Original source attribution is retained in [NOTICE](NOTICE).
+[MIT](LICENSE) for Agent Host's project-owned code. Original source attribution
+is retained in [NOTICE](NOTICE). Third-party SDKs and native Agent runtimes retain
+their respective licenses.

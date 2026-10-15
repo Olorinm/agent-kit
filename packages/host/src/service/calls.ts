@@ -1,4 +1,4 @@
-// Adapted from OpenGrove PR #126, src/server/client-tool-calls.ts (Apache-2.0).
+// Adapted from OpenGrove PR #126, src/server/client-tool-calls.ts; see NOTICE.
 import { randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import type { InteractionContext, ProductTool } from "../agent.js";

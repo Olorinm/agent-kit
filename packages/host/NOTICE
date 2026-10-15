@@ -1,12 +1,15 @@
 Agent Host
 Copyright 2026 OpenGrove contributors
 
+Agent Host's project-owned code is licensed under the MIT License; see LICENSE.
+
 This project extracts reusable native Agent integration from OpenGrove:
 https://github.com/open-grove/opengrove
 
-OpenGrove is distributed under the Apache License, Version 2.0.
-Preserve original source attribution and applicable third-party notices when
-extracting implementation files into this project.
+The original OpenGrove revisions were distributed under Apache-2.0. The
+project-owned code extracted into Agent Host is provided here under MIT.
+Source attribution is retained below. Third-party code, SDKs and native Agent
+runtimes retain their respective licenses and notices.
 
 The standalone HTTP callback broker, client observation flow and browser-editor
 example adapt the external-product integration from OpenGrove PR #126:
