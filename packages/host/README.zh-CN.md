@@ -65,4 +65,5 @@ HTTP 服务保留附件的实际字节、内核支持的原生图片输入与图
 
 ## 许可证
 
-[Apache-2.0](LICENSE)。原始代码署名保留在 [NOTICE](NOTICE) 中。
+Agent Host 的自有代码采用 [MIT](LICENSE)。原始代码署名保留在 [NOTICE](NOTICE) 中。
+第三方 SDK 和原生 Agent 内核继续适用各自的许可证。

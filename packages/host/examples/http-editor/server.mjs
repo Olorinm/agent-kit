@@ -1,4 +1,4 @@
-// Adapted from OpenGrove PR #126's external editor (Apache-2.0).
+// Adapted from OpenGrove PR #126's external editor; see NOTICE.
 import { createServer } from "node:http";
 import { randomUUID, createHash } from "node:crypto";
 import { mkdir, readFile, writeFile, rename } from "node:fs/promises";
