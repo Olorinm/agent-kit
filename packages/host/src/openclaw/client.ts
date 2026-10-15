@@ -27,6 +27,25 @@ type GatewayResponseFrame = {
   };
 };
 
+/** Keep the Gateway's failure contract available to callers without guessing retry safety. */
+export class OpenClawGatewayError extends Error {
+  readonly code?: string;
+  readonly details?: unknown;
+  readonly retryable?: boolean;
+  readonly retryAfterMs?: number;
+  constructor(
+    readonly method: string,
+    error: GatewayResponseFrame["error"],
+  ) {
+    super(error?.message || `${method} failed`);
+    this.name = "OpenClawGatewayError";
+    this.code = error?.code;
+    this.details = error?.details;
+    this.retryable = error?.retryable;
+    this.retryAfterMs = error?.retryAfterMs;
+  }
+}
+
 type PendingGatewayRequest = {
   method: string;
   resolve(value: unknown): void;
@@ -46,7 +65,10 @@ const OPENCLAW_OPERATOR_SCOPES = [
 
 export class OpenClawGatewayClient {
   serverVersion?: string;
+  protocol?: number;
   methods?: string[];
+  events?: string[];
+  capabilities?: string[];
   private ws?: WebSocket;
   private connected = false;
   private connectPromise?: Promise<void>;
@@ -88,6 +110,11 @@ export class OpenClawGatewayClient {
     return await this.requestOnSocket<T>(this.ws, method, params, options);
   }
 
+  /** The inventory omits supported compatibility methods; absence is unknown. */
+  supportsMethod(method: string): true | undefined {
+    return this.methods?.includes(method) ? true : undefined;
+  }
+
   addEventListener(listener: (frame: GatewayEventFrame) => void): () => void {
     this.eventListeners.add(listener);
     return () => this.eventListeners.delete(listener);
@@ -96,7 +123,10 @@ export class OpenClawGatewayClient {
   close(): void {
     this.connected = false;
     this.serverVersion = undefined;
+    this.protocol = undefined;
     this.methods = undefined;
+    this.events = undefined;
+    this.capabilities = undefined;
     for (const pending of this.pending.values()) {
       pending.cleanup();
       pending.reject(new Error("openclaw gateway closed"));
@@ -141,16 +171,28 @@ export class OpenClawGatewayClient {
         )
           .then((hello) => {
             if (settled) return;
+            const result = asObject(hello);
+            if (
+              result.type !== "hello-ok" ||
+              typeof result.protocol !== "number" ||
+              result.protocol < OPENCLAW_MIN_PROTOCOL ||
+              result.protocol > OPENCLAW_MAX_PROTOCOL
+            ) {
+              fail(new Error("openclaw_gateway_protocol_mismatch"));
+              ws.close();
+              return;
+            }
+            this.protocol = result.protocol;
             // Protocol 4 hello-ok identifies the running Gateway, which may be remote
             // or differ from the locally installed CLI.
             this.serverVersion = readString(
               asObject(asObject(hello).server),
               "version",
             );
-            const methods = asObject(asObject(hello).features).methods;
-            this.methods = Array.isArray(methods)
-              ? methods.filter((m): m is string => typeof m === "string")
-              : undefined;
+            const features = asObject(result.features);
+            this.methods = stringArray(features.methods);
+            this.events = stringArray(features.events);
+            this.capabilities = stringArray(features.capabilities);
             settled = true;
             cleanupConnect();
             this.connected = true;
@@ -311,14 +353,14 @@ export class OpenClawGatewayClient {
       pending.resolve(frame.payload);
       return;
     }
-    const details =
-      frame.error?.details === undefined
-        ? ""
-        : `: ${JSON.stringify(frame.error.details)}`;
-    pending.reject(
-      new Error(frame.error?.message || `${pending.method} failed${details}`),
-    );
+    pending.reject(new OpenClawGatewayError(pending.method, frame.error));
   }
+}
+
+function stringArray(value: unknown): string[] | undefined {
+  return Array.isArray(value)
+    ? value.filter((item): item is string => typeof item === "string")
+    : undefined;
 }
 
 function parseGatewayFrame(

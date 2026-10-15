@@ -8,6 +8,8 @@ Agent Host is an open-source integration layer that makes native coding Agents e
 
 **Status: alpha.** Install the tested archive from [GitHub Releases](https://github.com/Olorinm/agent-host/releases); no source checkout is needed. It is not yet published to npm. See the [tested versions and verification limits](docs/kernel-support.md).
 
+The [2026-10-15 harness refresh](docs/harness-refresh-20261015.md) records the latest stable targets, native feature changes and verification limits.
+
 The HTTP service preserves attachment bytes, supported native image inputs and image tool results. See [media input](docs/http-service.md#media-input) for runtime differences and limits.
 
 ## Core principles

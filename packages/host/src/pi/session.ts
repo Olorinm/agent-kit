@@ -35,6 +35,9 @@ import {
   type HarnessSettings,
   type Storage,
   type AgentEvent as PiEvent,
+  type ToolHookCall,
+  type ToolHooks,
+  type NestedToolExecutionResult,
 } from "@earendil-works/pi-durable";
 import { openNodeJsonlStorage } from "@earendil-works/pi-durable/storage/jsonl/node";
 import { NodeExecutionEnv } from "@earendil-works/pi-durable/env/node";
@@ -43,6 +46,7 @@ import {
   type AgentEvent,
   type BindingStore,
   type ProductTool,
+  type ProductToolResult,
   type InteractionContext,
   type TurnOutcome,
 } from "../agent.js";
@@ -84,9 +88,9 @@ export interface PiRunRequest {
   /** Extensions, such as the official CodingTools, remain native Pi features. */
   extensions?: Extension[];
   onBeforeTool?(
-    call: { name: string; arguments: JsonValue },
+    call: ToolHookCall,
     context: InteractionContext,
-  ): Promise<{ block?: string } | undefined>;
+  ): Promise<Awaited<ReturnType<ToolHooks["beforeTool"]>>>;
   onModelRequest?(model: Model<Api>, context: ModelContext): void;
   onNativeEvent?(event: PiEvent): void;
   beforeTurn?(ports: {
@@ -95,7 +99,7 @@ export interface PiRunRequest {
     registry: Registry;
   }): Promise<void>;
 }
-/** Pi 1.1 durable conversations. No model loop or transcript replay is implemented here. */
+/** Native durable conversations. No model loop or transcript replay is implemented here. */
 export class PiAgent {
   private readonly registry = createRegistry();
   private readonly models: Models;
@@ -460,6 +464,7 @@ export class PiAgent {
           name: tool.name,
           description: tool.description,
           parameters: tool.inputSchema as unknown as TSchema,
+          ...(tool.deferLoading ? { deferred: true as const } : {}),
           replay: "unsafe" as const,
           execute: async (input, api, nativeContext) => {
             const signal = nativeContext.abortSignal
@@ -477,15 +482,9 @@ export class PiAgent {
                 }),
               signal,
             );
-            if (!result.success)
-              throw new Error(
-                result.contentItems
-                  .filter((item) => item.type === "inputText")
-                  .map((item) => item.text)
-                  .join("\n"),
-              );
             return {
-              content: result.contentItems.map((item) => {
+              isError: !result.success,
+              output: result.contentItems.map((item) => {
                 if (item.type === "inputText")
                   return { type: "text" as const, text: item.text };
                 const image = inlineImage(item.imageUrl);
@@ -506,10 +505,10 @@ export class PiAgent {
                   ])
                 : controller.signal;
               return await abortable(async () => {
-                const policy = await request.onBeforeTool?.(
-                  { name: call.name, arguments: json(call.arguments) },
-                  { ...interaction, signal },
-                );
+                const policy = await request.onBeforeTool?.(call, {
+                  ...interaction,
+                  signal,
+                });
                 if (
                   policy?.block ||
                   (!request.onInteraction && !request.onRequest)
@@ -519,7 +518,12 @@ export class PiAgent {
                   request,
                   {
                     method: "pi/toolApproval",
-                    params: { name: call.name, input: json(call.arguments) },
+                    params: json({
+                      name: call.name,
+                      input: policy?.arguments ?? call.arguments,
+                      toolCallId: call.id,
+                      parent: call.parent,
+                    }),
                   },
                   { ...interaction, signal },
                 );
@@ -528,7 +532,7 @@ export class PiAgent {
                   !Array.isArray(answer) &&
                   typeof answer.block === "string"
                   ? { block: answer.block }
-                  : undefined;
+                  : policy;
               }, signal);
             },
           }),
@@ -625,25 +629,27 @@ export class PiAgent {
               runId,
               callId: event.toolCallId,
               tool: event.toolName,
-              result: {
-                success: result?.role === "toolResult" && !result.isError,
-                contentItems:
-                  result?.role === "toolResult"
-                    ? result.content.map((item) =>
-                        item.type === "text"
-                          ? { type: "inputText" as const, text: item.text }
-                          : {
-                              type: "inputImage" as const,
-                              imageUrl: `data:${item.mimeType};base64,${item.data}`,
+              result: event.result
+                ? nestedToolResult(event.result)
+                : {
+                    success: result?.role === "toolResult" && !result.isError,
+                    contentItems:
+                      result?.role === "toolResult"
+                        ? result.content.map((item) =>
+                            item.type === "text"
+                              ? { type: "inputText" as const, text: item.text }
+                              : {
+                                  type: "inputImage" as const,
+                                  imageUrl: `data:${item.mimeType};base64,${item.data}`,
+                                },
+                          )
+                        : [
+                            {
+                              type: "inputText",
+                              text: "Native tool did not produce a result",
                             },
-                      )
-                    : [
-                        {
-                          type: "inputText",
-                          text: "Native tool did not produce a result",
-                        },
-                      ],
-              },
+                          ],
+                  },
             });
           }
         }
@@ -744,6 +750,38 @@ export class PiAgent {
     queue.push({ type: "model.response", runId, text });
     queue.push({ type: "turn.finished", runId, outcome });
   }
+}
+/** Nested calls have no transcript entry; keep their native receipt intact in notifications. */
+function nestedToolResult(
+  result: NestedToolExecutionResult,
+): ProductToolResult {
+  const value = result.structuredOutput;
+  const values = Array.isArray(value)
+    ? value
+    : value === undefined
+      ? []
+      : [value];
+  const contentItems: ProductToolResult["contentItems"] = values.map((item) => {
+    if (typeof item === "string") return { type: "inputText", text: item };
+    if (item && typeof item === "object" && !Array.isArray(item)) {
+      if (item.type === "text" && typeof item.text === "string")
+        return { type: "inputText", text: item.text };
+      if (
+        item.type === "image" &&
+        typeof item.mimeType === "string" &&
+        typeof item.data === "string"
+      )
+        return {
+          type: "inputImage",
+          imageUrl: `data:${item.mimeType};base64,${item.data}`,
+        };
+    }
+    return { type: "inputText", text: JSON.stringify(item) };
+  });
+  if (value === undefined)
+    for (const diagnostic of result.diagnostics)
+      contentItems.push({ type: "inputText", text: diagnostic.message });
+  return { success: !result.isError, contentItems };
 }
 function json(value: unknown): JsonValue {
   return JSON.parse(JSON.stringify(value)) as JsonValue;

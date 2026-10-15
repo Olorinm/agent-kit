@@ -1,6 +1,8 @@
 # Gap checklist against the core principles
 
-Reviewed **2026-10-12**, implemented in **0.1.0-alpha.6**, verified and corrected through **0.1.0-alpha.8**, tracked by [issue #16](https://github.com/Olorinm/agent-host/issues/16). This closes the seven integration workstreams from the alpha.4/alpha.5 review. It does not claim that every Kernel has the same native functions or that every provider, media format and operating system has been certified.
+Historical baseline reviewed **2026-10-12**, implemented in **0.1.0-alpha.6**, verified and corrected through **0.1.0-alpha.8**, tracked by [issue #16](https://github.com/Olorinm/agent-host/issues/16). This closes the seven integration workstreams from the alpha.4/alpha.5 review. It does not claim that every Kernel has the same native functions or that every provider, media format and operating system has been certified.
+
+The [2026-10-15 refresh](harness-refresh-20261015.md) updates the native versions and evidence. Hermes canonical ACP is an additional transport with explicit control/list limits; Kimi binary embedded resources fail explicitly, and current OpenCode/Kimi live-provider verification is blocked by invalid credentials. Previous native results below retain their original version scope.
 
 The principle remains: **preserve native capabilities, make their use consistent, and keep differences visible**. Native storage, execution, permissions and model loops are not reimplemented by Host.
 
@@ -16,7 +18,7 @@ The principle remains: **preserve native capabilities, make their use consistent
 
 ## Upstream capabilities and deployment prerequisites — not Host backlog
 
-- **Pi durable 1.1 has no native delete operation.** Host refuses deletion and keeps the binding. It also has no built-in question/elicitation RPC; product tools and native hooks remain available.
+- **Pi durable 1.2 has no native delete operation.** Host refuses deletion and keeps the binding. It also has no built-in question/elicitation RPC; product tools and native hooks remain available.
 - **OpenCode and Kimi's ACP interfaces do not expose a dedicated active-turn steering operation.** Host does not disguise a new prompt or cancellation/replay as native steering. OpenClaw does have native steering, whose interrupt-and-replace semantics are preserved.
 - **Not every Kernel exposes generic forms or URL elicitation.** Hermes's native clarify/approval and OpenClaw's exec approval are supported; unsupported elicitation remains distinct from an unanswered or omitted Host callback.
 - **Media transport is not universal media understanding.** A configured OpenCode model must declare its modalities; Hermes may use native image/PDF analysis tools; OpenClaw uses its configured media pipeline. The concrete tested combinations are in the evidence matrix. No Host-owned transcription or video model loop is added.

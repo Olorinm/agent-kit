@@ -20,8 +20,15 @@ import {
   StdioJsonRpcClient,
   type JsonRpcRequestHandler,
 } from "../transport/stdio-json-rpc-client.js";
-import { AcpHostToolBridgeServer } from "./tool-bridge.js";
-import { compactKimi, compactOpenCode } from "./compaction.js";
+import {
+  AcpHostToolBridgeServer,
+  type AcpHostToolBridgeProvider,
+} from "./tool-bridge.js";
+import {
+  compactKimi,
+  compactOpenCode,
+  compactOpenCodeAcp,
+} from "./compaction.js";
 
 export type AcpEvent =
   | AgentEvent
@@ -68,6 +75,8 @@ export interface AcpAgentOptions {
   cancellationGraceMs?: number;
   promptPayload?: "prompt" | "content-and-prompt";
   resumeSessions?: boolean;
+  /** Caller-owned tool transport. Keep its native MCP descriptor stable when the harness freezes session configuration. */
+  toolBridgeProvider?: AcpHostToolBridgeProvider;
   setModelFailure?: "ignore" | "error";
   /** Select the native compaction implementation; no substitute conversation is created. */
   compaction?: "opencode" | "kimi";
@@ -84,6 +93,14 @@ export class AcpAgent {
     Set<string>
   >();
   private readonly capabilities = new WeakMap<StdioJsonRpcClient, JsonObject>();
+  private readonly initialization = new WeakMap<
+    StdioJsonRpcClient,
+    JsonObject
+  >();
+  private readonly commands = new WeakMap<
+    StdioJsonRpcClient,
+    Map<string, JsonObject[]>
+  >();
   private readonly configuration = new WeakMap<
     StdioJsonRpcClient,
     Map<string, JsonObject[]>
@@ -98,7 +115,7 @@ export class AcpAgent {
   private readonly leases = new Map<StdioJsonRpcClient, number>();
   private readonly retired = new Set<StdioJsonRpcClient>();
   private readonly active = new Map<string, AbortController>();
-  private readonly bridge = new AcpHostToolBridgeServer();
+  private readonly bridge: AcpHostToolBridgeProvider;
   get sessions(): SessionManager {
     const cwd = (path?: string) => path ?? this.options.cwd ?? process.cwd();
     const rpc = async (
@@ -155,7 +172,11 @@ export class AcpAgent {
           return sessionPage(n.sessions, n, n.nextCursor);
         },
         history: async (id, o) => {
-          if (this.options.compaction === "opencode") {
+          const connected = await this.connect();
+          if (
+            this.options.compaction === "opencode" &&
+            !this.isOpenCodeV2(connected)
+          ) {
             const n = await http(
               `/session/${encodeURIComponent(id)}/message`,
               "GET",
@@ -168,6 +189,7 @@ export class AcpAgent {
           const reader = new AcpAgent({
             ...this.options,
             bindings: new MemoryBindingStore(),
+            toolBridgeProvider: this.bridge,
           });
           try {
             const client = await reader.connect();
@@ -181,7 +203,17 @@ export class AcpAgent {
             try {
               await client.request(
                 "session/load",
-                { sessionId: id, cwd: cwd(o.cwd), mcpServers: [] },
+                {
+                  sessionId: id,
+                  cwd: cwd(o.cwd),
+                  mcpServers: [],
+                  ...(await this.preserveDirectories(
+                    connected,
+                    id,
+                    cwd(o.cwd),
+                    o.signal,
+                  )),
+                },
                 { signal: o.signal, timeoutMs: 30_000 },
               );
               return sessionPage(items);
@@ -197,13 +229,32 @@ export class AcpAgent {
           await requireCapability("fork");
           const n = await rpc(
             "session/fork",
-            { sessionId: id, cwd: cwd(o.cwd), mcpServers: [] },
+            {
+              sessionId: id,
+              cwd: cwd(o.cwd),
+              mcpServers: [],
+              ...(await this.preserveDirectories(
+                await this.connect(),
+                id,
+                cwd(o.cwd),
+                o.signal,
+              )),
+            },
             o.signal,
           );
           return String(n.sessionId ?? "");
         },
         delete: async (id, o) => {
-          if (this.options.compaction === "opencode") {
+          const client = await this.connect();
+          if (
+            object(this.getCapabilities(client).sessionCapabilities).delete !=
+            null
+          ) {
+            await rpc("session/delete", { sessionId: id }, o.signal);
+          } else if (
+            this.options.compaction === "opencode" &&
+            !this.isOpenCodeV2(client)
+          ) {
             if (
               (await http(
                 `/session/${encodeURIComponent(id)}`,
@@ -225,6 +276,13 @@ export class AcpAgent {
   private sessionManager?: SessionManager;
   constructor(private readonly options: AcpAgentOptions) {
     this.bindings = options.bindings ?? new MemoryBindingStore();
+    // OpenCode 2 exposes MCP servers as Code Mode namespaces; use an identifier
+    // that can also be referenced directly from native Code Mode scripts.
+    this.bridge =
+      options.toolBridgeProvider ??
+      new AcpHostToolBridgeServer(
+        options.compaction === "opencode" ? "agent_host" : "agent-host",
+      );
   }
 
   async connect(): Promise<StdioJsonRpcClient> {
@@ -238,6 +296,22 @@ export class AcpAgent {
       });
       this.client = client;
       this.openedSessions.set(client, new Set());
+      // Configuration/commands may arrive before session/new returns or while idle.
+      client.addNotificationHandler((notification) => {
+        const params = object(notification.params);
+        if (typeof params.sessionId !== "string") return;
+        const update = object(params.update);
+        if (update.sessionUpdate === "config_option_update")
+          this.rememberModels(client, params.sessionId, update);
+        if (
+          update.sessionUpdate === "available_commands_update" &&
+          Array.isArray(update.availableCommands)
+        ) {
+          const sessions = this.commands.get(client) ?? new Map();
+          sessions.set(params.sessionId, update.availableCommands.map(object));
+          this.commands.set(client, sessions);
+        }
+      });
       const ready = (async () => {
         const response = object(
           await client.request(
@@ -252,6 +326,8 @@ export class AcpAgent {
                 auth: { terminal: false },
                 fs: { readTextFile: false, writeTextFile: false },
                 terminal: false,
+                session: { compaction: {} },
+                _meta: { "opencode/child-session-updates": true },
                 ...(this.options.elicitation
                   ? { elicitation: this.options.elicitation }
                   : {}),
@@ -263,6 +339,7 @@ export class AcpAgent {
         if (response.protocolVersion !== 1)
           throw new Error("acp_protocol_version_unsupported");
         this.capabilities.set(client, object(response.agentCapabilities));
+        this.initialization.set(client, response);
         if (this.closed) {
           client.close();
           throw new Error("agent_closed");
@@ -290,6 +367,88 @@ export class AcpAgent {
   getCapabilities(client: StdioJsonRpcClient): JsonObject {
     return this.capabilities.get(client) ?? {};
   }
+  /** The native identity, authentication methods and negotiated capabilities. */
+  getInitialization(client: StdioJsonRpcClient): JsonObject {
+    return this.initialization.get(client) ?? {};
+  }
+  /** Implemented native paths for discovery, including the explicit OpenCode 1 bridge. */
+  getOperationSupport(client: StdioJsonRpcClient) {
+    const native = this.getCapabilities(client);
+    const legacyOpenCode =
+      this.options.compaction === "opencode" && !this.isOpenCodeV2(client);
+    return {
+      resume:
+        this.options.resumeSessions !== false &&
+        (native.loadSession === true ||
+          object(native.sessionCapabilities).resume != null),
+      history: legacyOpenCode || native.loadSession === true,
+      delete:
+        legacyOpenCode || object(native.sessionCapabilities).delete != null,
+      compact: this.options.compaction !== undefined,
+      compactionTransport:
+        this.options.compaction === "kimi"
+          ? ("kimi-command" as const)
+          : this.options.compaction === "opencode"
+            ? this.isOpenCodeV2(client)
+              ? ("opencode-acp" as const)
+              : ("opencode-v1-http" as const)
+            : undefined,
+    };
+  }
+  /** Native commands are an extension surface, not Host-defined model prompts. */
+  getSessionCommands(
+    client: StdioJsonRpcClient,
+    sessionId: string,
+  ): readonly JsonObject[] {
+    return this.commands.get(client)?.get(sessionId) ?? [];
+  }
+  private isOpenCodeV2(client: StdioJsonRpcClient): boolean {
+    if (this.options.compaction !== "opencode") return false;
+    const info = object(this.getInitialization(client).agentInfo);
+    return (
+      typeof info.version === "string" &&
+      Number(/^v?(\d+)\./.exec(info.version)?.[1]) >= 2
+    );
+  }
+  private async preserveDirectories(
+    client: StdioJsonRpcClient,
+    sessionId: string,
+    cwd: string,
+    signal?: AbortSignal,
+  ): Promise<JsonObject> {
+    // V2 load/fork replaces grants. Reading history must not silently revoke them.
+    if (!this.isOpenCodeV2(client)) return {};
+    if (object(this.getCapabilities(client).sessionCapabilities).list == null)
+      throw new Error("native_session_directory_lookup_unsupported");
+    let cursor: string | undefined;
+    const seen = new Set<string>();
+    do {
+      const page = object(
+        await client.request(
+          "session/list",
+          { cwd, ...(cursor ? { cursor } : {}) },
+          { signal, timeoutMs: 30_000 },
+        ),
+      );
+      const entry = Array.isArray(page.sessions)
+        ? page.sessions.map(object).find((item) => item.sessionId === sessionId)
+        : undefined;
+      if (entry)
+        return {
+          additionalDirectories: Array.isArray(entry.additionalDirectories)
+            ? entry.additionalDirectories
+            : [],
+        };
+      cursor =
+        typeof page.nextCursor === "string" && page.nextCursor
+          ? page.nextCursor
+          : undefined;
+      if (cursor && seen.has(cursor))
+        throw new Error("native_session_cursor_repeated");
+      if (cursor) seen.add(cursor);
+    } while (cursor);
+    throw new Error("native_session_not_found");
+  }
   async close(): Promise<void> {
     this.closed = true;
     for (const controller of this.active.values()) controller.abort();
@@ -299,7 +458,7 @@ export class AcpAgent {
       ...this.retired,
     ]))
       client?.close();
-    this.bridge.close();
+    if (!this.options.toolBridgeProvider) this.bridge.close();
   }
   private retire(client: StdioJsonRpcClient) {
     if (this.client === client) {
@@ -408,16 +567,25 @@ export class AcpAgent {
       const mcpServers = [...(request.mcpServers ?? [])];
       if (request.tools?.length) {
         const bridge = productToolBridge(request.tools, context, queue);
-        const binding = await this.bridge.prepare({
-          scope: JSON.stringify({ sessionId: request.sessionId, fingerprint }),
+        const toolBinding = await this.bridge.prepare({
+          scope: JSON.stringify({
+            sessionId: binding?.configurationSessionId ?? request.sessionId,
+            fingerprint,
+          }),
           bridge,
         });
-        mcpServers.push(binding.mcpServer);
-        cleanup.push(() => binding.deactivate(bridge));
-        binding.activate(bridge);
+        mcpServers.push(toolBinding.mcpServer);
+        cleanup.push(() => toolBinding.deactivate(bridge));
+        toolBinding.activate(bridge);
       }
       const opened = this.openedSessions.get(client)!;
       let threadId = binding?.threadId;
+      if (
+        request.additionalDirectories?.length &&
+        object(this.getCapabilities(client).sessionCapabilities)
+          .additionalDirectories == null
+      )
+        throw new Error("native_additional_directories_unsupported");
       if (threadId && !opened.has(threadId)) {
         if (this.options.resumeSessions === false)
           throw new Error("native_resume_disabled");
@@ -429,7 +597,14 @@ export class AcpAgent {
         const loaded = object(
           await client.request(
             canResume ? "session/resume" : "session/load",
-            { sessionId: threadId, cwd: request.cwd, mcpServers },
+            {
+              sessionId: threadId,
+              cwd: request.cwd,
+              mcpServers,
+              ...(request.additionalDirectories
+                ? { additionalDirectories: request.additionalDirectories }
+                : {}),
+            },
             {
               signal,
               timeoutMs: this.options.controlRequestTimeoutMs ?? 30_000,
@@ -440,12 +615,6 @@ export class AcpAgent {
           throw new Error("native_resume_session_mismatch");
         this.rememberModels(client, threadId, loaded);
       } else if (!threadId) {
-        if (
-          request.additionalDirectories?.length &&
-          object(this.getCapabilities(client).sessionCapabilities)
-            .additionalDirectories == null
-        )
-          throw new Error("native_additional_directories_unsupported");
         const created = object(
           await client.request(
             "session/new",
@@ -470,7 +639,13 @@ export class AcpAgent {
       }
       context.threadId = threadId;
       opened.add(threadId);
-      await bindingStore.set(request.sessionId, { threadId, fingerprint });
+      await bindingStore.set(request.sessionId, {
+        threadId,
+        fingerprint,
+        ...(binding?.configurationSessionId
+          ? { configurationSessionId: binding.configurationSessionId }
+          : {}),
+      });
       await this.setModel(client, threadId, request.model, signal);
       const config = { ...request.config };
       if (request.effort) {
@@ -501,10 +676,11 @@ export class AcpAgent {
       cleanup.push(
         client.addNotificationHandler((notification) => {
           const params = object(notification.params);
-          if (params.sessionId !== threadId) return;
+          const childUpdate =
+            notification.method === "opencode/session/child_update" &&
+            params.rootSessionId === threadId;
+          if (params.sessionId !== threadId && !childUpdate) return;
           const update = object(params.update);
-          if (update.sessionUpdate === "config_option_update")
-            this.rememberModels(client!, threadId, update);
           queue.push({
             type: "native.notification",
             runId,
@@ -512,7 +688,12 @@ export class AcpAgent {
             threadId,
             turnId: "",
           });
-          if (update.sessionUpdate === "agent_message_chunk") {
+          // Child output remains native and attributed; it is never the root answer.
+          if (
+            !childUpdate &&
+            !object(update._meta)["opencode/child-session"] &&
+            update.sessionUpdate === "agent_message_chunk"
+          ) {
             const content = object(update.content);
             if (content.type === "text" && typeof content.text === "string") {
               text += content.text;
@@ -569,14 +750,21 @@ export class AcpAgent {
                 signal: compactSignal,
                 timeoutMs: this.options.requestTimeoutMs,
               })
-            : await compactOpenCode({
-                command: this.options.command,
-                cwd: request.cwd,
-                env: this.options.env,
-                sessionId: threadId,
-                model: request.model,
-                signal: compactSignal,
-              });
+            : this.isOpenCodeV2(client)
+              ? await compactOpenCodeAcp({
+                  client,
+                  sessionId: threadId,
+                  signal: compactSignal,
+                  timeoutMs: this.options.requestTimeoutMs,
+                })
+              : await compactOpenCode({
+                  command: this.options.command,
+                  cwd: request.cwd,
+                  env: this.options.env,
+                  sessionId: threadId,
+                  model: request.model,
+                  signal: compactSignal,
+                });
         outcome =
           result.ok && result.compacted
             ? { status: "completed" }
@@ -584,7 +772,7 @@ export class AcpAgent {
                 status: "failed",
                 error: result.error ?? "compaction_not_confirmed",
                 // Dispatch occurred; a missing receipt cannot establish that native work stopped.
-                outcomeUnknown: true,
+                outcomeUnknown: result.outcomeUnknown ?? true,
               };
         if (outcome.outcomeUnknown) this.retire(client);
         return;
@@ -625,8 +813,27 @@ export class AcpAgent {
         promptCapabilities.embeddedContext !== true
       )
         throw new Error("native_embedded_context_unsupported");
+      if (
+        this.options.compaction === "kimi" &&
+        input.some(
+          (block) =>
+            block.type === "resource" &&
+            typeof object(block.resource).blob === "string",
+        )
+      )
+        throw new Error("native_blob_resource_unsupported");
       const prompt = [
-        ...(prefix ? [{ type: "text", text: prefix }] : []),
+        ...(prefix
+          ? [
+              {
+                type: "text",
+                text: prefix,
+                ...(this.isOpenCodeV2(client)
+                  ? { annotations: { audience: ["assistant"] } }
+                  : {}),
+              },
+            ]
+          : []),
         ...input,
       ];
       sent = true;
@@ -645,6 +852,29 @@ export class AcpAgent {
         },
       );
       queue.push({ type: "native.response", runId, response });
+      const usage = object(object(response).usage);
+      if (Object.keys(usage).length) {
+        const counts = Object.fromEntries(
+          [
+            "inputTokens",
+            "outputTokens",
+            "cachedInputTokens",
+            "reasoningTokens",
+          ]
+            .filter(
+              (name) =>
+                typeof usage[name] === "number" && Number.isFinite(usage[name]),
+            )
+            .map((name) => [name, usage[name]]),
+        );
+        queue.push({
+          type: "usage",
+          runId,
+          scope: "turn",
+          native: usage,
+          ...counts,
+        });
+      }
       const stopReason = object(response).stopReason;
       if (stopReason === "cancelled") outcome = { status: "cancelled" };
       else if (

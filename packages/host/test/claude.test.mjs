@@ -173,3 +173,189 @@ test("Claude cannot silently change a bound native configuration", async (t) => 
     false,
   );
 });
+
+function queryProbe(probe) {
+  return ({ prompt, options }) => ({
+    close() {},
+    async *[Symbol.asyncIterator]() {
+      const session_id = options.resume ?? options.sessionId;
+      yield {
+        type: "system",
+        subtype: "init",
+        session_id,
+        permissionMode: "default",
+      };
+      await prompt[Symbol.asyncIterator]().next();
+      await probe(options);
+      yield {
+        type: "result",
+        subtype: "success",
+        session_id,
+        is_error: false,
+        result: "done",
+      };
+    },
+  });
+}
+
+test("Claude discovery exposes the native initialized engine version without account details", async (t) => {
+  let closed = false;
+  const a = agent(t, {
+    query: () => ({
+      initializationResult: async () => ({
+        claude_code_version: "2.1.300",
+        commands: [],
+        models: [],
+        account: { email: "private@example.test" },
+      }),
+      close() {
+        closed = true;
+      },
+    }),
+  });
+  assert.deepEqual(await a.discover(process.cwd()), {
+    commands: [],
+    models: [],
+    accountConfigured: true,
+    claude_code_version: "2.1.300",
+  });
+  assert.equal(closed, true);
+});
+
+test("Claude keeps SDK subagent compaction, thinking and sandbox configuration native", async (t) => {
+  const observed = [];
+  const native = {
+    agents: {
+      researcher: {
+        description: "Research",
+        prompt: "Research",
+        autoCompactWindow: 32000,
+      },
+    },
+    thinking: { type: "disabled" },
+    sandbox: { enabled: true, filesystem: { denyRead: ["/private"] } },
+    settings: { sandbox: { network: { deniedDomains: ["example.test"] } } },
+  };
+  await run(agent(t, { query: createClaudeQueryFixture(observed) }), {
+    native,
+  });
+  for (const key of Object.keys(native))
+    assert.deepEqual(observed[0][key], native[key]);
+});
+
+test("Claude preserves permission metadata and native permission replies; only SDK product tools auto-allow", async (t) => {
+  const metadata = {
+    toolUseID: "native-tool",
+    requestId: "native-request",
+    agentID: "native-child",
+    title: "Claude wants to edit this file",
+    description: "An exact native disclosure",
+    displayName: "Edit file",
+    decisionReason: "An owner ask rule",
+    blockedPath: "/outside/file",
+    defaultToNo: true,
+    suppressAlwaysAllowRule: true,
+    matchedAskRule: { source: "project", toolName: "Edit" },
+    suggestions: [
+      {
+        type: "addRules",
+        rules: [{ toolName: "Edit" }],
+        behavior: "allow",
+        destination: "session",
+      },
+    ],
+  };
+  const requests = [];
+  const a = agent(t, {
+    query: queryProbe(async (options) => {
+      const permission = await options.canUseTool(
+        "Edit",
+        { file_path: "/outside/file" },
+        { ...metadata, signal: options.abortController.signal },
+      );
+      assert.deepEqual(permission.updatedPermissions, metadata.suggestions);
+      assert.deepEqual(permission.updatedInput, { file_path: "/outside/safe" });
+      assert.equal(permission.toolUseID, metadata.toolUseID);
+      for (const source of ["project", "sdk"]) {
+        const reply = await options.canUseTool(
+          "mcp__agent_host__edit",
+          {},
+          {
+            ...metadata,
+            signal: options.abortController.signal,
+            mcpServer: { name: "agent_host", source },
+          },
+        );
+        assert.equal(reply.behavior, source === "sdk" ? "allow" : "deny");
+        if (source === "project") assert.equal(reply.interrupt, true);
+      }
+    }),
+  });
+  const events = await run(a, {
+    tools: [
+      { name: "edit", description: "Edit", inputSchema: { type: "object" } },
+    ],
+    async onRequest(request) {
+      requests.push(request);
+      return request.params.name === "Edit"
+        ? {
+            behavior: "allow",
+            updatedInput: { file_path: "/outside/safe" },
+            updatedPermissions: metadata.suggestions,
+          }
+        : { behavior: "deny", message: "Declined", interrupt: true };
+    },
+  });
+  assert.equal(terminal(events).status, "completed");
+  assert.equal(requests.length, 2);
+  for (const [key, value] of Object.entries(metadata))
+    assert.deepEqual(requests[0].params[key], value);
+  assert.equal("signal" in requests[0].params, false);
+});
+
+test(
+  "Claude native request cancellation releases only the withdrawn interaction",
+  { timeout: 2000 },
+  async (t) => {
+    const a = agent(t, {
+      query: queryProbe(async (options) => {
+        for (const kind of ["permission", "elicitation"]) {
+          const controller = new AbortController();
+          const pending =
+            kind === "permission"
+              ? options.canUseTool(
+                  "Bash",
+                  {},
+                  {
+                    signal: controller.signal,
+                    toolUseID: "call",
+                    requestId: "approval",
+                  },
+                )
+              : options.onElicitation(
+                  {
+                    mode: "form",
+                    message: "Details",
+                    requestedSchema: { type: "object" },
+                  },
+                  { signal: controller.signal, requestId: "form" },
+                );
+          controller.abort(new Error("native_request_withdrawn"));
+          await assert.rejects(pending, /native_request_withdrawn/);
+          assert.equal(options.abortController.signal.aborted, false);
+        }
+      }),
+    });
+    const received = [];
+    const events = await run(a, {
+      onRequest: async (request, context) => {
+        received.push({ request, signal: context.signal });
+        return new Promise(() => {});
+      },
+    });
+    assert.equal(terminal(events).status, "completed");
+    assert.equal(received.length, 2);
+    assert.equal(received[1].request.params.requestId, "form");
+    assert.ok(received.every(({ signal }) => signal.aborted));
+  },
+);

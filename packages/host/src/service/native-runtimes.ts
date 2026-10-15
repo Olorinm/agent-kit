@@ -1,4 +1,3 @@
-import { pathToFileURL } from "node:url";
 import type { SessionManager } from "../sessions.js";
 import { validateSettings, type AllowedSettings } from "../settings.js";
 import type { CodexRunRequest } from "../codex/session.js";
@@ -12,6 +11,7 @@ import { accessSync, constants, statSync } from "node:fs";
 import { delimiter, isAbsolute, join, resolve } from "node:path";
 import { CodexAgent, type CodexAgentOptions } from "../codex/session.js";
 import { AcpAgent, type AcpAgentOptions } from "../acp/session.js";
+import { AcpHostToolBridgeServer } from "../acp/tool-bridge.js";
 import { ClaudeAgent, type ClaudeAgentOptions } from "../claude/session.js";
 import { PiAgent, type PiAgentOptions } from "../pi/session.js";
 import { HermesAgent, type HermesAgentOptions } from "../hermes/session.js";
@@ -24,6 +24,12 @@ import type { JsonObject } from "../types.js";
 import type { RuntimeTurn, ServiceRuntime } from "./runtime.js";
 import type { ServiceEvent } from "./protocol.js";
 import { getKernelCapabilities } from "../capabilities.js";
+import { createAcpServiceRuntime } from "./acp-runtime.js";
+import {
+  HermesGatewayAgent,
+  getHermesGatewayCapabilities,
+  type HermesGatewayAgentOptions,
+} from "../hermes/gateway.js";
 
 interface BaseConfig {
   id: string;
@@ -71,14 +77,26 @@ export type NativeRuntimeConfig = BaseConfig &
       }
     | {
         kernel: "hermes";
+        transport?: "stdio";
         options: HermesAgentOptions;
         provider?: string;
         reasoningEffort?: string;
+        fastMode?: HermesRunRequest["fastMode"];
         runOptions?: Pick<HermesRunRequest, "beforeTurn">;
+      }
+    | {
+        kernel: "hermes";
+        transport: "acp";
+        options?: HermesGatewayAgentOptions;
+        runOptions?: Pick<
+          AcpRunRequest,
+          "additionalDirectories" | "beforeTurn" | "mcpServers"
+        >;
       }
     | {
         kernel: "openclaw";
         options: OpenClawAgentOptions;
+        fastMode?: OpenClawRunRequest["fastMode"];
         runOptions?: Pick<OpenClawRunRequest, "beforeTurn" | "method">;
       }
   );
@@ -95,9 +113,22 @@ export function createNativeRuntime(
     createHash("sha256").update(config.id).digest("hex"),
   );
   const bindings = new FileBindingStore(join(root, "bindings"));
+  const fingerprintConfig: Record<string, unknown> = { ...config, cwd };
+  if (
+    (config.kernel === "opencode" ||
+      config.kernel === "kimi" ||
+      (config.kernel === "hermes" && config.transport === "acp")) &&
+    config.options
+  )
+    // A caller-owned bridge contains mutable handles, not persisted configuration.
+    // Owners use configurationRevision when its semantic configuration changes.
+    fingerprintConfig.options = {
+      ...config.options,
+      toolBridgeProvider: undefined,
+    };
   const configurationKey = createHash("sha256")
     .update(
-      JSON.stringify({ ...config, cwd }, (_key, value: unknown) =>
+      JSON.stringify(fingerprintConfig, (_key, value: unknown) =>
         typeof value === "function" ? String(value) : value,
       ),
     )
@@ -253,94 +284,14 @@ export function createNativeRuntime(
         cwd,
         bindings,
       });
-      run = async function* (request) {
-        const promptCapabilities = agent.getCapabilities(await agent.connect())
-          .promptCapabilities as JsonObject | undefined;
-        const media: JsonObject[] = [];
-        for (const item of request.attachments ?? []) {
-          if (item.mediaType.startsWith("image/"))
-            media.push({
-              type: "image",
-              data: item.data,
-              mimeType: item.mediaType,
-            });
-          else if (
-            item.mediaType.startsWith("audio/") &&
-            promptCapabilities?.audio === true
-          )
-            media.push({
-              type: "audio",
-              data: item.data,
-              mimeType: item.mediaType,
-            });
-          else if (promptCapabilities?.embeddedContext === true)
-            media.push({
-              type: "resource",
-              resource: embeddedResource(item),
-            });
-        }
-        yield* agent.run({
-          ...config.runOptions,
-          ...request,
-          input: media.length
-            ? [{ type: "text", text: request.input }, ...media]
-            : request.input,
-          cwd,
-          model:
-            typeof request.settings?.model === "string"
-              ? request.settings.model
-              : config.model,
-          effort:
-            typeof request.settings?.effort === "string"
-              ? request.settings.effort
-              : config.effort,
-          config:
-            (request.settings?.config as JsonObject | undefined) ??
-            config.runOptions?.config,
-        });
-      };
-      sessions = agent.sessions;
-      close = () => agent.close();
+      ({ run, sessions, close, discover } = createAcpServiceRuntime(agent, {
+        cwd,
+        model: config.model,
+        effort: config.effort,
+        runOptions: config.runOptions,
+        capabilities: () => getKernelCapabilities(config.kernel, "http"),
+      }));
       nativeCompaction = true;
-      discover = async () => {
-        const client = await agent.connect();
-        const native = agent.getCapabilities(client);
-        const capabilities = getKernelCapabilities(config.kernel, "http");
-        for (const [feature, enabled] of [
-          [
-            "input.images",
-            (native.promptCapabilities as JsonObject)?.image === true,
-          ],
-          [
-            "input.audio",
-            (native.promptCapabilities as JsonObject)?.audio === true,
-          ],
-          [
-            "input.documents",
-            (native.promptCapabilities as JsonObject)?.embeddedContext === true,
-          ],
-          [
-            "sessions.resume",
-            Boolean(
-              native.loadSession ||
-                (native.sessionCapabilities as JsonObject)?.resume,
-            ),
-          ],
-          [
-            "sessions.fork",
-            Boolean((native.sessionCapabilities as JsonObject)?.fork),
-          ],
-          [
-            "sessions.list",
-            Boolean((native.sessionCapabilities as JsonObject)?.list),
-          ],
-        ] as const)
-          capabilities.features[feature] = {
-            status: enabled ? "supported" : "unsupported",
-            ...(enabled ? {} : { reason: "native_not_supported" as const }),
-          };
-        return { capabilities, native };
-      };
       break;
     }
     case "pi": {
@@ -382,6 +333,37 @@ export function createNativeRuntime(
       break;
     }
     case "hermes": {
+      if (config.transport === "acp") {
+        command = config.options?.command ?? "hermes";
+        env = config.options?.env;
+        const ownedBridge = config.options?.toolBridgeProvider
+          ? undefined
+          : new AcpHostToolBridgeServer("agent-host", "AGENT_HOST_TOOL", {
+              connectionDirectory: join(root, "tool-bridge"),
+            });
+        const agent = new HermesGatewayAgent({
+          elicitation: { form: {} },
+          ...config.options,
+          command,
+          cwd,
+          bindings,
+          toolBridgeProvider: config.options?.toolBridgeProvider ?? ownedBridge,
+        });
+        ({ run, sessions, close, discover } = createAcpServiceRuntime(agent, {
+          cwd,
+          model: config.model,
+          runOptions: config.runOptions,
+          capabilities: () => getHermesGatewayCapabilities("http"),
+        }));
+        close = async () => {
+          try {
+            await agent.close();
+          } finally {
+            ownedBridge?.close();
+          }
+        };
+        break;
+      }
       command = config.options.command;
       env = {
         ...process.env,
@@ -413,6 +395,8 @@ export function createNativeRuntime(
             typeof request.settings?.reasoningEffort === "string"
               ? request.settings.reasoningEffort
               : config.reasoningEffort,
+          fastMode: (request.settings?.fastMode ??
+            config.fastMode) as HermesRunRequest["fastMode"],
         });
       discover = async () => ({
         capabilities: getKernelCapabilities("hermes", "http"),
@@ -444,6 +428,8 @@ export function createNativeRuntime(
               ? request.settings.model
               : config.model,
           thinking: request.settings?.thinking as string | undefined,
+          fastMode: (request.settings?.fastMode ??
+            config.fastMode) as OpenClawRunRequest["fastMode"],
         });
       discover = async () => {
         await agent.client.ensureConnected();
@@ -451,23 +437,35 @@ export function createNativeRuntime(
         if (agent.client.methods)
           for (const [name, method] of [
             ["sessions.history", "chat.history"],
-            ["controls.steer", "sessions.steer"],
+            ["controls.steer", "chat.send"],
             ["sessions.fork", "sessions.fork"],
             ["sessions.delete", "sessions.delete"],
             ["sessions.list", "sessions.list"],
             ["interactions.approval", "exec.approval.resolve"],
           ] as const) {
             const enabled = agent.client.methods.includes(method);
-            capabilities.features[name] = {
-              status: enabled ? "supported" : "unsupported",
-              ...(enabled ? {} : { reason: "native_not_supported" as const }),
-            };
+            capabilities.features[name] = enabled
+              ? name === "interactions.approval"
+                ? capabilities.features[name]
+                : {
+                    status: "supported",
+                    details: capabilities.features[name].details,
+                  }
+              : {
+                  status: "conditional",
+                  reason: "native_negotiation_required",
+                  details:
+                    "The advertised method inventory is not exhaustive. The native RPC response establishes availability.",
+                };
           }
         return {
           capabilities,
           native: {
             version: agent.client.serverVersion ?? null,
+            protocol: agent.client.protocol ?? null,
             methods: agent.client.methods ?? [],
+            events: agent.client.events ?? [],
+            capabilities: agent.client.capabilities ?? [],
           },
         };
       };
@@ -488,6 +486,19 @@ export function createNativeRuntime(
       break;
     }
   }
+  const validateRuntimeSettings = (
+    selected: import("../settings.js").SettingsSelection = {},
+  ) => {
+    validateSettings(config.kernel, config.allowedSettings, selected);
+    if (config.kernel === "hermes" && config.transport === "acp")
+      for (const key of Object.keys(selected))
+        if (key !== "model")
+          throw new Error(`setting_not_supported_by_transport:${key}`);
+  };
+  if (config.kernel === "hermes" && config.transport === "acp")
+    for (const key of Object.keys(config.allowedSettings ?? {}))
+      if (key !== "model")
+        throw new Error(`setting_not_supported_by_transport:${key}`);
   return {
     id: config.id,
     kernel: config.kernel,
@@ -496,26 +507,31 @@ export function createNativeRuntime(
     configurationKey,
     sessions,
     allowedSettings: config.allowedSettings,
-    validateSettings: (selected) =>
-      validateSettings(config.kernel, config.allowedSettings, selected),
+    validateSettings: (selected) => validateRuntimeSettings(selected),
     discover,
-    capabilities: getKernelCapabilities(config.kernel, "http"),
+    capabilities:
+      config.kernel === "hermes" && config.transport === "acp"
+        ? getHermesGatewayCapabilities("http")
+        : getKernelCapabilities(config.kernel, "http"),
     maxConcurrentRuns: config.kernel === "hermes" ? 1 : 16,
     inputs: {
       attachments: true,
-      images: ["codex", "claude", "pi", "openclaw", "hermes"].includes(
-        config.kernel,
-      )
-        ? "native"
-        : ["opencode", "kimi"].includes(config.kernel)
+      images:
+        config.kernel === "hermes" && config.transport === "acp"
           ? "negotiated"
-          : "workspace",
+          : ["codex", "claude", "pi", "openclaw", "hermes"].includes(
+                config.kernel,
+              )
+            ? "native"
+            : ["opencode", "kimi"].includes(config.kernel)
+              ? "negotiated"
+              : "workspace",
     },
     supportsCompaction: nativeCompaction || Boolean(compact),
     steer,
     close,
     async *run(request): AsyncIterable<ServiceEvent> {
-      validateSettings(config.kernel, config.allowedSettings, request.settings);
+      validateRuntimeSettings(request.settings);
       if (request.attachments?.length)
         request = {
           ...config.runOptions,
@@ -578,38 +594,6 @@ export function createNativeRuntime(
       return { available: true };
     },
   };
-}
-
-/** Text resources bypass provider binary-file modality restrictions without losing bytes. */
-function embeddedResource(item: {
-  path: string;
-  mediaType: string;
-  data: string;
-}) {
-  const resource = {
-    uri: pathToFileURL(item.path).href,
-    mimeType: item.mediaType,
-  };
-  const [mime = "", ...parameters] = item.mediaType.toLowerCase().split(";");
-  const charset = parameters.join(";").match(/charset\s*=\s*"?([^;"\s]+)/)?.[1];
-  if (
-    (!charset || ["utf-8", "utf8", "us-ascii"].includes(charset)) &&
-    (mime.startsWith("text/") ||
-      /^(application\/(json|xml|yaml|x-yaml|javascript)|application\/.+\+(json|xml))$/.test(
-        mime,
-      ))
-  ) {
-    try {
-      const text = new TextDecoder("utf-8", {
-        fatal: true,
-        ignoreBOM: true,
-      }).decode(Buffer.from(item.data, "base64"));
-      return { ...resource, text };
-    } catch {
-      // Invalid UTF-8 remains binary; never silently replace invalid bytes.
-    }
-  }
-  return { ...resource, blob: item.data };
 }
 
 function commandExists(

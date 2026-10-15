@@ -1,6 +1,8 @@
 import { dirname, resolve } from "node:path";
 import { z } from "zod";
 import { idSchema } from "./protocol.js";
+import type { HermesRunRequest } from "../hermes/session.js";
+import type { OpenClawRunRequest } from "../openclaw/session.js";
 import {
   createNativeRuntime,
   type NativeRuntimeConfig,
@@ -19,6 +21,7 @@ const profileSchema = z
     ]),
     cwd: z.string().min(1),
     model: z.string().optional(),
+    transport: z.enum(["stdio", "acp"]).optional(),
     command: z.string().min(1).optional(),
     args: z.array(z.string()).optional(),
     env: z.record(z.string(), z.string()).optional(),
@@ -28,6 +31,12 @@ const profileSchema = z
     gatewayTokenEnv: z.string().optional(),
     provider: z.string().optional(),
     effort: z.string().optional(),
+    fastMode: z
+      .union([
+        z.boolean(),
+        z.enum(["fast", "normal", "auto", "cold", "ultrafast"]),
+      ])
+      .optional(),
     native: z.record(z.string(), z.json()).optional(),
     allowedSettings: z
       .record(
@@ -54,8 +63,19 @@ const profileSchema = z
       opencode: ["command", "args", "env", "effort", "config"],
       kimi: ["command", "args", "env", "effort", "config"],
       pi: ["thinkingLevel", "toolApproval"],
-      hermes: ["command", "args", "env", "provider", "effort"],
-      openclaw: ["gatewayUrl", "gatewayTokenEnv"],
+      hermes:
+        profile.transport === "acp"
+          ? ["command", "args", "env", "transport"]
+          : [
+              "command",
+              "args",
+              "env",
+              "provider",
+              "effort",
+              "fastMode",
+              "transport",
+            ],
+      openclaw: ["gatewayUrl", "gatewayTokenEnv", "fastMode"],
     }[profile.kernel];
     for (const key of Object.keys(profile))
       if (
@@ -72,7 +92,11 @@ const profileSchema = z
           code: "custom",
           message: `${key} is not supported by this ${profile.kernel} CLI profile`,
         });
-    if (profile.kernel === "hermes" && !profile.command)
+    if (
+      profile.kernel === "hermes" &&
+      profile.transport !== "acp" &&
+      !profile.command
+    )
       ctx.addIssue({
         code: "custom",
         message: "Hermes requires its gateway command and arguments",
@@ -94,6 +118,18 @@ const profileSchema = z
       });
     if (profile.kernel === "pi" && !profile.model)
       ctx.addIssue({ code: "custom", message: "Pi requires provider/model" });
+    if (
+      profile.fastMode !== undefined &&
+      ((profile.kernel === "hermes" && typeof profile.fastMode !== "string") ||
+        (profile.kernel === "openclaw" &&
+          typeof profile.fastMode === "string" &&
+          !["auto", "ultrafast"].includes(profile.fastMode)))
+    )
+      ctx.addIssue({
+        code: "custom",
+        path: ["fastMode"],
+        message: `Invalid native fastMode for ${profile.kernel}`,
+      });
   });
 export const configSchema = z
   .object({
@@ -165,18 +201,24 @@ export function createConfiguredRuntimes(
         };
         break;
       case "hermes":
+        if (profile.transport === "acp") {
+          native = { ...base, kernel: "hermes", transport: "acp", options };
+          break;
+        }
         native = {
           ...base,
           kernel: "hermes",
           options: { ...options, command: profile.command! },
           provider: profile.provider,
           reasoningEffort: profile.effort,
+          fastMode: profile.fastMode as HermesRunRequest["fastMode"],
         };
         break;
       case "openclaw":
         native = {
           ...base,
           kernel: "openclaw",
+          fastMode: profile.fastMode as OpenClawRunRequest["fastMode"],
           options: {
             url: profile.gatewayUrl!,
             token: profile.gatewayTokenEnv

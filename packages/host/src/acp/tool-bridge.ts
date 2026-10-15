@@ -1,4 +1,6 @@
 import { createHash, randomBytes } from "node:crypto";
+import { chmod, mkdir, rename, rm, writeFile } from "node:fs/promises";
+import { join, resolve } from "node:path";
 import {
   createServer,
   type IncomingMessage,
@@ -57,10 +59,20 @@ interface StoredBinding {
   activeBridge?: HostToolBridge;
 }
 
+export interface AcpHostToolBridgeServerOptions {
+  /**
+   * Dedicated private directory for stable native MCP connection references.
+   * Reuse it after a Host restart when the native session freezes its MCP specification.
+   * The product remains responsible for one active writer per session and for directory lifetime.
+   */
+  connectionDirectory?: string;
+}
+
 export class AcpHostToolBridgeServer implements AcpHostToolBridgeProvider {
   constructor(
     private readonly name = "agent-host",
     private readonly envPrefix = "AGENT_HOST_TOOL",
+    private readonly options: AcpHostToolBridgeServerOptions = {},
   ) {}
   private server?: HttpServer;
   private listening?: Promise<void>;
@@ -99,6 +111,17 @@ export class AcpHostToolBridgeServer implements AcpHostToolBridgeProvider {
       stored = created;
     }
     const binding: StoredBinding = stored;
+    const connectionEnv = this.options.connectionDirectory
+      ? [
+          {
+            name: "AGENT_HOST_TOOL_CONNECTION_FILE",
+            value: await this.writeConnectionFile(binding),
+          },
+        ]
+      : [
+          { name: `${this.envPrefix}_ENDPOINT`, value: this.endpoint },
+          { name: `${this.envPrefix}_TOKEN`, value: binding.token },
+        ];
     return {
       fingerprint,
       mcpServer: {
@@ -112,8 +135,7 @@ export class AcpHostToolBridgeServer implements AcpHostToolBridgeProvider {
             ? [{ name: "ELECTRON_RUN_AS_NODE", value: "1" }]
             : []),
           { name: "AGENT_HOST_TOOL_ENV_PREFIX", value: this.envPrefix },
-          { name: `${this.envPrefix}_ENDPOINT`, value: this.endpoint },
-          { name: `${this.envPrefix}_TOKEN`, value: binding.token },
+          ...connectionEnv,
         ],
       },
       activate(bridge) {
@@ -137,6 +159,27 @@ export class AcpHostToolBridgeServer implements AcpHostToolBridgeProvider {
     this.server?.close();
     this.server = undefined;
     this.endpoint = "";
+  }
+
+  private async writeConnectionFile(binding: StoredBinding): Promise<string> {
+    const directory = resolve(this.options.connectionDirectory!);
+    await mkdir(directory, { recursive: true, mode: 0o700 });
+    if (process.platform !== "win32") await chmod(directory, 0o700);
+    const path = join(directory, `${binding.fingerprint}.json`);
+    const temporary = `${path}.${randomBytes(12).toString("hex")}.tmp`;
+    try {
+      await writeFile(
+        temporary,
+        JSON.stringify({ endpoint: this.endpoint, token: binding.token }),
+        { flag: "wx", mode: 0o600 },
+      );
+      await rename(temporary, path);
+    } finally {
+      await rm(temporary, { force: true });
+    }
+    // Keep the private reference on close. An old owner must not remove a successor's
+    // connection, and a stopped endpoint grants no access until its next atomic replacement.
+    return path;
   }
 
   private async ensureListening(): Promise<void> {

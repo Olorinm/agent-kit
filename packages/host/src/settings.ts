@@ -20,8 +20,8 @@ export const selectableSettings: Record<Kernel, readonly string[]> = {
   pi: ["model", "thinkingLevel"],
   opencode: ["model", "effort", "config"],
   kimi: ["model", "effort", "config"],
-  hermes: ["model", "provider", "reasoningEffort"],
-  openclaw: ["model", "thinking"],
+  hermes: ["model", "provider", "reasoningEffort", "fastMode"],
+  openclaw: ["model", "thinking", "fastMode"],
 };
 export function validateSettings(
   kernel: Kernel,

@@ -46,11 +46,7 @@ export type JsonRpcNotificationHandler = (notification: {
 }) => Promise<void> | void;
 
 export type JsonRpcRequestFailureKind =
-  | "aborted"
-  | "timeout"
-  | "remote"
-  | "transport"
-  | "closed";
+  "aborted" | "timeout" | "remote" | "transport" | "closed";
 
 export class JsonRpcRequestFailure extends Error {
   constructor(
@@ -322,7 +318,7 @@ export class StdioJsonRpcClient {
       return;
     }
     if (method) {
-      void this.handleNotification(parsed as JsonRpcRequestMessage);
+      this.handleNotification(parsed as JsonRpcRequestMessage);
       return;
     }
     if (hasId) {
@@ -389,14 +385,36 @@ export class StdioJsonRpcClient {
     }
   }
 
-  private async handleNotification(
-    notification: JsonRpcRequestMessage,
-  ): Promise<void> {
-    for (const handler of this.notificationHandlers) {
-      await handler({
-        method: notification.method,
-        params: notification.params,
-      });
+  private handleNotification(notification: JsonRpcRequestMessage): void {
+    // Deliver to every subscriber before the next line can resolve a response.
+    // Awaiting each synchronous handler yielded between subscribers and let a
+    // same-chunk response remove receipt listeners before they saw the receipt.
+    // Do not block parsing on async handlers: they may themselves request RPCs.
+    for (const handler of [...this.notificationHandlers]) {
+      try {
+        const result = handler({
+          method: notification.method,
+          params: notification.params,
+        });
+        if (result)
+          void Promise.resolve(result).catch((error) =>
+            this.reportNotificationError(notification.method, error),
+          );
+      } catch (error) {
+        this.reportNotificationError(notification.method, error);
+      }
+    }
+  }
+
+  private reportNotificationError(method: string, error: unknown): void {
+    const message = `json-rpc notification handler failed (${method}): ${error instanceof Error ? error.message : String(error)}\n`;
+    this.appendStderr(message);
+    // Diagnostics are observers too; a failing observer must not interrupt the
+    // remaining notification subscribers or become an unhandled rejection.
+    try {
+      this.options.onStderr?.(message);
+    } catch {
+      this.appendStderr("json-rpc stderr diagnostic handler failed\n");
     }
   }
 

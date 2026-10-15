@@ -44,10 +44,21 @@ A handshake can discover capabilities without proving model access. Pi has no se
 | --- | --- | --- |
 | Claude | `init --kernel claude` | SDK engine is bundled; existing native login or provider environment. `--command` can select your existing engine wrapper. |
 | Pi | `init --kernel pi --model provider/model` | Pi provider credentials in its native environment; the durable engine is included. |
-| OpenCode | `init --kernel opencode --model provider/model` | Existing `opencode` executable, native provider/model configuration and state. |
+| OpenCode | `init --kernel opencode --model provider/model` | OpenCode 2 `opencode` executable from `@opencode/cli`, native V2 provider configuration and state. Existing V1 uses the explicit compatibility path. |
 | Kimi | `init --kernel kimi` | Existing `kimi` executable and native login. |
 | Hermes | `init --kernel hermes --command /path/to/python --args '["-m","tui_gateway.entry"]'` | Python environment containing the pinned Hermes TUI Gateway. Configure its native bootstrap/launch arguments for that installation and a dedicated persistent `HERMES_HOME`. |
 | OpenClaw | `init --kernel openclaw` | Existing local Gateway at the configured URL. Set `gatewayTokenEnv` to your token environment variable; product tools also need the [bundled plugin](api.md#openclaw-product-tools). |
+
+For Hermes canonical Gateway, use this owner profile instead of the TUI template:
+
+```json
+{
+  "stateDirectory": ".agent-host",
+  "runtimes": [{ "id": "hermes", "kernel": "hermes", "transport": "acp", "cwd": ".", "command": "hermes" }]
+}
+```
+
+Keep the native profile and Host state directory across restart. Install Hermes with its `acp` and `mcp` extras. The canonical viewer supports native sessions and tools but does not expose confirmed compact/delete/steer controls; its settings differ from TUI. See [native boundaries](upgrade-gateways-20261015.md).
 
 These are profile templates, not installers. `--command` and `--args` accommodate native installation paths. Owner-controlled `env`, Claude `native` settings and ACP `config` are available in `host.json`; trusted JavaScript hooks use the [programmatic runtime](common-api.md#settings-and-native-extensions). Keep credentials in native configuration or environment variables, not a committed profile.
 

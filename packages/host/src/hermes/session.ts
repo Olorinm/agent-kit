@@ -46,6 +46,8 @@ export interface HermesRunRequest {
   model?: string;
   provider?: string;
   reasoningEffort?: string;
+  /** Native session fast mode; unsupported model/tier combinations are refused by Hermes. */
+  fastMode?: "fast" | "normal" | "auto" | "cold" | "ultrafast";
   signal?: AbortSignal;
   bindings?: BindingStore;
   bindingFingerprint?: string;
@@ -59,15 +61,14 @@ export interface HermesRunRequest {
   ): Promise<void>;
 }
 export type HermesEvent =
-  | AgentEvent
-  | { type: "native.response"; runId: string; response: JsonObject };
+  AgentEvent | { type: "native.response"; runId: string; response: JsonObject };
 interface OpenSession {
   liveId: string;
   storedId: string;
   fingerprint: string;
 }
 
-/** Hermes 0.21.6 TUI Gateway. One active turn per isolated native profile. */
+/** Hermes TUI stdio Gateway. One active turn per isolated native profile. */
 export class HermesAgent {
   private client?: StdioJsonRpcClient;
   private closed = false;
@@ -139,8 +140,8 @@ export class HermesAgent {
           if (!liveId) throw new Error("native_resume_not_confirmed");
           try {
             const n = await rpc(
-              "session.branch",
-              { session_id: liveId },
+              "session.branch_whole",
+              { session_id: liveId, idempotency_key: randomUUID() },
               o.signal,
             );
             if (typeof n.session_id === "string")
@@ -565,6 +566,26 @@ export class HermesAgent {
         signal,
       );
       await abortable(
+        (async () => {
+          if (request.fastMode === undefined) return;
+          const result = object(
+            await client!.request(
+              "config.set",
+              {
+                session_id: liveId,
+                scope: "session",
+                key: "fast",
+                value: request.fastMode,
+              },
+              rpcOptions,
+            ),
+          );
+          if (result.key !== "fast" || result.value !== request.fastMode)
+            throw new Error("hermes_fast_setting_not_confirmed");
+        })(),
+        signal,
+      );
+      await abortable(
         request.beforeTurn?.(client, {
           ...context,
           resumed: !!binding,
@@ -800,18 +821,31 @@ export async function compactHermes(
         { timeoutMs, signal },
       ),
     );
+    const summary = object(result.summary);
+    const cancelled = result.status === "aborted" || summary.aborted === true;
     const compacted =
-      result.status === "compressed" && result.compressed !== false;
+      result.status === "compressed" &&
+      result.compressed !== false &&
+      !cancelled &&
+      summary.noop !== true &&
+      summary.refused_would_grow !== true;
+    const status = cancelled
+      ? "aborted"
+      : summary.noop === true
+        ? "noop"
+        : summary.refused_would_grow === true
+          ? "refused_would_grow"
+          : (result.status ?? (result.lock_held ? "busy" : "unconfirmed"));
     return {
       ok: compacted,
       compacted,
-      ...(result.status === "aborted" ? { cancelled: true } : {}),
+      ...(cancelled ? { cancelled: true } : {}),
       ...(typeof object(result.info).stored_session_id === "string"
         ? { nativeSessionId: String(object(result.info).stored_session_id) }
         : {}),
       ...(!compacted
         ? {
-            error: `hermes_compression_${String(result.status ?? (result.lock_held ? "busy" : "unconfirmed"))}`,
+            error: `hermes_compression_${String(status)}`,
           }
         : {}),
     };

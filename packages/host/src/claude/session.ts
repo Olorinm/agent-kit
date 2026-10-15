@@ -14,6 +14,7 @@ import { createHash, randomUUID } from "node:crypto";
 import {
   query as nativeQuery,
   type Options,
+  type PermissionResult,
   type SDKUserMessage,
 } from "@anthropic-ai/claude-agent-sdk";
 import { AsyncEventQueue } from "../async-event-queue.js";
@@ -106,6 +107,9 @@ export class ClaudeAgent {
         json({
           commands: initialized.commands ?? [],
           models: initialized.models ?? [],
+          ...(typeof initialized.claude_code_version === "string"
+            ? { claude_code_version: initialized.claude_code_version }
+            : {}),
           accountConfigured: Boolean(initialized.account),
         }),
       );
@@ -350,16 +354,21 @@ export class ClaudeAgent {
           ...(mcp ? { agent_host: mcp } : {}),
         },
         canUseTool: async (name, input, options) => {
+          const signal = AbortSignal.any([context.signal, options.signal]);
+          signal.throwIfAborted();
           if (
             name.startsWith("mcp__agent_host__") &&
-            toolNames.has(name.slice("mcp__agent_host__".length))
+            toolNames.has(name.slice("mcp__agent_host__".length)) &&
+            options.mcpServer?.name === "agent_host" &&
+            options.mcpServer.source === "sdk"
           )
             return { behavior: "allow", toolUseID: options.toolUseID };
           if (nativePermission)
             return await abortable(
               nativePermission(name, input, options),
-              context.signal,
+              signal,
             );
+          const { signal: _signal, ...metadata } = options;
           const answer = object(
             await abortable(
               routeInteraction(
@@ -373,16 +382,13 @@ export class ClaudeAgent {
                     json({
                       name,
                       input,
-                      toolUseID: options.toolUseID,
-                      mcpServer: options.mcpServer,
-                      defaultToNo: options.defaultToNo,
-                      suppressAlwaysAllowRule: options.suppressAlwaysAllowRule,
+                      ...metadata,
                     }),
                   ),
                 },
-                context,
+                { ...context, signal },
               ),
-              context.signal,
+              signal,
             ),
           );
           if (answer.behavior === "allow")
@@ -390,7 +396,13 @@ export class ClaudeAgent {
               behavior: "allow",
               toolUseID: options.toolUseID,
               updatedInput: object(answer.updatedInput ?? input),
-            };
+              ...(Array.isArray(answer.updatedPermissions)
+                ? { updatedPermissions: answer.updatedPermissions }
+                : {}),
+              ...(answer.decisionClassification !== undefined
+                ? { decisionClassification: answer.decisionClassification }
+                : {}),
+            } as PermissionResult;
           return {
             behavior: "deny",
             toolUseID: options.toolUseID,
@@ -398,13 +410,21 @@ export class ClaudeAgent {
               typeof answer.message === "string"
                 ? answer.message
                 : "The product declined this operation.",
-          };
+            ...(typeof answer.interrupt === "boolean"
+              ? { interrupt: answer.interrupt }
+              : {}),
+            ...(answer.decisionClassification !== undefined
+              ? { decisionClassification: answer.decisionClassification }
+              : {}),
+          } as PermissionResult;
         },
         onElicitation: async (elicitation, options) => {
+          const signal = AbortSignal.any([context.signal, options.signal]);
+          signal.throwIfAborted();
           if (nativeElicitation)
             return await abortable(
               nativeElicitation(elicitation, options),
-              context.signal,
+              signal,
             );
           const answer = object(
             await abortable(
@@ -412,11 +432,13 @@ export class ClaudeAgent {
                 request,
                 {
                   method: "elicitation/create",
-                  params: object(json(elicitation)),
+                  params: object(
+                    json({ ...elicitation, requestId: options.requestId }),
+                  ),
                 },
-                context,
+                { ...context, signal },
               ),
-              context.signal,
+              signal,
             ),
           );
           if (answer.action !== "accept")

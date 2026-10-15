@@ -44,6 +44,8 @@ export interface OpenClawRunRequest {
   context?: string;
   model?: string;
   thinking?: string;
+  /** Native one-turn chat.send setting; availability remains model/provider owned. */
+  fastMode?: boolean | "auto" | "ultrafast";
   tools?: ProductTool[];
   toolBridge?: HostToolBridge;
   bindings?: BindingStore;
@@ -187,6 +189,8 @@ export class OpenClawAgent {
     let toolsBound = false;
     queue.push({ type: "turn.started", runId });
     try {
+      if (request.fastMode !== undefined && request.method === "agent")
+        throw new Error("openclaw_fast_mode_requires_chat_send");
       this.sessionManager?.assertIdle(request.sessionId);
       if (this.closed) throw new Error("agent_closed");
       if (this.active.has(lockKey)) throw new Error("session_busy");
@@ -514,6 +518,9 @@ export class OpenClawAgent {
               .filter(Boolean)
               .join("\n\n"),
             ...(request.thinking ? { thinking: request.thinking } : {}),
+            ...(request.fastMode !== undefined
+              ? { fastMode: request.fastMode }
+              : {}),
             deliver: false,
             idempotencyKey: runId,
             ...(request.attachments?.length
@@ -553,10 +560,12 @@ export class OpenClawAgent {
           try {
             const result = object(
               await this.client.request(
-                "sessions.steer",
+                "chat.send",
                 {
-                  key: sessionKey,
+                  sessionKey,
                   message: input,
+                  queueMode: "interrupt",
+                  deliver: false,
                   idempotencyKey: randomUUID(),
                 },
                 { timeoutMs: 30_000, signal: context.signal },

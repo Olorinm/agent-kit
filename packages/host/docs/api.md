@@ -1,6 +1,6 @@
 # Agent Host API (alpha)
 
-The package targets Node.js 24+ and provides native adapters for all seven Kernels in the [support matrix](kernel-support.md). Native installations and authentication remain separate from the consuming product. The common turn/tool/event boundary is alpha; optional controls remain Kernel-specific. The first example below uses Codex 0.162.0.
+The package targets Node.js 24+ and provides native adapters for all seven Kernels in the [support matrix](kernel-support.md). Native installations and authentication remain separate from the consuming product. The common turn/tool/event boundary is alpha; optional controls remain Kernel-specific. The first example below uses Codex 0.162.1.
 
 For a source-free installation and personal task CLI, start with the [quickstart](quickstart.md). Shared interactions, settings, progress and native conversation operations are described in the [common API](common-api.md).
 
@@ -13,7 +13,7 @@ npm ci
 npm test
 npm pack
 cd examples/file-editor
-npm install ../../olorinm-agent-host-0.1.0-alpha.6.tgz
+npm install ../../olorinm-agent-host-0.1.0-alpha.9.tgz
 AGENT_HOST_CODEX=../../node_modules/.bin/codex npm start
 ```
 
@@ -54,7 +54,7 @@ try {
 
 `instructions` are stable; `context` is the current product state, supplied on every turn. A product can also supply native text/image/skill/mention input items. Native `thread` and `turn` options preserve controls such as model, effort, sandbox policy, output schema and collaboration mode without inventing equivalent features for other Kernels. Passing an option does not establish that it has been verified in every environment.
 
-`createAgent({ kernel, options })` selects any of the seven adapters. TypeScript retains the selected adapter's native options and methods; existing direct imports still work. Hermes requires its Gateway command, and OpenClaw requires its Gateway connection. The [capability API](capabilities.md) describes common operations and limits without starting a process. Native request formats remain available; `onInteraction` handles common approvals and questions while retaining the native request.
+`createAgent({ kernel, options })` selects any of the seven adapters. TypeScript retains the selected adapter's native options and methods; existing direct imports still work. Hermes defaults to its configured TUI Gateway command; select `transport: 'acp'` for the official canonical `hermes acp` viewer. OpenClaw requires its Gateway connection. The [capability API](capabilities.md) describes common operations and limits without starting a process. Native request formats remain available; `onInteraction` handles common approvals and questions while retaining the native request.
 
 ## Tools and interactions
 
@@ -95,7 +95,7 @@ npm run probe:codex
 AGENT_HOST_NATIVE_PROBE=1 npm run test:package
 ```
 
-On macOS arm64 with Codex 0.162.0 and an existing ChatGPT login, the native probe verifies a namespaced product tool, conversation continuation after process restart and native compaction. Structured native questions, native permission UI and steering have protocol coverage only until corresponding native probes pass. Windows and Linux are not yet certified by native probes.
+On macOS arm64 with Codex 0.162.1 and an existing native login, the native probe verifies a namespaced product tool, conversation continuation after process restart and native compaction. The current refresh and earlier platform/interaction probes have separate versioned evidence in the [support matrix](kernel-support.md).
 
 
 ## Choosing an adapter
@@ -108,7 +108,8 @@ All adapters accept a product `sessionId`, user `input`, stable `instructions`, 
 | `@olorinm/agent-host/acp` → `AcpAgent` | `command: 'opencode'` or `'kimi'`, default `args: ['acp']`; native credentials |
 | `@olorinm/agent-host/claude` → `ClaudeAgent` | Bundled SDK engine; optional `command`, `env`, `native` SDK options |
 | `@olorinm/agent-host/pi` → `PiAgent` | A Pi `model` or resolver, `cwd`, durable `sessionRoot`; native provider credentials |
-| `@olorinm/agent-host/hermes` → `HermesAgent` | Python executable and Gateway launch args, isolated persistent `HERMES_HOME`, `exclusiveProfile: true` for product tools |
+| `@olorinm/agent-host/hermes` → `HermesAgent` | Python executable and TUI Gateway launch args, isolated persistent `HERMES_HOME`, `exclusiveProfile: true` for product tools |
+| `@olorinm/agent-host/hermes` → `HermesGatewayAgent` | Official `hermes acp` executable/viewer, persistent native profile; shares canonical authority |
 | `@olorinm/agent-host/openclaw` → `OpenClawAgent` | Authenticated Gateway `url` and `token` or `password`; optional product-tool plugin below |
 
 Use `FileBindingStore` for adapter restart. A binding is a reference to native storage, not a backup of that storage. Keep the native profile/session directory too. Never treat `outcomeUnknown` as permission to replay a mutating operation. Products own argument validation and business authorization even when a Kernel validates the supplied JSON Schema.
@@ -117,9 +118,9 @@ The editor's `createEditor` accepts `kernel`, `command`, `args`, `env`, `model`,
 
 ### ACP controls and questions
 
-`AcpAgent.connect()` initializes the native process. `getCapabilities(client)` exposes what that process actually advertises; native initialization and session notifications retain configuration details. Form elicitation is opt-in through `elicitation: { form: {} }`; return native `{ action: 'accept', content }`, `decline` or `cancel` from `onRequest`. Permissions use native option IDs. Model, effort and config requests are checked against native options. `compactOpenCode` and `compactKimi` retain the native summarization/command paths; arbitrary ACP does not imply universal compaction support.
+`AcpAgent.connect()` initializes the native process. `getCapabilities(client)` exposes what that process actually advertises; `getInitialization(client)` retains native identity/authentication metadata, `getOperationSupport(client)` reports effective supported paths, and `getSessionCommands(client, id)` retains native commands. Discovery respects owner-disabled resume. Native initialization and session notifications retain configuration details. Form elicitation is opt-in through `elicitation: { form: {} }`; return native `{ action: 'accept', content }`, `decline` or `cancel` from `onRequest`. Permissions use native option IDs. Model, effort and config requests are checked against native options. `compactOpenCode` and `compactKimi` retain the native summarization/command paths; arbitrary ACP does not imply universal compaction support.
 
-The factory selects the matching native compaction path for `opencode` and `kimi`. Direct `AcpAgent` callers can set `compaction: 'opencode' | 'kimi'`. Submit `mode: 'compact', input: ''` with the same session, instructions, workspace and tool definitions as ordinary turns. Compaction requires an existing binding and resumes it after a restart; it never creates a substitute conversation. These native operations do not accept a custom reason, so nonempty input is rejected. OpenCode's command must also support `serve` with the same native profile/storage; Kimi must report a completion receipt. An interrupted or unconfirmed dispatch returns an unknown outcome.
+The factory selects the matching native compaction path for `opencode` and `kimi`. Direct `AcpAgent` callers can set `compaction: 'opencode' | 'kimi'`. Submit `mode: 'compact', input: ''` with the same session, instructions, workspace and tool definitions as ordinary turns. Compaction requires an existing binding and resumes it after a restart; it never creates a substitute conversation. These native operations do not accept a custom reason, so nonempty input is rejected. OpenCode 2 uses its native ACP compaction operation and receipt. The explicit OpenCode 1 fallback requires `serve` with the same native profile/storage. Kimi must report its asynchronous command completion receipt. An interrupted or unconfirmed dispatch returns an unknown outcome.
 
 ### Claude native SDK
 
@@ -127,15 +128,23 @@ The factory selects the matching native compaction path for `opencode` and `kimi
 
 ### Pi durable sessions
 
-Provide `model` and a persistent `sessionRoot`. The native 1.1 Harness owns conversations and tool/model execution. `conversation`, `listSessions`, `forkSession`, `steer` and `compact` expose supported native operations. `deleteSession` explicitly reports `pi_durable_native_delete_unsupported`. The `compat/pi085` entry is solely for existing 0.85 storage; new integrations should use `pi`.
+Provide `model` and a persistent `sessionRoot`. The native 1.2 harness owns conversations and tool/model execution. `conversation`, `listSessions`, `forkSession`, `steer` and `compact` expose supported native operations. `deleteSession` explicitly reports `pi_durable_native_delete_unsupported`. The `compat/pi085` entry is solely for existing 0.85 storage; new integrations should use `pi`.
 
 ### Hermes profile and interactions
 
-Launch the installed 0.21.6 Python environment with Gateway args such as `['-u', '-c', "import runpy; import hermes_bootstrap; runpy.run_module('tui_gateway.entry', run_name='__main__')"]`. Install Hermes's official MCP extra through its native package manager in the same profile. A Python package version alone does not establish that its selected runtime environment has MCP enabled.
+Launch the installed 0.22.1 Python environment with Gateway args such as `['-u', '-c', "import runpy; import hermes_bootstrap; runpy.run_module('tui_gateway.entry', run_name='__main__')"]`. Install Hermes's official MCP extra through its native package manager in the same profile. A Python package version alone does not establish that its selected runtime environment has MCP enabled.
 
 A product must own the supplied `HERMES_HOME` before setting `exclusiveProfile: true`: the adapter registers its MCP entry there. The editor defaults to a profile under its own document directory. Native login/provider configuration is still required. Do not share one profile among concurrently running adapters.
 
 `onRequest` receives native `approval` (`choice: once/session/always/deny`), `clarify` (`answers` keyed by native `qid`), and `sudo`/`secret` (an empty `value` declines). Request cancellation aborts pending UI callbacks. `steer` and `compact` operate on a session already opened by the adapter and require native receipts.
+
+### Hermes canonical Gateway
+
+Use `createAgent({ kernel: 'hermes', transport: 'acp', options })` or `new HermesGatewayAgent(options)`. The default command is `hermes acp`; install Hermes's `acp` and `mcp` extras in its native environment. Native authority discovery, durable admissions and approvals stay in Hermes. Closing the adapter detaches the viewer; it does not stop the authority.
+
+The HTTP profile selects `transport: 'acp'` and uses a stable private tool-connection reference under its state directory. Embedded products can inject `toolBridgeProvider: new AcpHostToolBridgeServer('agent-host', 'AGENT_HOST_TOOL', { connectionDirectory })` from the ACP entry point. Injected providers are caller-owned and must be closed by the caller. Programmatic HTTP profiles exclude the provider instance from their configuration fingerprint; use `configurationRevision` when intentionally changing its behavior. Reuse the directory and installation paths across restart, and enforce one active writer per session. Native MCP descriptors stay unchanged while endpoint tokens rotate. Forks preserve that configuration identity; concurrent tool calls through the same frozen configuration fail explicitly.
+
+Only negotiated model selection is exposed on this surface. ACP has no confirmed delete, steer or compression receipt in 0.22.1; those controls remain unsupported. See the [Gateway review](upgrade-gateways-20261015.md) for the native list limitation and TUI/ACP differences. TUI `fastMode` accepts `fast`, `normal`, `auto`, `cold`, `ultrafast`; OpenClaw accepts `true`, `false`, `auto`, `ultrafast`, subject to native provider availability.
 
 ### OpenClaw product tools
 

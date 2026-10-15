@@ -106,7 +106,7 @@ export function describeInteraction(native: NativeRequest): Interaction {
       permissions: object(p.permissions),
     };
   if (method === "permission" || method === "pi/toolApproval")
-    return approval(native, string(p.name, "Allow tool?"), [
+    return approval(native, string(p.title, string(p.name, "Allow tool?")), [
       choice("allow", "Allow once", true, "once"),
       choice("deny", "Deny", false),
     ]);
