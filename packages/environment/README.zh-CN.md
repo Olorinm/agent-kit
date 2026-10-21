@@ -9,6 +9,9 @@
 
 通过官方 E2B SDK 接入阿里云 Agent Sandbox 和火山云 VCI Agent Sandbox。我们的 Agent Host 和 OMA 都可以使用，无需绑定对方的 Agent 内核、账号或数据库。
 
+[Cloudflare 试运行网关](cloudflare/README.md)也实现了同一套公开接口，底层使用
+Durable Object Container API。它的快照保留期限和部署限制与 E2B 供应商不同，详见部署说明。
+
 ```text
 我们的服务 / OMA
         │ 选择云和模板，保存环境 ID

@@ -14,6 +14,10 @@ jobs:
       - run: npm ci
       - run: npm test
       - run: npm run test:package
+      - run: npm ci --prefix cloudflare
+      - run: npm run check --prefix cloudflare
+      - run: npm test --prefix cloudflare
+      - run: node --test cloudflare/backup/test/*.test.mjs
       - uses: actions/checkout@v4
         with:
           repository: BroZhong/open-managed-agents

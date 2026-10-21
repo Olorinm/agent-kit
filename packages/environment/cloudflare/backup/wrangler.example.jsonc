@@ -1,0 +1,45 @@
+{
+  "name": "agent-backups",
+  "main": "./src/index.ts",
+  "compatibility_date": "2026-10-20",
+  "workers_dev": true,
+  "preview_urls": false,
+  "observability": {
+    "enabled": true,
+    "logs": {
+      "enabled": true,
+      "invocation_logs": false
+    }
+  },
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "INGEST",
+        "class_name": "BackupIngress"
+      }
+    ]
+  },
+  "migrations": [
+    {
+      "tag": "v1",
+      "new_sqlite_classes": [
+        "BackupIngress"
+      ]
+    }
+  ],
+  "r2_buckets": [
+    {
+      "binding": "BACKUPS",
+      "bucket_name": "YOUR-PRIVATE-BACKUP-BUCKET"
+    }
+  ],
+  "vars": {
+    "HEALTH_CHECK_URL": "https://product.example.test/health/live",
+    "SOURCE_REVISION": "YOUR-COMMIT-SHA"
+  },
+  "triggers": {
+    "crons": [
+      "17 * * * *"
+    ]
+  }
+}

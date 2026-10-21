@@ -9,6 +9,10 @@ Create and manage cloud execution environments for any agent, through one TypeSc
 
 Alibaba Cloud Agent Sandbox and Volcengine VCI Agent Sandbox adapters share the official E2B SDK. Agent Host and OMA can use the same environment interface without adopting each other's agent loop, accounts, or database.
 
+A [Cloudflare trial gateway](cloudflare/README.md) implements the same public
+interface using the native Durable Object Container API. Its snapshot retention
+and deployment limits differ from the E2B providers.
+
 ```text
 Your product / OMA
         │ choose provider + template; persist the environment ref

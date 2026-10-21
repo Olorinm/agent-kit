@@ -3,6 +3,7 @@ import { dirname, resolve } from "node:path";
 import { EnvironmentManager } from "./manager.js";
 import { createAlibabaProvider, createVolcengineProvider } from "./providers.js";
 import { EnvironmentError } from "./errors.js";
+import { createCloudflareProvider } from "./cloudflare.js";
 
 export async function loadConfiguration(path: string): Promise<EnvironmentManager> {
   const document = JSON.parse(await readFile(path, "utf8")) as {
@@ -12,7 +13,7 @@ export async function loadConfiguration(path: string): Promise<EnvironmentManage
   if (!Array.isArray(document.providers)) throw new EnvironmentError("invalid_config", "providers must be an array.");
   const providers = [];
   for (const item of document.providers) {
-    if (!["alibaba", "volcengine"].includes(item.kind) || typeof item.apiKeyFile !== "string")
+    if (!["alibaba", "volcengine", "cloudflare"].includes(item.kind) || typeof item.apiKeyFile !== "string")
       throw new EnvironmentError("invalid_config", "Each provider needs kind and apiKeyFile.");
     const secretPath = resolve(dirname(resolve(path)), item.apiKeyFile);
     const metadata = await stat(secretPath);
@@ -25,7 +26,9 @@ export async function loadConfiguration(path: string): Promise<EnvironmentManage
       requestTimeoutMs: item.requestTimeoutMs, allowHttp: item.allowHttp,
       pausedRetention: item.pausedRetention,
     };
-    providers.push(item.kind === "alibaba" ? createAlibabaProvider(options) : createVolcengineProvider(options));
+    providers.push(item.kind === "cloudflare"
+      ? createCloudflareProvider({ ...options, apiUrl: item.apiUrl ?? "" })
+      : item.kind === "alibaba" ? createAlibabaProvider(options) : createVolcengineProvider(options));
   }
   return new EnvironmentManager(providers);
 }

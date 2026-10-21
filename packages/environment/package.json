@@ -1,7 +1,7 @@
 {
   "name": "@olorinm/agent-environment",
-  "version": "0.2.0-alpha.2",
-  "description": "OMA sandbox implementation with Alibaba and Volcengine environment adapters",
+  "version": "0.2.0-alpha.3",
+  "description": "Cloud execution environments with Alibaba, Volcengine and Cloudflare adapters",
   "type": "module",
   "license": "UNLICENSED",
   "engines": {
@@ -18,7 +18,17 @@
     "scripts/private-tcp-forward.mjs",
     "upstream.json",
     "LICENSE.original-components",
-    "patches"
+    "patches",
+    "cloudflare/src",
+    "cloudflare/backup/src",
+    "cloudflare/backup/scripts/*.py",
+    "cloudflare/examples",
+    "cloudflare/README.md",
+    "cloudflare/package.json",
+    "cloudflare/package-lock.json",
+    "cloudflare/tsconfig.json",
+    "cloudflare/wrangler.example.jsonc",
+    "cloudflare/backup/wrangler.example.jsonc"
   ],
   "exports": {
     ".": {
