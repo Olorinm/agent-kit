@@ -199,7 +199,7 @@ export function getKernelCapabilities(
       "configuration_required",
       kernel === "kimi"
         ? "Configure compaction: 'kimi'; requires an existing binding and a confirmed native /compact receipt."
-        : "Configure compaction: 'opencode'; OpenCode 2 uses native ACP /compact with a completion receipt. OpenCode 1 retains its native serve/summarize bridge.",
+        : "Configure compaction: 'opencode'; OpenCode 2 uses native ACP /compact with a completion receipt.",
     );
   } else if (kernel === "hermes") {
     f["input.images"] = conditional(
@@ -250,7 +250,7 @@ export function getKernelCapabilities(
     ] as const)
       f[name] = conditional(
         "native_negotiation_required",
-        "Requires the corresponding ACP session capability (history uses loadSession); OpenCode 1 retains its native history/delete HTTP bridge. Inspect runtime discovery for the selected native implementation.",
+        "Requires the corresponding ACP session capability (history uses loadSession). Inspect runtime discovery for the selected native implementation.",
       );
   if (kernel === "kimi")
     f["sessions.delete"] = conditional(

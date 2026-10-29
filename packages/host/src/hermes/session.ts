@@ -253,24 +253,11 @@ export class HermesAgent {
       };
       const fingerprint =
         request.bindingFingerprint ?? hash(JSON.stringify(configuration));
-      // Upgrade older bindings on their first unchanged resume. Model/effort are
-      // native session settings, not immutable product configuration.
-      const legacyFingerprint =
-        request.bindingFingerprint ??
-        hash(
-          JSON.stringify({
-            ...configuration,
-            model: request.model,
-            provider: request.provider,
-            effort: request.reasoningEffort,
-          }),
-        );
       const store = request.bindings ?? this.bindings;
       const binding = await store.get(request.sessionId);
       if (
         binding &&
-        binding.fingerprint !== fingerprint &&
-        binding.fingerprint !== legacyFingerprint
+        binding.fingerprint !== fingerprint
       )
         throw new Error("session_configuration_changed");
       const rpcOptions = {

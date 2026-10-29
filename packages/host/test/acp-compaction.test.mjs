@@ -34,7 +34,7 @@ const outcome = (events) => {
   assert.equal(events.filter((e) => e.type === "turn.finished").length, 1);
   return events.at(-1).outcome;
 };
-for (const kernel of ["opencode", "kimi"]) {
+for (const kernel of ["kimi"]) {
   test(`${kernel} HTTP compaction resumes the same native binding after service restart`, async (t) => {
     const { root, config, log } = await setup(t, kernel);
     let host;
@@ -92,7 +92,6 @@ for (const kernel of ["opencode", "kimi"]) {
       logEntries.filter((e) => e.method === "session/new").length,
       1,
     );
-    if (kernel === "kimi") {
       const prompts = logEntries.filter((e) => e.method === "session/prompt");
       assert.deepEqual(prompts.at(-1).params.prompt, [
         { type: "text", text: "/compact" },
@@ -104,17 +103,6 @@ for (const kernel of ["opencode", "kimi"]) {
             e.text.includes("Compaction completed"),
         ),
       );
-    } else {
-      const call = logEntries.find((e) => e.method === "summarize");
-      assert.equal(
-        call.params.url,
-        "/session/native-control-session/summarize",
-      );
-      assert.deepEqual(call.params.body, {
-        providerID: "fixture",
-        modelID: "model",
-      });
-    }
   });
 
   test(`${kernel} compaction refuses a missing binding and preserves native uncertainty`, async (t) => {

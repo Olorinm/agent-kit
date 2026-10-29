@@ -33,7 +33,7 @@ for await (const line of createInterface({ input: process.stdin })) {
   if (method === "initialize")
     reply({
       protocolVersion: 1,
-      agentInfo: { name: "OpenCode", version: "2.0.29" },
+      agentInfo: { name: "OpenCode", version: process.env.ACP_V2_VERSION ?? "2.0.29" },
       authMethods: [{ id: "opencode-login", name: "Login" }],
       agentCapabilities: {
         loadSession: true,

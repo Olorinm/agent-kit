@@ -251,3 +251,9 @@ test("Kimi rejects blob resources that its ACP implementation would silently dis
     false,
   );
 });
+
+test("retired OpenCode 1 is rejected before creating or modifying native sessions", async (t) => {
+  const { agent, entries } = await setup(t, { env: { ACP_V2_VERSION: "1.18.35" } });
+  await assert.rejects(agent.connect(), /opencode_version_unsupported/);
+  assert.deepEqual((await entries()).map((entry) => entry.method), ["initialize"]);
+});

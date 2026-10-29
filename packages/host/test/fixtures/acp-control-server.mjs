@@ -1,5 +1,4 @@
 import { createInterface } from "node:readline";
-import { createServer } from "node:http";
 import { appendFileSync } from "node:fs";
 
 function record(method, params) {
@@ -10,40 +9,6 @@ function record(method, params) {
     );
 }
 const behavior = process.env.ACP_CONTROL_RECEIPT ?? "confirmed";
-if (process.argv.includes("serve")) {
-  const server = createServer(async (request, response) => {
-    const expected =
-      "Basic " +
-      Buffer.from(
-        `${process.env.OPENCODE_SERVER_USERNAME}:${process.env.OPENCODE_SERVER_PASSWORD}`,
-      ).toString("base64");
-    if (request.headers.authorization !== expected) {
-      response.writeHead(401).end();
-      return;
-    }
-    if (request.url === "/config/providers") {
-      response.end(JSON.stringify({ default: { fixture: "model" } }));
-      return;
-    }
-    if (
-      request.method === "POST" &&
-      /^\/session\/[^/]+\/summarize$/.test(request.url)
-    ) {
-      let body = "";
-      for await (const chunk of request) body += chunk;
-      record("summarize", { url: request.url, body: JSON.parse(body) });
-      if (behavior === "hang") return;
-      response.end(JSON.stringify(behavior !== "missing"));
-      return;
-    }
-    response.writeHead(404).end();
-  });
-  server.listen(0, "127.0.0.1", () => {
-    console.log(
-      `opencode server listening on http://127.0.0.1:${server.address().port}`,
-    );
-  });
-} else {
   const send = (value) =>
     process.stdout.write(JSON.stringify({ jsonrpc: "2.0", ...value }) + "\n");
   const update = (sessionId, text) =>
@@ -91,4 +56,3 @@ if (process.argv.includes("serve")) {
       }
     } else send({ id, error: { code: -32601, message: method } });
   }
-}

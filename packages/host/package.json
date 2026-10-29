@@ -82,10 +82,6 @@
       "types": "./dist/pi/index.d.ts",
       "import": "./dist/pi/index.js"
     },
-    "./compat/pi085": {
-      "types": "./dist/compat/pi085/index.d.ts",
-      "import": "./dist/compat/pi085/index.js"
-    },
     "./hermes": {
       "types": "./dist/hermes/index.d.ts",
       "import": "./dist/hermes/index.js"
@@ -115,7 +111,7 @@
     "agent-host": "dist/service/cli.js"
   },
   "scripts": {
-    "build": "tsc -p tsconfig.json",
+    "build": "node --input-type=module -e \"import { rmSync } from 'node:fs'; rmSync('dist', { recursive: true, force: true });\" && tsc -p tsconfig.json",
     "test": "npm run build && node --test test/*.test.mjs",
     "prepack": "npm run build",
     "test:package": "node scripts/test-package.mjs",
@@ -130,8 +126,6 @@
     "@earendil-works/pi-durable": "1.2.0",
     "@modelcontextprotocol/sdk": "1.32.1",
     "cross-spawn": "7.0.6",
-    "pi-agent-core-legacy": "npm:@earendil-works/pi-agent-core@0.85.1",
-    "pi-ai-legacy": "npm:@earendil-works/pi-ai@0.85.1",
     "zod": "4.6.5"
   },
   "devDependencies": {

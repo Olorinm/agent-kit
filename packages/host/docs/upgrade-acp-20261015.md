@@ -18,7 +18,7 @@ Primary protocol/source references inspected at the release tags:
 
 ## Adapter changes
 
-- OpenCode 2 history uses native ACP `session/load` in a separate reader process. Delete prefers negotiated `session/delete`. Compaction runs the native `/compact` command in the existing ACP session and requires a matching compaction start/completion receipt; a prompt acknowledgement alone is insufficient. The existing OpenCode 1 HTTP history/delete/summarize bridge remains for that generation.
+- OpenCode 2 history uses native ACP `session/load` in a separate reader process. Delete prefers negotiated `session/delete`. Compaction runs the native `/compact` command in the existing ACP session and requires a matching compaction start/completion receipt; a prompt acknowledgement alone is insufficient. The former OpenCode 1 HTTP history/delete/summarize bridge was retired on 2026-10-29.
 - `additionalDirectories` is carried on restart resume/load. OpenCode 2 replaces grants on history load and fork, so these operations first obtain the stored grants from the native session list, including pagination. Reading history does not revoke native access grants.
 - The client advertises supported ACP compaction updates and OpenCode's child-session event extension. Child updates retain their native session attribution and do not become root assistant text. Legacy child updates with the OpenCode `_meta` marker are also excluded from the root answer.
 - OpenCode 2 receives instructions/product context in text blocks annotated for the assistant. Native commands in the user's message remain commands; native context remains separate from visible user text.
