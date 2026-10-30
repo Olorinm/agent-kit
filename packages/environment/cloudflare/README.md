@@ -100,6 +100,31 @@ for this gateway; do not enable those profile options.
   a particular region or data residency. Check destination network access with
   the real native runtime before migrating traffic.
 
+## Recover a stopped process from its existing snapshot
+
+An operator can call `POST /v1/environments/:id/recover` with the existing
+`X-Environment-Control` credential and
+`{"fromLatestSnapshot":true,"timeoutSeconds":600}`. The confirmation is required;
+the timeout defaults to 600 seconds. This restores the latest saved filesystem
+snapshot in the same environment ID. Changes made after that snapshot are not
+included. Recovery refuses a running container, a missing snapshot, and records
+other than `running` or `unknown`; use normal resume for a paused environment.
+
+Recovery starts a fixed `sleep infinity` maintenance process instead of the guest's
+startup script. It retains the same outbound network policy, CA setup and runtime
+allowance. Arbitrary images, snapshots and entrypoints cannot be supplied. The
+response and subsequent operator `/info` include `maintenance:true` and `snapshotId`
+so an interrupted response can be checked without repeating restoration.
+The maintenance window always pauses on expiry, even if the environment's normal
+timeout policy is `kill`; that saved policy is retained for normal operation.
+
+Use the existing authenticated `/exec` or `/files` routes to inspect and repair the
+program. Then pause to persist the repaired filesystem and resume normally to run
+the original startup script. Confirm Host health before reconciling Mau's existing
+binding. Recovery does not create another environment, import transcripts, change
+native session IDs or grant new access. This is filesystem recovery, not process
+memory continuation.
+
 ## Verification
 
 Adapter fixtures: from the parent directory run `npm test` and
