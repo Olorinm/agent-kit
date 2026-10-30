@@ -25,6 +25,7 @@ interface RecordData {
   expires: number;
   onTimeout: "pause" | "kill";
   snapshot?: { id: string; size: number; createdAt: number };
+  maintenance?: boolean;
 }
 class ApiError extends Error {
   constructor(readonly code: string, readonly status = 409) { super(code); }
@@ -37,6 +38,7 @@ const info = (r: RecordData, running: boolean) => ({
   id: r.id, template: r.template, metadata: r.metadata,
   state: r.status === "running" ? (running ? "running" : "unknown") :
     r.status === "creating" ? "unknown" : r.status,
+  ...(r.maintenance ? { maintenance: true, snapshotId: r.snapshot?.id } : {}),
 });
 function bytes64(bytes: Uint8Array) {
   let s = "";
@@ -86,7 +88,7 @@ export default {
         }));
         return json(entries);
       }
-      const match = /^\/v1\/environments\/([^/]+)(?:\/(info|pause|resume|timeout|exec|files|endpoint|security|backup))?$/.exec(url.pathname);
+      const match = /^\/v1\/environments\/([^/]+)(?:\/(info|pause|resume|recover|timeout|exec|files|endpoint|security|backup))?$/.exec(url.pathname);
       if (!match || !UUID.test(match[1])) return json({ error: "not_found" }, 404);
       const [, id, action = "info"] = match;
       if (!await catalog.contains(id)) return json({ error: "environment_missing" }, 404);
@@ -171,7 +173,7 @@ export class AgentSandbox extends DurableObject<Env> {
     this.changing = true;
     try { return await fn(); } finally { this.changing = false; }
   }
-  private async start(r: RecordData, restore: boolean) {
+  private async start(r: RecordData, restore: boolean, maintenance = false) {
     if (restore && !r.snapshot) throw new ApiError("snapshot_missing");
     const usage = await this.runtimeUsage();
     if (usage.usedMs >= Number(this.env.DAILY_RUNTIME_MINUTES) * 60000) throw new ApiError("daily_runtime_limit",429);
@@ -179,7 +181,8 @@ export class AgentSandbox extends DurableObject<Env> {
     // No image fallback on an expired or missing snapshot.
     this.container.start({
       ...(restore ? { containerSnapshot: { id: r.snapshot!.id } } : { image: "cloudflare/debian-trixie" }),
-      entrypoint: ["sh", "-c", `while [ ! -f ${readyFile} ] || [ ! -f /opt/agent-environment/start.sh ]; do sleep 1; done; exec sh /opt/agent-environment/start.sh`],
+      entrypoint: maintenance ? ["sh", "-c", "exec sleep infinity"]
+        : ["sh", "-c", `while [ ! -f ${readyFile} ] || [ ! -f /opt/agent-environment/start.sh ]; do sleep 1; done; exec sh /opt/agent-environment/start.sh`],
       enableInternet: false,
       instance: { vcpu: 2, memoryMib: 6144, diskMb: 10000 },
       env: {...r.env, NODE_EXTRA_CA_CERTS:"/etc/cloudflare/certs/cloudflare-containers-ca.crt"},
@@ -199,6 +202,8 @@ export class AgentSandbox extends DurableObject<Env> {
     if(trust.exitCode!==0)throw new ApiError("network_trust_failed",502);
     await this.ctx.storage.put("runtime", {...usage,startedAt:Date.now()});
     r.status = "running";
+    if (maintenance) r.maintenance = true;
+    else delete r.maintenance;
     await this.ctx.storage.put("record", r);
     await this.ctx.storage.setAlarm(Math.min(r.expires, Date.now() + 60000));
     return info(r, true);
@@ -216,6 +221,7 @@ export class AgentSandbox extends DurableObject<Env> {
     const usage=await this.runtimeUsage();await this.ctx.storage.put("runtime",{...usage,startedAt:0});
     await this.container.destroy();
     r.status = "paused";
+    delete r.maintenance;
     await this.ctx.storage.put("record", r);
     await this.ctx.storage.deleteAlarm();
     // Export from a stopped snapshot: native Host databases can hold exclusive locks.
@@ -255,7 +261,7 @@ export class AgentSandbox extends DurableObject<Env> {
         return;
       }
       await this.change(async () => {
-        if (r.onTimeout === "pause") await this.pause(r);
+        if (r.maintenance || r.onTimeout === "pause") await this.pause(r);
         else {
           await this.container.destroy();
           r.status = "missing";
@@ -344,6 +350,24 @@ export class AgentSandbox extends DurableObject<Env> {
           }
           if (r.status !== "paused") throw new ApiError("resume_requires_paused");
           return json(await this.start(r, true));
+        });
+      }
+      if (url.pathname === "/recover" && request.method === "POST") {
+        return await this.change(async () => {
+          const b = await body(request);
+          if (!b || typeof b !== "object" || Array.isArray(b) ||
+              Object.keys(b).some(key => !["fromLatestSnapshot", "timeoutSeconds"].includes(key)))
+            throw new ApiError("invalid_recovery_request", 400);
+          if (b.fromLatestSnapshot !== true) throw new ApiError("snapshot_recovery_confirmation_required", 400);
+          let seconds: number;
+          try { seconds = lifetime(b.timeoutSeconds ?? 600); }
+          catch { throw new ApiError("invalid_lifetime", 400); }
+          const r = await this.record();
+          if (this.container.running) throw new ApiError("recovery_requires_stopped");
+          if (!["running", "unknown"].includes(r.status)) throw new ApiError("recovery_requires_failed_start");
+          if (!r.snapshot) throw new ApiError("snapshot_missing");
+          r.expires = Date.now() + seconds * 1000;
+          return json(await this.start(r, true, true));
         });
       }
       if (url.pathname === "/timeout" && request.method === "POST") {
