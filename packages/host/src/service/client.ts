@@ -55,6 +55,7 @@ export class AgentHostHttpError extends Error {
   constructor(
     readonly status: number,
     message: string,
+    readonly nativeError?: { kind?: string; method?: string; code?: number; data?: JsonValue },
   ) {
     super(message);
   }
@@ -107,22 +108,45 @@ export class AgentHostClient {
     const request = (action: string, options: Record<string, unknown> = {}) =>
       this.request("/native-sessions", { runtimeId, action, ...options });
     return {
-      list: (options: { limit?: number; cursor?: string } = {}) =>
+      list: (options: Omit<import("../sessions.js").SessionQuery, "signal" | "cwd"> = {}) =>
         request("list", options) as unknown as Promise<
           import("../sessions.js").SessionPage
         >,
       bindings: () => request("bindings"),
+      adopt: (sessionId: string, nativeSessionId: string, options: { instructions?: string; tools?: NonNullable<StartRunInput["tools"]> } = {}) => request("adopt", { sessionId, nativeSessionId, ...options }),
+      read: (sessionId: string) => request("read", { sessionId }),
+      items: (sessionId: string, options: Omit<import("../sessions.js").SessionQuery, "signal" | "cwd"> = {}) => request("items", { sessionId, ...options }),
+      rename: (sessionId: string, name: string) => request("rename", { sessionId, name }),
+      archive: (sessionId: string) => request("archive", { sessionId }),
+      unarchive: (sessionId: string) => request("unarchive", { sessionId }),
       history: (
         sessionId: string,
-        options: { limit?: number; cursor?: string } = {},
+        options: Omit<import("../sessions.js").SessionQuery, "signal" | "cwd"> = {},
       ) =>
         request("history", { sessionId, ...options }) as unknown as Promise<
           import("../sessions.js").SessionPage
         >,
-      fork: (sessionId: string, targetSessionId: string, entryId?: string) =>
-        request("fork", { sessionId, targetSessionId, entryId }),
+      fork: (sessionId: string, targetSessionId: string, entry?: string | { entryId?: string; beforeEntryId?: string }) =>
+        request("fork", { sessionId, targetSessionId, ...(typeof entry === "string" ? { entryId: entry } : entry) }),
       delete: (sessionId: string) => request("delete", { sessionId }),
     };
+  }
+  async findRun(runtimeId: string, requestKey: string): Promise<RunRecord | null> {
+    const value = await this.request(`/runs/by-request?runtimeId=${encodeURIComponent(runtimeId)}&requestKey=${encodeURIComponent(requestKey)}`);
+    return value.run === null ? null : parseRun(value.run);
+  }
+  async nativeRequest(runtimeId: string, method: string, params?: JsonValue, signal?: AbortSignal): Promise<JsonValue> {
+    return (await this.request("/runtimes/native", { runtimeId, method, params }, signal)).result as JsonValue;
+  }
+  nativeNotify(runtimeId: string, method: string, params?: JsonValue) {
+    return this.request("/runtimes/native", { runtimeId, method, params, notification: true });
+  }
+  nativeEvents(runtimeId: string, after = 0, limit = 200, epoch?: string) {
+    return this.request(`/runtimes/${encodeURIComponent(runtimeId)}/native-events?after=${after}&limit=${limit}${epoch ? `&epoch=${encodeURIComponent(epoch)}` : ""}`);
+  }
+  nativeRequests(runtimeId: string) { return this.request(`/runtimes/${encodeURIComponent(runtimeId)}/native-requests`); }
+  resolveNativeRequest(runtimeId: string, id: string, response: { result?: JsonValue; error?: { code?: number; message: string; data?: JsonValue } }) {
+    return this.request(`/runtimes/${encodeURIComponent(runtimeId)}/native-requests/${encodeURIComponent(id)}/result`, response);
   }
   async sessions(): Promise<SessionRecord[]> {
     const value = await this.request("/sessions");
@@ -353,6 +377,7 @@ export class AgentHostClient {
         typeof value.error === "string"
           ? value.error
           : `http_${response.status}`,
+        value.nativeError as AgentHostHttpError["nativeError"],
       );
     return value;
   }
@@ -553,12 +578,7 @@ function parseRuntime(value: unknown): RuntimeDescription {
   if (capabilities.version !== 1)
     throw new Error("unsupported_host_capability_version");
   const features = object(capabilities.features);
-  for (const name of [
-    "sessions.list",
-    "input.audio",
-    "input.documents",
-    "input.video",
-  ])
+  for (const name of capabilityNames)
     if (features[name] === undefined)
       features[name] = { status: "unknown", reason: "runtime_not_declared" };
   if (

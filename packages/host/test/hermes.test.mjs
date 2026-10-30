@@ -307,7 +307,7 @@ test("Hermes resumes the native identity while changing session settings and pre
   }
 });
 
-test("Hermes upgrades legacy model-bound fingerprints on unchanged resume before allowing setting changes", async () => {
+test("Hermes rejects retired model-bound fingerprints without rewriting the session binding", async () => {
   const { options, agent } = await setup();
   const base = {
     ...request,
@@ -337,16 +337,10 @@ test("Hermes upgrades legacy model-bound fingerprints on unchanged resume before
     await agent.close();
     reopened = new HermesAgent(options);
     const resumed = await Array.fromAsync(reopened.run(base));
-    assert.equal(resumed.at(-1).outcome.status, "completed");
-    assert.notEqual(
-      (await options.bindings.get(base.sessionId)).fingerprint,
-      legacy,
-    );
-    const changed = await Array.fromAsync(
-      reopened.run({ ...base, reasoningEffort: "high" }),
-    );
-    assert.equal(changed.at(-1).outcome.status, "completed");
-    assert.equal(changed.find((e) => e.type === "session.bound").threadId, id);
+    assert.equal(resumed.at(-1).outcome.status, "failed");
+    assert.match(resumed.at(-1).outcome.error, /session_configuration_changed/);
+    assert.equal((await options.bindings.get(base.sessionId)).fingerprint, legacy);
+
   } finally {
     await agent.close();
     await reopened?.close();

@@ -10,6 +10,7 @@ import { createHash } from "node:crypto";
 import { accessSync, constants, statSync } from "node:fs";
 import { delimiter, isAbsolute, join, resolve } from "node:path";
 import { CodexAgent, type CodexAgentOptions } from "../codex/session.js";
+import { CodexNativeBridge, type CodexNativeAccess } from "../codex/native-bridge.js";
 import { AcpAgent, type AcpAgentOptions } from "../acp/session.js";
 import { AcpHostToolBridgeServer } from "../acp/tool-bridge.js";
 import { ClaudeAgent, type ClaudeAgentOptions } from "../claude/session.js";
@@ -46,6 +47,7 @@ export type NativeRuntimeConfig = BaseConfig &
         thread?: JsonObject;
         turn?: JsonObject;
         runOptions?: Pick<CodexRunRequest, "thread" | "turn" | "beforeTurn">;
+        nativeAccess?: CodexNativeAccess;
       }
     | {
         kernel: "claude";
@@ -114,6 +116,8 @@ export function createNativeRuntime(
   );
   const bindings = new FileBindingStore(join(root, "bindings"));
   const fingerprintConfig: Record<string, unknown> = { ...config, cwd };
+  // Administrative transport policy does not change the native thread's tools or instructions.
+  delete fingerprintConfig.nativeAccess;
   if (
     (config.kernel === "opencode" ||
       config.kernel === "kimi" ||
@@ -150,21 +154,31 @@ export function createNativeRuntime(
   let nativeCompaction = false;
   let sessions: SessionManager;
   let discover: ServiceRuntime["discover"];
+  let native: CodexNativeBridge | undefined;
+  let adopt: ServiceRuntime["adopt"];
   switch (config.kernel) {
     case "codex": {
-      command = config.options?.command ?? "codex";
+      command = config.options?.endpoint ? undefined : config.options?.command ?? "codex";
       env = config.options?.env;
-      const agent = new CodexAgent({ ...config.options, command, bindings });
+      const agent = new CodexAgent({ ...config.options, command, bindings,
+        onClient(client) { config.options?.onClient?.(client); native?.attach(client); },
+      });
+      if (config.nativeAccess) native = new CodexNativeBridge(() => agent.connect(), config.nativeAccess);
+      adopt = (sessionId, nativeId, instructions, tools) => agent.adoptSession(nativeId, {
+        sessionId, cwd, instructions, tools: tools.map(({ timeoutMs: _timeout, ...tool }) => tool),
+        thread: { ...config.runOptions?.thread, ...config.thread },
+      });
       run = (request) =>
         agent.run({
           ...config.runOptions,
           ...request,
-          input: request.attachments?.some((item) =>
+          input: request.inputItems?.length || request.attachments?.some((item) =>
             /^(image|audio)\//.test(item.mediaType),
           )
             ? [
                 { type: "text", text: request.input, text_elements: [] },
-                ...request.attachments
+                ...(request.inputItems ?? []) as import("../codex/types.js").CodexTurnInputItem[],
+                ...(request.attachments ?? [])
                   .filter((item) => /^(image|audio)\//.test(item.mediaType))
                   .map((item) =>
                     item.mediaType.startsWith("audio/")
@@ -193,6 +207,7 @@ export function createNativeRuntime(
             ...config.runOptions?.turn,
             ...config.turn,
             ...request.settings,
+            ...(request.toolOutput ? { toolOutput: request.toolOutput } : {}),
           },
         });
       discover = async () => {
@@ -206,11 +221,13 @@ export function createNativeRuntime(
           native: {
             authenticated: Boolean((account as JsonObject)?.account),
             models: models as JsonObject,
+            initialize: client.initializeResponse ?? null,
+            extensionAccess: config.nativeAccess ? { methods: config.nativeAccess.methods, fullDuplex: true } : null,
           },
         };
       };
       sessions = agent.sessions;
-      close = () => agent.close();
+      close = () => { native?.close(); return agent.close(); };
       steer = (sessionId, input) => agent.steer(sessionId, input);
       nativeCompaction = true;
       break;
@@ -506,6 +523,9 @@ export function createNativeRuntime(
     model: config.model,
     configurationKey,
     sessions,
+    native,
+    adopt,
+    inputItems: config.kernel === "codex",
     allowedSettings: config.allowedSettings,
     validateSettings: (selected) => validateRuntimeSettings(selected),
     discover,

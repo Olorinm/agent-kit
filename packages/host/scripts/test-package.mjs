@@ -442,3 +442,18 @@ if (process.env.AGENT_HOST_NATIVE_PROBE === "1") {
 }
 
 await testGapsPackage(consumer);
+
+await testCodexNativeCoveragePackage(consumer);
+
+// Copy the callers outside the checkout so every import resolves to the archive.
+async function testCodexNativeCoveragePackage(consumerDirectory) {
+  const coverageTest = join(consumerDirectory, "codex-native-coverage.test.mjs");
+  await cp(join(root, "test/codex-native-coverage.test.mjs"), coverageTest);
+  execFileSync(process.execPath, ["--test", coverageTest], { cwd: consumerDirectory, stdio: "inherit" });
+  if (process.env.AGENT_HOST_NATIVE_COVERAGE === "1") {
+    const probe = join(consumerDirectory, "probe-codex-native-coverage.mjs");
+    await cp(join(root, "scripts/probe-codex-native-coverage.mjs"), probe);
+    execFileSync(process.execPath, [probe, "--command", process.env.AGENT_HOST_CODEX ?? join(root, "node_modules/.bin/codex"),
+      "--out", join(root, ".local/codex-native-package-coverage.json")], { cwd: consumerDirectory, stdio: "inherit", timeout: 180_000 });
+  }
+}

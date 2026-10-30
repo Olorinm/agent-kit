@@ -4,6 +4,9 @@ let id = 0;
 const threads = new Set();
 const active = new Map();
 const requests = new Map();
+const parents = new Map();
+const childRoots = new Map();
+let lateChild;
 const send = (message) => process.stdout.write(`${JSON.stringify(message)}\n`);
 const notify = (method, params) => send({ method, params });
 const reply = (id, result) => send({ id, result });
@@ -53,6 +56,7 @@ createInterface({ input: process.stdin }).on("line", async (line) => {
     return reply(m.id, {
       thread: {
         id: p.threadId,
+        ...(parents.has(p.threadId) ? { parentThreadId: parents.get(p.threadId), source: { subAgent: { thread_spawn: { parent_thread_id: parents.get(p.threadId), depth: 1 } } } } : {}),
         turns: [
           {
             id: "native-turn",
@@ -61,6 +65,10 @@ createInterface({ input: process.stdin }).on("line", async (line) => {
         ],
       },
     });
+  if (m.method === "thread/turns/list") return reply(m.id, { data: childRoots.has(p.threadId)
+    ? [{ id: "child-turn", rootTurnId: childRoots.get(p.threadId), status: "inProgress", items: [] }]
+    : [{ id: "native-turn", items: [{ type: "userMessage", text: "native history" }] }], nextCursor: null });
+  if (m.method === "thread/items/list") return reply(m.id, { data: [{ turnId: "native-turn", item: { type: "userMessage", text: "native history" } }], nextCursor: null });
   if (m.method === "thread/fork") {
     const threadId = `fork-${++id}`;
     threads.add(threadId);
@@ -94,9 +102,32 @@ createInterface({ input: process.stdin }).on("line", async (line) => {
   const turnId = `turn-${++id}`;
   const fullInput = p.input?.some((item) => item.type === "image")
     ? JSON.stringify(p.input)
-    : (p.input?.map((i) => i.text ?? "").join("\n") ?? "compact");
+    : [p.additionalContext?.agent_host?.value, p.input?.map((i) => i.text ?? "").join("\n") ?? "compact"].filter(x => x !== undefined).join("\n");
   const input = p.input?.at(-1)?.text ?? "compact";
   active.set(threadId, turnId);
+  if (input === "spawn-late-child") {
+    reply(m.id, { turn: { id: turnId } });
+    lateChild = `child-${++id}`;
+    parents.set(lateChild, threadId); childRoots.set(lateChild, turnId);
+    return finish(threadId, turnId);
+  }
+  if (input === "reuse-parent") {
+    reply(m.id, { turn: { id: turnId } });
+    const result = await ask("item/tool/call", { threadId: lateChild, turnId: "child-turn", callId: "late-call", tool: "native_probe", arguments: {} });
+    notify("item/completed", { threadId, turnId, item: { id: "root-text", type: "agentMessage", text: JSON.stringify(result) } });
+    return finish(threadId, turnId);
+  }
+  if (input === "child-tool") {
+    reply(m.id, { turn: { id: turnId } });
+    const child = `child-${++id}`;
+    parents.set(child, threadId);
+    childRoots.set(child, turnId);
+    notify("item/completed", { threadId: child, turnId: "child-turn", item: { id: "child-text", type: "agentMessage", text: "must not become root answer" } });
+    const denied = await ask("item/tool/call", { threadId: "unrelated", turnId: "unrelated-turn", callId: "same-call", tool: "native_probe", arguments: {} });
+    const accepted = await ask("item/tool/call", { threadId: child, turnId: "child-turn", callId: "same-call", tool: "native_probe", arguments: {} });
+    notify("item/completed", { threadId, turnId, item: { id: "root-text", type: "agentMessage", text: JSON.stringify({ denied, accepted }) } });
+    return finish(threadId, turnId);
+  }
   if (input === "stale-tool") {
     const stale = ask("item/tool/call", {
       threadId,

@@ -1,4 +1,4 @@
-import type { BindingStore } from "./agent.js";
+import type { BindingStore, SessionBinding } from "./agent.js";
 import type { JsonValue } from "./types.js";
 
 export interface SessionQuery {
@@ -6,6 +6,12 @@ export interface SessionQuery {
   limit?: number;
   cursor?: string;
   signal?: AbortSignal;
+  sortDirection?: "asc" | "desc";
+  itemsView?: "notLoaded" | "summary" | "full";
+  turnId?: string;
+  archived?: boolean;
+  searchTerm?: string;
+  sourceKinds?: string[];
 }
 export interface SessionPage {
   source: "native";
@@ -17,12 +23,21 @@ export interface ForkOptions {
   cwd?: string;
   entryId?: string;
   signal?: AbortSignal;
+  beforeEntryId?: string;
 }
 export interface NativeSessionPort {
   list?(options: SessionQuery): Promise<SessionPage>;
   history?(nativeId: string, options: SessionQuery): Promise<SessionPage>;
   fork?(nativeId: string, options: ForkOptions): Promise<string>;
   delete?(nativeId: string, options: ForkOptions): Promise<void>;
+  read?(nativeId: string, options: SessionQuery): Promise<JsonValue>;
+  items?(nativeId: string, options: SessionQuery): Promise<SessionPage>;
+  rename?(nativeId: string, name: string): Promise<void>;
+  archive?(nativeId: string, archived: boolean): Promise<void>;
+  /** Only adapters with native snapshot reads can opt out of the idle requirement. */
+  concurrentReads?: boolean;
+  /** Native snapshot forks may read an active source; the target must remain idle. */
+  concurrentForks?: boolean;
 }
 /** Bound operations take Host IDs; native IDs and transcripts are never synthesized. */
 export class SessionManager {
@@ -47,7 +62,7 @@ export class SessionManager {
     return this.native.list(options);
   }
   history(sessionId: string, options: SessionQuery = {}) {
-    return this.lock([sessionId], async () => {
+    return this.readLock(sessionId, async () => {
       if (!this.native.history)
         throw new Error("native_session_history_unsupported");
       return this.native.history(
@@ -56,7 +71,49 @@ export class SessionManager {
       );
     });
   }
+  read(sessionId: string, options: SessionQuery = {}) {
+    return this.readLock(sessionId, async () => {
+      if (!this.native.read) throw new Error("native_session_read_unsupported");
+      return this.native.read((await this.binding(sessionId)).threadId, options);
+    });
+  }
+  items(sessionId: string, options: SessionQuery = {}) {
+    return this.readLock(sessionId, async () => {
+      if (!this.native.items) throw new Error("native_session_items_unsupported");
+      return this.native.items((await this.binding(sessionId)).threadId, options);
+    });
+  }
+  rename(sessionId: string, name: string) {
+    return this.lock([sessionId], async () => {
+      if (!this.native.rename) throw new Error("native_session_rename_unsupported");
+      await this.native.rename((await this.binding(sessionId)).threadId, name);
+    });
+  }
+  archive(sessionId: string, archived = true) {
+    return this.lock([sessionId], async () => {
+      if (!this.native.archive) throw new Error("native_session_archive_unsupported");
+      await this.native.archive((await this.binding(sessionId)).threadId, archived);
+    });
+  }
+  /** Explicit trusted-owner adoption, after native identity validation; no transcript import. */
+  adopt(sessionId: string, binding: SessionBinding) {
+    return this.lock([sessionId], async () => {
+      if (await this.store.get(sessionId)) throw new Error("target_session_exists");
+      if (!this.native.read) throw new Error("native_session_adopt_unsupported");
+      await this.native.read(binding.threadId, {});
+      await this.store.set(sessionId, binding);
+      return { sessionId, nativeSessionId: binding.threadId };
+    });
+  }
+  get supportsConcurrentReads() { return this.native.concurrentReads === true; }
+  get supportsConcurrentForks() { return this.native.concurrentForks === true; }
+  private readLock<T>(id: string, fn: () => Promise<T>) {
+    if (this.native.concurrentReads) return fn();
+    return this.lock([id], fn);
+  }
   fork(source: string, target: string, options: ForkOptions = {}) {
+    if (source === target) throw new Error("target_session_exists");
+    if (options.entryId && options.beforeEntryId) throw new Error("fork_boundary_conflict");
     return this.lock([source, target], async () => {
       if (!this.native.fork) throw new Error("native_session_fork_unsupported");
       if (await this.store.get(target))
@@ -77,7 +134,7 @@ export class SessionManager {
         });
       }
       return { sessionId: target, nativeSessionId };
-    });
+    }, this.native.concurrentForks ? new Set([source]) : undefined);
   }
   delete(sessionId: string, options: ForkOptions = {}) {
     return this.lock([sessionId], async () => {
@@ -96,8 +153,11 @@ export class SessionManager {
     if (!binding) throw new Error("session_not_found");
     return binding;
   }
-  private async lock<T>(ids: string[], fn: () => Promise<T>) {
-    for (const id of ids) this.assertIdle(id);
+  private async lock<T>(ids: string[], fn: () => Promise<T>, activeSources?: ReadonlySet<string>) {
+    for (const id of ids) {
+      if (this.busy.has(id) || (this.active(id) && !activeSources?.has(id)))
+        throw new Error("session_busy");
+    }
     for (const id of ids) this.busy.add(id);
     try {
       return await fn();

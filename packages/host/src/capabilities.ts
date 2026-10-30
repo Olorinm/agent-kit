@@ -32,6 +32,16 @@ export const capabilityNames = [
   "controls.compact",
   "extensions.nativeOptions",
   "events.native",
+  "sessions.read",
+  "sessions.items",
+  "sessions.rename",
+  "sessions.archive",
+  "sessions.adopt",
+  "input.nativeItems",
+  "extensions.nativeRpc",
+  "skills.native",
+  "memory.native",
+  "agents.native",
 ] as const;
 export type CapabilityName = (typeof capabilityNames)[number];
 export interface Capability {
@@ -123,6 +133,13 @@ export function getKernelCapabilities(
       : "The native adapter retains its typed options and extension entry points.",
   );
   if (kernel === "codex") {
+    for (const name of ["sessions.read", "sessions.items", "sessions.rename", "sessions.archive", "sessions.adopt", "input.nativeItems"] as const)
+      f[name] = supported("Native Codex adapter and HTTP interface; actual method availability follows the installed app-server version.");
+    f["extensions.nativeRpc"] = mode === "embedded" ? supported("Complete request/notification/server-request transport through connect().")
+      : conditional("configuration_required", "Service-owner nativeAccess policy enables the full-duplex native extension.");
+    f["skills.native"] = conditional("configuration_required", "Native discovery, config and skill input; files and enablement follow the selected runtime. HTTP management requires nativeAccess.");
+    f["memory.native"] = conditional("configuration_required", "Native memory settings and experimental RPCs. Generation/use depend on native feature/configuration and isolation; HTTP management requires nativeAccess.");
+    f["agents.native"] = conditional("configuration_required", "Native subagent execution. Product tools require multi_agent_v2 and multi_agent_v2_dynamic_tools; managed callbacks are scoped to verified descendants of the active run. Independent native threads use the native extension.");
     f["input.images"] = supported(
       "Native text/image/skill/mention input items.",
     );
@@ -199,7 +216,7 @@ export function getKernelCapabilities(
       "configuration_required",
       kernel === "kimi"
         ? "Configure compaction: 'kimi'; requires an existing binding and a confirmed native /compact receipt."
-        : "Configure compaction: 'opencode'; OpenCode 2 uses native ACP /compact with a completion receipt. OpenCode 1 retains its native serve/summarize bridge.",
+        : "Configure compaction: 'opencode'; OpenCode 2 uses native ACP /compact with a completion receipt.",
     );
   } else if (kernel === "hermes") {
     f["input.images"] = conditional(
@@ -250,7 +267,7 @@ export function getKernelCapabilities(
     ] as const)
       f[name] = conditional(
         "native_negotiation_required",
-        "Requires the corresponding ACP session capability (history uses loadSession); OpenCode 1 retains its native history/delete HTTP bridge. Inspect runtime discovery for the selected native implementation.",
+        "Requires the corresponding ACP session capability (history uses loadSession). Inspect runtime discovery for the selected native implementation.",
       );
   if (kernel === "kimi")
     f["sessions.delete"] = conditional(

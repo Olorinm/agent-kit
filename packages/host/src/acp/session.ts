@@ -1,4 +1,3 @@
-import { startOpenCodeServer } from "./compaction.js";
 import { SessionManager, sessionPage } from "../sessions.js";
 import { projectProgress } from "../progress.js";
 import { routeInteraction, type InteractionHandler } from "../interactions.js";
@@ -26,7 +25,6 @@ import {
 } from "./tool-bridge.js";
 import {
   compactKimi,
-  compactOpenCode,
   compactOpenCodeAcp,
 } from "./compaction.js";
 
@@ -133,31 +131,6 @@ export class AcpAgent {
       if (object(this.getCapabilities(c).sessionCapabilities)[name] == null)
         throw new Error(`native_session_${name}_unsupported`);
     };
-    const http = async (
-      path: string,
-      method: string,
-      directory: string,
-      signal?: AbortSignal,
-    ) => {
-      const server = await startOpenCodeServer({
-        command: this.options.command,
-        cwd: directory,
-        env: this.options.env,
-        signal,
-      });
-      try {
-        const response = await fetch(server.url + path, {
-          method,
-          signal,
-          headers: server.headers,
-        });
-        if (!response.ok)
-          throw new Error(`opencode_session_http_${response.status}`);
-        return await response.json();
-      } finally {
-        await server.close();
-      }
-    };
     return (this.sessionManager ??= new SessionManager(
       this.bindings,
       (id) => this.active.has(id),
@@ -173,18 +146,6 @@ export class AcpAgent {
         },
         history: async (id, o) => {
           const connected = await this.connect();
-          if (
-            this.options.compaction === "opencode" &&
-            !this.isOpenCodeV2(connected)
-          ) {
-            const n = await http(
-              `/session/${encodeURIComponent(id)}/message`,
-              "GET",
-              cwd(o.cwd),
-              o.signal,
-            );
-            return sessionPage(n);
-          }
           // Native ACP load replays its transcript. A separate process keeps that replay out of active turns.
           const reader = new AcpAgent({
             ...this.options,
@@ -245,29 +206,8 @@ export class AcpAgent {
           return String(n.sessionId ?? "");
         },
         delete: async (id, o) => {
-          const client = await this.connect();
-          if (
-            object(this.getCapabilities(client).sessionCapabilities).delete !=
-            null
-          ) {
-            await rpc("session/delete", { sessionId: id }, o.signal);
-          } else if (
-            this.options.compaction === "opencode" &&
-            !this.isOpenCodeV2(client)
-          ) {
-            if (
-              (await http(
-                `/session/${encodeURIComponent(id)}`,
-                "DELETE",
-                cwd(o.cwd),
-                o.signal,
-              )) !== true
-            )
-              throw new Error("native_delete_not_confirmed");
-          } else {
-            await requireCapability("delete");
-            await rpc("session/delete", { sessionId: id }, o.signal);
-          }
+          await requireCapability("delete");
+          await rpc("session/delete", { sessionId: id }, o.signal);
           if (this.client) this.openedSessions.get(this.client)?.delete(id);
         },
       },
@@ -340,6 +280,9 @@ export class AcpAgent {
           throw new Error("acp_protocol_version_unsupported");
         this.capabilities.set(client, object(response.agentCapabilities));
         this.initialization.set(client, response);
+        if (this.options.compaction === "opencode" &&
+            typeof object(response.agentInfo).version === "string" && !this.isOpenCodeV2(client))
+          throw new Error("opencode_version_unsupported: requires OpenCode 2 or later");
         if (this.closed) {
           client.close();
           throw new Error("agent_closed");
@@ -371,27 +314,23 @@ export class AcpAgent {
   getInitialization(client: StdioJsonRpcClient): JsonObject {
     return this.initialization.get(client) ?? {};
   }
-  /** Implemented native paths for discovery, including the explicit OpenCode 1 bridge. */
+  /** Implemented native ACP paths for capability discovery. */
   getOperationSupport(client: StdioJsonRpcClient) {
     const native = this.getCapabilities(client);
-    const legacyOpenCode =
-      this.options.compaction === "opencode" && !this.isOpenCodeV2(client);
     return {
       resume:
         this.options.resumeSessions !== false &&
         (native.loadSession === true ||
           object(native.sessionCapabilities).resume != null),
-      history: legacyOpenCode || native.loadSession === true,
+      history: native.loadSession === true,
       delete:
-        legacyOpenCode || object(native.sessionCapabilities).delete != null,
+        object(native.sessionCapabilities).delete != null,
       compact: this.options.compaction !== undefined,
       compactionTransport:
         this.options.compaction === "kimi"
           ? ("kimi-command" as const)
           : this.options.compaction === "opencode"
-            ? this.isOpenCodeV2(client)
-              ? ("opencode-acp" as const)
-              : ("opencode-v1-http" as const)
+            ? ("opencode-acp" as const)
             : undefined,
     };
   }
@@ -750,21 +689,12 @@ export class AcpAgent {
                 signal: compactSignal,
                 timeoutMs: this.options.requestTimeoutMs,
               })
-            : this.isOpenCodeV2(client)
-              ? await compactOpenCodeAcp({
-                  client,
-                  sessionId: threadId,
-                  signal: compactSignal,
-                  timeoutMs: this.options.requestTimeoutMs,
-                })
-              : await compactOpenCode({
-                  command: this.options.command,
-                  cwd: request.cwd,
-                  env: this.options.env,
-                  sessionId: threadId,
-                  model: request.model,
-                  signal: compactSignal,
-                });
+            : await compactOpenCodeAcp({
+                client,
+                sessionId: threadId,
+                signal: compactSignal,
+                timeoutMs: this.options.requestTimeoutMs,
+              });
         outcome =
           result.ok && result.compacted
             ? { status: "completed" }

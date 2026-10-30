@@ -10,6 +10,8 @@ export interface RuntimeTurn {
   sessionId: string;
   runId: string;
   input: string;
+  inputItems?: import("../types.js").JsonObject[];
+  toolOutput?: import("../types.js").JsonObject;
   attachments?: Array<{
     name: string;
     mediaType: string;
@@ -42,6 +44,9 @@ export interface ServiceRuntime {
   maxConcurrentRuns?: number;
   inputs?: RuntimeDescription["inputs"];
   sessions?: SessionManager;
+  native?: import("../codex/native-bridge.js").CodexNativeBridge;
+  adopt?(sessionId: string, nativeId: string, instructions: string, tools: import("./protocol.js").ToolDefinition[]): Promise<unknown>;
+  inputItems?: boolean;
   allowedSettings?: AllowedSettings;
   validateSettings?(settings: SettingsSelection): void;
   discover?(): Promise<{ capabilities: AgentCapabilities; native?: JsonValue }>;

@@ -40,8 +40,8 @@ export async function testCapabilitiesPackage(consumer) {
       kernel,
       cwd: root,
       options: {
-        command: resolve("test/fixtures/acp-control-server.mjs"),
-        args: [],
+        command: process.execPath,
+        args: [resolve(kernel === "opencode" ? "test/fixtures/acp-v2-server.mjs" : "test/fixtures/acp-control-server.mjs")],
         requestTimeoutMs: 5_000,
       },
     };
@@ -86,7 +86,7 @@ export async function testCapabilitiesPackage(consumer) {
       });
       assert.equal(result.status, "completed", JSON.stringify(result));
       assert.equal(binding.resumed, true);
-      assert.equal(binding.threadId, "native-control-session");
+      assert.equal(binding.threadId, kernel === "opencode" ? "native-v2" : "native-control-session");
     } finally {
       await server?.close();
     }

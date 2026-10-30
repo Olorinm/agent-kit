@@ -45,8 +45,11 @@ export const startRunSchema = z
   .object({
     sessionId: idSchema,
     runtimeId: idSchema,
+    requestKey: z.string().min(1).max(500).optional(),
     instructions: z.string().max(200_000).default(""),
     input: z.string().max(1_000_000),
+    inputItems: z.array(z.record(z.string(), z.json())).max(1000).optional(),
+    toolOutput: z.object({ name: z.string().min(1), namespace: z.string().optional(), output: z.json(), retain: z.boolean().optional() }).catchall(z.json()).optional(),
     attachments: z.array(attachmentSchema).max(30).default([]),
     context: z.union([z.string(), z.record(z.string(), z.json())]).optional(),
     tools: z.array(toolSchema).max(100).default([]),
@@ -56,6 +59,8 @@ export const startRunSchema = z
   })
   .strict()
   .superRefine((value, ctx) => {
+    if (value.toolOutput && (value.input.length || value.inputItems?.length || value.attachments.length || value.mode === "compact"))
+      ctx.addIssue({ code: "custom", message: "tool_output_requires_standalone_turn" });
     if (
       new Set(value.tools.map((tool) => `${tool.namespace ?? ""}/${tool.name}`))
         .size !== value.tools.length
@@ -72,7 +77,7 @@ export const startRunSchema = z
     if (
       value.mode === "turn" &&
       !value.input.trim() &&
-      !value.attachments.length
+      !value.attachments.length && !value.inputItems?.length && !value.toolOutput
     )
       ctx.addIssue({ code: "custom", message: "input_required" });
   });

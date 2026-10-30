@@ -88,6 +88,8 @@ export type AgentEvent =
   | {
       type: "tool.started";
       runId: string;
+      threadId?: string;
+      turnId?: string;
       callId: string;
       tool: string;
       input: JsonValue;
@@ -95,6 +97,8 @@ export type AgentEvent =
   | {
       type: "tool.finished";
       runId: string;
+      threadId?: string;
+      turnId?: string;
       callId: string;
       tool: string;
       result: ProductToolResult;

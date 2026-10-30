@@ -31,6 +31,7 @@ export class TaskStore {
         CREATE TABLE IF NOT EXISTS sessions (id TEXT PRIMARY KEY, data TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS runs (id TEXT PRIMARY KEY, session_id TEXT NOT NULL, data TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS calls (id TEXT PRIMARY KEY, run_id TEXT NOT NULL, data TEXT NOT NULL);
+        CREATE TABLE IF NOT EXISTS submissions (runtime_id TEXT NOT NULL, request_key TEXT NOT NULL, hash TEXT NOT NULL, run_id TEXT NOT NULL, PRIMARY KEY(runtime_id, request_key));
         CREATE TABLE IF NOT EXISTS events (run_id TEXT NOT NULL, sequence INTEGER NOT NULL, data TEXT NOT NULL, PRIMARY KEY(run_id, sequence));
         CREATE INDEX IF NOT EXISTS run_sessions ON runs(session_id);
         CREATE INDEX IF NOT EXISTS call_runs ON calls(run_id);
@@ -97,6 +98,22 @@ export class TaskStore {
         "INSERT INTO runs VALUES (?, ?, ?) ON CONFLICT(id) DO UPDATE SET data=excluded.data",
       )
       .run(run.id, run.sessionId, JSON.stringify(runSchema.parse(run)));
+  }
+  submission(runtimeId: string, requestKey: string): { hash: string; run: RunRecord } | undefined {
+    const row = this.db.prepare("SELECT hash, run_id FROM submissions WHERE runtime_id = ? AND request_key = ?").get(runtimeId, requestKey);
+    if (!row) return undefined;
+    const run = this.run(String(row.run_id));
+    if (!run) throw new Error("submission_run_missing");
+    return { hash: String(row.hash), run };
+  }
+  createRun(run: RunRecord, session: SessionRecord, submission?: { key: string; hash: string }) {
+    this.db.exec("BEGIN");
+    try {
+      this.saveSession(session);
+      this.saveRun(run);
+      if (submission) this.db.prepare("INSERT INTO submissions VALUES (?, ?, ?, ?)").run(run.runtimeId, submission.key, submission.hash, run.id);
+      this.db.exec("COMMIT");
+    } catch (error) { this.db.exec("ROLLBACK"); throw error; }
   }
   saveCall(call: PendingCall) {
     this.db

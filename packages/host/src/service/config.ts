@@ -27,6 +27,18 @@ const profileSchema = z
     env: z.record(z.string(), z.string()).optional(),
     thread: z.record(z.string(), z.json()).optional(),
     turn: z.record(z.string(), z.json()).optional(),
+    nativeAccess: z.object({
+      methods: z.union([z.literal("all"), z.array(z.string().min(1))]),
+      notifications: z.union([z.literal("all"), z.array(z.string().min(1))]).optional(),
+      requestTimeoutMs: z.number().int().min(100).max(3_600_000).optional(),
+      callbackTimeoutMs: z.number().int().min(100).max(3_600_000).optional(),
+      eventLimit: z.number().int().min(1).max(100_000).optional(),
+    }).strict().optional(),
+    endpoint: z.discriminatedUnion("type", [
+      z.object({ type: z.literal("websocket"), url: z.url(), headers: z.record(z.string(), z.string()).optional() }).strict(),
+      z.object({ type: z.literal("unix"), path: z.string().min(1) }).strict(),
+    ]).optional(),
+    initialization: z.record(z.string(), z.json()).optional(),
     gatewayUrl: z.url().optional(),
     gatewayTokenEnv: z.string().optional(),
     provider: z.string().optional(),
@@ -58,7 +70,7 @@ const profileSchema = z
   .strict()
   .superRefine((profile, ctx) => {
     const allowed = {
-      codex: ["command", "args", "env", "thread", "turn"],
+      codex: ["command", "args", "env", "thread", "turn", "nativeAccess", "endpoint", "initialization"],
       claude: ["command", "env", "native"],
       opencode: ["command", "args", "env", "effort", "config"],
       kimi: ["command", "args", "env", "effort", "config"],
@@ -166,9 +178,10 @@ export function createConfiguredRuntimes(
         native = {
           ...base,
           kernel: "codex",
-          options,
+          options: { ...options, endpoint: profile.endpoint, initialization: profile.initialization },
           thread: profile.thread,
           turn: profile.turn,
+          nativeAccess: profile.nativeAccess,
         };
         break;
       case "claude":

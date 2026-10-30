@@ -1,5 +1,27 @@
 # Common usage with native details preserved
 
+Codex now exposes native metadata, turn/item pages, rename, archive/unarchive
+and explicit session adoption. `agent.sessions.history()` uses the native page
+contract and accepts `cursor`, `limit`, `sortDirection` and `itemsView`. Native
+snapshots do not require the thread to be idle. Codex can fork an active source;
+without an explicit boundary it excludes the current unfinished turn. The target
+and other mutations retain per-session locking. `agent.adoptSession(nativeId, requestConfiguration)` is an explicit
+owner action, not automatic discovery or transcript import.
+
+The embedded `agent.connect()` retains complete native JSON-RPC requests,
+notifications, error code/data and server requests. Register `options.onClient`
+to subscribe before initialization. `CodexAppServerClient.attach(transport)` and
+`connectCodexTransport(endpoint)` support externally owned transports; close
+disconnects without shutting down the native server. Complete owner-selected
+handshake fields can be supplied through `options.initialization`.
+
+For process-separated consumers, `AgentHostClient.nativeRequest`,
+`nativeEvents`, `nativeRequests` and `resolveNativeRequest` provide the same
+extension when enabled by the service owner. See
+[the HTTP contract](http-service.md#codex-native-management-and-extensions).
+Keep product authorization outside these administrative native APIs; successful
+transport coverage does not imply account, platform or model availability.
+
 Use `createAgent({kernel, options})` for a typed embedded adapter. Use `createNativeRuntime(profile, stateDirectory)` to embed the same runtime composition used by the HTTP service, including profile settings and attachment routing. Use `AgentHostClient` for another process or a browser. All three retain native execution and durable identity.
 
 ## Approvals, questions and progress
@@ -59,7 +81,7 @@ HTTP equivalents are under `client.nativeSessions(runtimeId)`. `fork(source,targ
 `SessionPage` has `source:'native'`, raw `items`, optional `native` metadata and optional `cursor`. The native shapes differ: Codex turns, Claude SDK messages, Pi durable entries, ACP replay updates or server messages, Hermes display transcript, and OpenClaw chat history. Pagination is native-specific; use a returned cursor, not an invented offset. `limit` is a native hint where the operation supports it; some native history APIs return the full transcript.
 
 - OpenClaw fork requires a native user-message `entryId`, obtainable from transcript metadata (`__openclaw.id` in the tested Gateway). Other adapters default to a full current fork. Codex/Claude/Pi also accept their supported native cut-point IDs.
-- ACP list/fork/delete depend on the actual handshake. OpenCode 2 and Kimi use negotiated ACP operations; history uses a separate native `session/load` reader. Only the explicit OpenCode 1 compatibility path uses its authenticated local server API for history/delete. Replay never enters the current model turn.
+- ACP list/fork/delete depend on the actual handshake. OpenCode 2 and Kimi use negotiated ACP operations; history uses a separate native `session/load` reader. Replay never enters the current model turn.
 - Hermes history resolves the durable ID to a live handle, then calls the native history API. Native compression can rotate its durable storage; native history handles the lineage.
 - Claude uses SDK session helpers, with the same native configuration directory or configured session store. A store without native deletion support fails explicitly.
 - Pi 1.2 has no supported native delete API. A failed/unsupported delete leaves the Host binding intact.
@@ -96,6 +118,6 @@ Trusted programmatic `runOptions` retain Codex thread/turn/beforeTurn; Claude SD
 
 HTTP `task.steer(text)` is wired for Codex, Claude, Pi, Hermes TUI and OpenClaw. Hermes canonical ACP has no equivalent advertised control. Native scheduling still applies: acceptance does not mean the current tool stops immediately. OpenClaw uses native `chat.send` with `queueMode: "interrupt"`, which interrupts and replaces the native run; Host follows the returned run ID and buffers early events. No Host transcript replay is involved.
 
-`client.session(...).compact()` is wired for all seven Kernels through their supported transport; Hermes canonical ACP lacks a verifiable completion receipt and reports unsupported. Native completion is required: Codex correlated events, Claude `compact_boundary`, Pi settled durable task/submission, OpenCode 2 ACP compaction receipt (OpenCode 1 summarize response), Kimi completion receipt, Hermes compressed result, OpenClaw compacted result. Pi can explicitly finish with nothing to compact; the `control.result` reports `compacted:false` and the operation completes successfully. Kimi completion remains valid if the summary happens to grow. Missing receipts and uncertain cancellations remain failures with native uncertainty, not false success.
+`client.session(...).compact()` is wired for all seven Kernels through their supported transport; Hermes canonical ACP lacks a verifiable completion receipt and reports unsupported. Native completion is required: Codex correlated events, Claude `compact_boundary`, Pi settled durable task/submission, OpenCode 2 ACP compaction receipt, Kimi completion receipt, Hermes compressed result, OpenClaw compacted result. Pi can explicitly finish with nothing to compact; the `control.result` reports `compacted:false` and the operation completes successfully. Kimi completion remains valid if the summary happens to grow. Missing receipts and uncertain cancellations remain failures with native uncertainty, not false success.
 
 See [native evidence](native-verification.md) for what has actually been executed and [remaining boundaries](capability-gaps.md) for upstream/environment limits.

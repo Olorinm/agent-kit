@@ -1,6 +1,7 @@
 import type { JsonValue } from "../types.js";
 
 export type RpcRequest = {
+  [key: string]: JsonValue | undefined;
   id?: number | string;
   method: string;
   params?: JsonValue;
@@ -68,12 +69,13 @@ export type CodexTurnStartResponse = {
 };
 
 export type CodexInitializeResponse = {
+  [key: string]: JsonValue | undefined;
   userAgent?: string;
   codexHome?: string;
 };
 
 export type CodexTurnInputItem =
-  | { type: "text"; text: string; text_elements: [] }
+  | { type: "text"; text: string; text_elements?: JsonValue[] }
   | ({ type: "image"; detail?: "auto" | "low" | "high" | "original" } & (
       | { url: string; fileId?: string }
       | { fileId: string; url?: string }
@@ -86,15 +88,19 @@ export type CodexTurnInputItem =
   | { type: "audio"; url: string }
   | { type: "localAudio"; path: string }
   | { type: "skill"; name: string; path: string }
-  | { type: "mention"; name: string; path: string };
+  | { type: "mention"; name: string; path: string }
+  /** Future native input variants are validated by Codex, never flattened by Host. */
+  | ({ type: string } & import("../types.js").JsonObject);
 
 export type ServerRequestHandler = (request: {
+  [key: string]: JsonValue | undefined;
   id: number | string;
   method: string;
   params?: JsonValue;
 }) => Promise<JsonValue | undefined> | JsonValue | undefined;
 
 export type ServerNotificationHandler = (notification: {
+  [key: string]: JsonValue | undefined;
   method: string;
   params?: JsonValue;
 }) => void | Promise<void>;
