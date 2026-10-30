@@ -1,5 +1,27 @@
 # Common usage with native details preserved
 
+Codex now exposes native metadata, turn/item pages, rename, archive/unarchive
+and explicit session adoption. `agent.sessions.history()` uses the native page
+contract and accepts `cursor`, `limit`, `sortDirection` and `itemsView`. Native
+snapshots do not require the thread to be idle. Codex can fork an active source;
+without an explicit boundary it excludes the current unfinished turn. The target
+and other mutations retain per-session locking. `agent.adoptSession(nativeId, requestConfiguration)` is an explicit
+owner action, not automatic discovery or transcript import.
+
+The embedded `agent.connect()` retains complete native JSON-RPC requests,
+notifications, error code/data and server requests. Register `options.onClient`
+to subscribe before initialization. `CodexAppServerClient.attach(transport)` and
+`connectCodexTransport(endpoint)` support externally owned transports; close
+disconnects without shutting down the native server. Complete owner-selected
+handshake fields can be supplied through `options.initialization`.
+
+For process-separated consumers, `AgentHostClient.nativeRequest`,
+`nativeEvents`, `nativeRequests` and `resolveNativeRequest` provide the same
+extension when enabled by the service owner. See
+[the HTTP contract](http-service.md#codex-native-management-and-extensions).
+Keep product authorization outside these administrative native APIs; successful
+transport coverage does not imply account, platform or model availability.
+
 Use `createAgent({kernel, options})` for a typed embedded adapter. Use `createNativeRuntime(profile, stateDirectory)` to embed the same runtime composition used by the HTTP service, including profile settings and attachment routing. Use `AgentHostClient` for another process or a browser. All three retain native execution and durable identity.
 
 ## Approvals, questions and progress

@@ -7,7 +7,7 @@ import {
   createInterface,
   type Interface as ReadlineInterface,
 } from "node:readline";
-import type { JsonValue } from "../types.js";
+import type { JsonValue, JsonObject } from "../types.js";
 import { resolveCommandInvocation } from "../environment/command.js";
 import type { RpcRecorder } from "../types.js";
 import type {
@@ -26,10 +26,15 @@ import {
 } from "../environment/windows-discovery.js";
 
 export const CODEX_APP_SERVER_OPT_OUT_NOTIFICATION_METHODS: string[] = [
-  "command/exec/outputDelta",
-  "item/fileChange/outputDelta",
-  "item/reasoning/textDelta",
 ];
+
+/** An attached transport closes its connection only, never the external server. */
+export interface CodexJsonRpcTransport {
+  send(message: RpcRequest | RpcResponse): void;
+  onMessage(handler: (message: RpcMessage) => void): () => void;
+  onClose(handler: (error: Error) => void): () => void;
+  close(): void;
+}
 
 export type CodexRequestFailureKind =
   | "aborted"
@@ -43,6 +48,8 @@ export class CodexRequestFailure extends Error {
     readonly kind: CodexRequestFailureKind,
     readonly method: string,
     message: string,
+    readonly code?: number,
+    readonly data?: JsonValue,
   ) {
     super(message);
     this.name = "CodexRequestFailure";
@@ -50,8 +57,12 @@ export class CodexRequestFailure extends Error {
 }
 
 export class CodexAppServerClient {
-  private readonly child: ChildProcessWithoutNullStreams;
-  private readonly lines: ReadlineInterface;
+  private readonly child?: ChildProcessWithoutNullStreams;
+  private readonly lines?: ReadlineInterface;
+  private readonly transport?: CodexJsonRpcTransport;
+  private readonly transportCleanups: Array<() => void> = [];
+  private readonly fallbackHandlers = new Set<ServerRequestHandler>();
+  initializeResponse?: CodexInitializeResponse;
   private readonly pending = new Map<
     number | string,
     {
@@ -70,11 +81,19 @@ export class CodexAppServerClient {
   private stderrTail = "";
 
   private constructor(
-    child: ChildProcessWithoutNullStreams,
+    child: ChildProcessWithoutNullStreams | CodexJsonRpcTransport,
     private readonly rpcCapture?: RpcRecorder,
     private readonly processGroupPid?: number,
     private readonly fallbackRequest?: ServerRequestHandler,
   ) {
+    if ("onMessage" in child) {
+      this.transport = child;
+      this.transportCleanups.push(
+        child.onMessage(message => this.handleLine(JSON.stringify(message))),
+        child.onClose(error => this.closeWithError(error)),
+      );
+      return;
+    }
     this.child = child;
     this.lines = createInterface({ input: child.stdout });
     this.lines.on("line", (line) => this.handleLine(line));
@@ -108,6 +127,13 @@ export class CodexAppServerClient {
       );
       this.terminateChild("SIGTERM");
     });
+  }
+
+  /** The caller owns authentication and establishment of an external connection. */
+  static attach(transport: CodexJsonRpcTransport, options: {
+    rpcCapture?: RpcRecorder; fallbackRequest?: ServerRequestHandler;
+  } = {}): CodexAppServerClient {
+    return new CodexAppServerClient(transport, options.rpcCapture, undefined, options.fallbackRequest);
   }
 
   static async start(options: {
@@ -156,7 +182,9 @@ export class CodexAppServerClient {
     this.rpcCapture?.recordLifecycle("app_server.closed", {
       reason: "closed_by_host",
     });
-    this.lines.close();
+    this.lines?.close();
+    this.transport?.close();
+    for (const cleanup of this.transportCleanups.splice(0)) cleanup();
     this.terminateChild("SIGTERM");
     const killTimer = setTimeout(() => this.terminateChild("SIGKILL"), 1_500);
     killTimer.unref?.();
@@ -177,20 +205,20 @@ export class CodexAppServerClient {
   async initialize(
     clientInfo = { name: "agent_host", title: "Agent Host", version: "0.1.0" },
     timeoutMs = 60_000,
+    capabilities: JsonValue = { experimentalApi: true, optOutNotificationMethods: CODEX_APP_SERVER_OPT_OUT_NOTIFICATION_METHODS },
+    params?: JsonObject,
   ): Promise<void> {
     const response = await this.request<CodexInitializeResponse>(
       "initialize",
       {
         clientInfo,
-        capabilities: {
-          experimentalApi: true,
-          optOutNotificationMethods:
-            CODEX_APP_SERVER_OPT_OUT_NOTIFICATION_METHODS,
-        },
+        capabilities,
+        ...params,
       },
       { timeoutMs },
     );
     assertSupportedCodexAppServerVersion(response);
+    this.initializeResponse = response;
     this.notify("initialized");
   }
 
@@ -268,7 +296,8 @@ export class CodexAppServerClient {
         },
         cleanup,
       });
-      this.writeMessage({ id, method, params });
+      try { this.writeMessage({ id, method, params }); }
+      catch (error) { rejectPending(new CodexRequestFailure("transport", method, error instanceof Error ? error.message : String(error))); }
     });
   }
 
@@ -279,6 +308,12 @@ export class CodexAppServerClient {
   addRequestHandler(handler: ServerRequestHandler): () => void {
     this.requestHandlers.add(handler);
     return () => this.requestHandlers.delete(handler);
+  }
+
+  /** Runs after session-scoped handlers, before the conservative default response. */
+  addFallbackRequestHandler(handler: ServerRequestHandler): () => void {
+    this.fallbackHandlers.add(handler);
+    return () => this.fallbackHandlers.delete(handler);
   }
 
   addNotificationHandler(handler: ServerNotificationHandler): () => void {
@@ -301,7 +336,8 @@ export class CodexAppServerClient {
           ? message.method
           : this.serverRequestMethods.get(message.id),
     });
-    this.child.stdin.write(`${JSON.stringify(message)}\n`);
+    if (this.transport) this.transport.send(message);
+    else this.child!.stdin.write(`${JSON.stringify(message)}\n`);
   }
 
   private handleLine(line: string): void {
@@ -333,17 +369,10 @@ export class CodexAppServerClient {
       return;
     }
     if ("id" in message && message.id !== undefined) {
-      void this.handleServerRequest({
-        id: message.id,
-        method: message.method,
-        params: message.params,
-      });
+      void this.handleServerRequest(message as RpcRequest & { id: string | number });
       return;
     }
-    this.handleNotification({
-      method: message.method,
-      params: message.params,
-    });
+    this.handleNotification(message);
   }
 
   private handleResponse(response: RpcResponse): void {
@@ -358,6 +387,8 @@ export class CodexAppServerClient {
           "remote",
           pending.method,
           response.error.message || `${pending.method} failed`,
+          response.error.code,
+          response.error.data,
         ),
       );
       return;
@@ -383,6 +414,10 @@ export class CodexAppServerClient {
           return;
         }
       }
+      for (const handler of this.fallbackHandlers) {
+        const result = await handler(request);
+        if (result !== undefined) { respond({ id: request.id, result }); return; }
+      }
       const fallback = await this.fallbackRequest?.(request);
       if (fallback !== undefined) respond({ id: request.id, result: fallback });
       else respond(defaultCodexServerRequestResponse(request));
@@ -391,6 +426,7 @@ export class CodexAppServerClient {
         id: request.id,
         error: {
           message: error instanceof Error ? error.message : String(error),
+          ...(error instanceof CodexRequestFailure ? { code: error.code, data: error.data } : {}),
         },
       });
     }
@@ -401,9 +437,9 @@ export class CodexAppServerClient {
     params?: JsonValue;
   }): void {
     for (const handler of this.notificationHandlers) {
-      Promise.resolve(handler(notification)).catch(() => {
-        // Notification consumers should not crash the shared app-server process.
-      });
+      try {
+        Promise.resolve(handler(notification)).catch(() => {});
+      } catch { /* A subscriber must not discard other consumers' native receipts. */ }
     }
   }
 
@@ -415,7 +451,8 @@ export class CodexAppServerClient {
     this.rpcCapture?.recordLifecycle("app_server.closed", {
       error: error.message,
     });
-    this.lines.close();
+    this.lines?.close();
+    for (const cleanup of this.transportCleanups.splice(0)) cleanup();
     for (const pending of this.pending.values()) {
       pending.cleanup();
       pending.reject(
@@ -427,11 +464,14 @@ export class CodexAppServerClient {
   }
 
   private notifyCloseHandlers(error: Error): void {
-    for (const handler of this.closeHandlers) handler(error);
+    for (const handler of this.closeHandlers) {
+      try { handler(error); } catch { /* Closing one consumer cannot strand another. */ }
+    }
     this.closeHandlers.clear();
   }
 
   private terminateChild(signal: NodeJS.Signals): void {
+    if (!this.child) return;
     if (this.child.exitCode !== null || this.child.signalCode !== null) return;
     if (this.processGroupPid && process.platform !== "win32") {
       try {

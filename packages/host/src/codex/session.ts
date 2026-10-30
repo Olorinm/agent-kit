@@ -23,6 +23,7 @@ import { resolve } from "node:path";
 import { AsyncEventQueue } from "../async-event-queue.js";
 import type { JsonObject, JsonValue } from "../types.js";
 import { CodexAppServerClient, CodexRequestFailure } from "./client.js";
+import { connectCodexTransport, type CodexRemoteEndpoint } from "./transports.js";
 import type {
   CodexDynamicToolSpec,
   CodexDynamicToolCallResponse,
@@ -67,6 +68,11 @@ export interface CodexAgentOptions {
   cancellationGraceMs?: number;
   /** Products can preserve their executable discovery, diagnostics and initialization. */
   connect?: () => Promise<CodexAppServerClient>;
+  endpoint?: CodexRemoteEndpoint;
+  /** Register connection-wide callbacks before initialize or any native notifications. */
+  onClient?(client: CodexAppServerClient): void;
+  /** Complete owner-selected native initialization fields, applied once per connection. */
+  initialization?: JsonObject;
 }
 
 /** Native app-server execution, extracted from OpenGrove's CodexRuntime. */
@@ -87,6 +93,8 @@ export class CodexAgent {
       this.bindings,
       (id) => this.active.has(id),
       {
+        concurrentReads: true,
+        concurrentForks: true,
         list: async (o) => {
           const native =
             object(
@@ -94,26 +102,35 @@ export class CodexAgent {
                 await this.connect()
               ).request(
                 "thread/list",
-                { cwd: o.cwd, limit: o.limit ?? 100, cursor: o.cursor },
+                { cwd: o.cwd, limit: o.limit ?? 100, cursor: o.cursor,
+                  archived: o.archived, searchTerm: o.searchTerm, sourceKinds: o.sourceKinds },
                 { signal: o.signal },
               ),
             ) ?? {};
           return sessionPage(native.data, native, native.nextCursor);
         },
         history: async (id, o) => {
-          const native =
-            object(
-              await (
-                await this.connect()
-              ).request(
-                "thread/read",
-                { threadId: id, includeTurns: true },
-                { signal: o.signal },
-              ),
-            ) ?? {};
-          return sessionPage(object(native.thread)?.turns, native);
+          const client = await this.connect();
+          const page = object(await client.request("thread/turns/list", {
+            threadId: id, limit: o.limit ?? 100, cursor: o.cursor,
+            sortDirection: o.sortDirection, itemsView: o.itemsView ?? "full",
+          }, { signal: o.signal })) ?? {};
+          return sessionPage(page.data, page, page.nextCursor);
         },
+        read: async (id, o) => (await (await this.connect()).request("thread/read", { threadId: id, includeTurns: false }, { signal: o.signal })) ?? null,
+        items: async (id, o) => {
+          const page = object(await (await this.connect()).request("thread/items/list", {
+            threadId: id, turnId: o.turnId, limit: o.limit ?? 100, cursor: o.cursor, sortDirection: o.sortDirection,
+          }, { signal: o.signal })) ?? {};
+          return sessionPage(page.data, page, page.nextCursor);
+        },
+        rename: async (id, name) => { await (await this.connect()).request("thread/name/set", { threadId: id, name }); },
+        archive: async (id, archived) => { await (await this.connect()).request(archived ? "thread/archive" : "thread/unarchive", { threadId: id }); },
         fork: async (id, o) => {
+          const activeSource = [...this.active.values()].find((run) => run.threadId === id);
+          if (activeSource && !o.entryId && !o.beforeEntryId && !activeSource.turnId)
+            throw new Error("active_turn_not_ready");
+          const beforeTurnId = o.beforeEntryId ?? (!o.entryId ? activeSource?.turnId : undefined);
           const native =
             object(
               await (
@@ -123,6 +140,8 @@ export class CodexAgent {
                 {
                   threadId: id,
                   ...(o.entryId ? { lastTurnId: o.entryId } : {}),
+                  ...(beforeTurnId ? { beforeTurnId } : {}),
+                  excludeTurns: true,
                 },
                 { signal: o.signal },
               ),
@@ -138,6 +157,23 @@ export class CodexAgent {
     ));
   }
   private sessionManager?: SessionManager;
+  private fingerprint(request: Pick<CodexRunRequest, "cwd" | "instructions" | "tools" | "thread" | "bindingFingerprint">) {
+    return request.bindingFingerprint ?? fingerprintJson({
+      cwd: resolve(request.cwd), instructions: request.instructions,
+      tools: (request.tools ?? []).map(({ execute: _execute, ...spec }) => spec),
+      provider: request.thread?.modelProvider, config: request.thread?.config,
+      command: this.options.command, args: this.options.args, env: this.options.env, endpoint: this.options.endpoint,
+      initialization: this.options.initialization,
+    });
+  }
+  async adoptSession(nativeId: string, request: Pick<CodexRunRequest, "sessionId" | "cwd" | "instructions" | "tools" | "thread">) {
+    const native = object(await (await this.connect()).request("thread/read", { threadId: nativeId, includeTurns: false }));
+    const thread = object(native?.thread);
+    if (thread?.id !== nativeId) throw new Error("native_session_identity_mismatch");
+    if (typeof thread.cwd === "string" && resolve(thread.cwd) !== resolve(request.cwd)) throw new Error("native_session_workspace_mismatch");
+    if (object(thread.status)?.type === "active") throw new Error("native_session_busy");
+    return this.sessions.adopt(request.sessionId, { threadId: nativeId, fingerprint: this.fingerprint(request) });
+  }
   constructor(private readonly options: CodexAgentOptions = {}) {
     this.bindings = options.bindings ?? new MemoryBindingStore();
   }
@@ -151,6 +187,7 @@ export class CodexAgent {
       this.client = ready;
       void ready
         .then((client) => {
+          if (this.options.connect) this.options.onClient?.(client);
           if (this.client === ready) this.currentClient = client;
           client.addCloseHandler(() => {
             if (this.client === ready) this.client = undefined;
@@ -165,13 +202,16 @@ export class CodexAgent {
   }
 
   private async startClient() {
-    const client = await CodexAppServerClient.start({
+    const client = this.options.endpoint
+      ? CodexAppServerClient.attach(await connectCodexTransport(this.options.endpoint, this.options.initializationTimeoutMs))
+      : await CodexAppServerClient.start({
       command: this.options.command ?? "codex",
       args: this.options.args ?? ["app-server", "--listen", "stdio://"],
       env: this.options.env,
     });
     try {
-      await client.initialize(undefined, this.options.initializationTimeoutMs);
+      this.options.onClient?.(client);
+      await client.initialize(undefined, this.options.initializationTimeoutMs, undefined, this.options.initialization);
       return client;
     } catch (error) {
       client.close();
@@ -302,18 +342,7 @@ export class CodexAgent {
       );
       if (new Set(names).size !== names.length)
         throw new Error("duplicate_tool_name");
-      const fingerprint =
-        request.bindingFingerprint ??
-        fingerprintJson({
-          cwd: resolve(request.cwd),
-          instructions: request.instructions,
-          tools: specs,
-          provider: request.thread?.modelProvider,
-          config: request.thread?.config,
-          command: this.options.command,
-          args: this.options.args,
-          env: this.options.env,
-        });
+      const fingerprint = this.fingerprint(request);
       const existing = await this.bindings.get(request.sessionId);
       if (request.mode === "compact" && !existing)
         throw new Error("session_not_found");
@@ -326,7 +355,7 @@ export class CodexAgent {
           ? {}
           : { developerInstructions: request.instructions }),
         ...(existing
-          ? { threadId: existing.threadId }
+          ? { threadId: existing.threadId, excludeTurns: true }
           : { dynamicTools: nativeToolDefinitions(specs) }),
       };
       const started = await client.request<{ thread?: { id?: string } }>(
@@ -358,6 +387,53 @@ export class CodexAgent {
         confirmTurn = resolveReady;
       });
       const pending: Array<{ method: string; params?: JsonValue }> = [];
+      // Only native subagent ancestry grants access to this run's callbacks.
+      // A fork or a shared session-tree root alone is not authorization.
+      const descendants = new Map<string, Promise<boolean>>();
+      const descendantTurns = new Map<string, Promise<boolean>>();
+      const ownsThread = (candidate: string, visited = new Set<string>()): Promise<boolean> => {
+        if (candidate === threadId) return Promise.resolve(true);
+        if (visited.has(candidate) || visited.size >= 32) return Promise.resolve(false);
+        const cached = descendants.get(candidate);
+        if (cached) return cached;
+        const lookup = (async () => {
+          const read = object(await client!.request("thread/read", { threadId: candidate, includeTurns: false }, { signal, timeoutMs: 15_000 }));
+          const thread = object(read?.thread);
+          if (thread?.id !== candidate) return false;
+          const spawn = object(object(object(thread?.source)?.subAgent)?.thread_spawn);
+          const parent = typeof thread?.parentThreadId === "string" ? thread.parentThreadId : spawn?.parent_thread_id;
+          if (typeof parent !== "string" || !parent || (spawn?.parent_thread_id && spawn.parent_thread_id !== parent)) return false;
+          return ownsThread(parent, new Set([...visited, candidate]));
+        })().catch(() => false);
+        descendants.set(candidate, lookup);
+        return lookup;
+      };
+      // Thread ancestry persists across parent runs. A late child must never borrow
+      // a later turn's grants just because it has the same parent thread.
+      const ownsChildTurn = (candidate: string, childTurnId: unknown): Promise<boolean> => {
+        if (typeof childTurnId !== "string" || !childTurnId || !context.turnId)
+          return Promise.resolve(false);
+        const key = JSON.stringify([candidate, childTurnId]);
+        const cached = descendantTurns.get(key);
+        if (cached) return cached;
+        const lookup = (async () => {
+          if (!await ownsThread(candidate)) return false;
+          const page = object(await client!.request("thread/turns/list", {
+            threadId: candidate, limit: 100, sortDirection: "desc", itemsView: "notLoaded",
+          }, { signal, timeoutMs: 15_000 }));
+          const turn = Array.isArray(page?.data) ? page.data.map(object).find(turn => turn?.id === childTurnId) : undefined;
+          return turn?.rootTurnId === context.turnId;
+        })().catch(() => false);
+        descendantTurns.set(key, lookup);
+        return lookup;
+      };
+      const emitChild = async (notification: { method: string; params?: JsonValue }, childId: string) => {
+        const p = object(notification.params), childTurnId = p?.turnId ?? object(p?.turn)?.id;
+        if (await ownsChildTurn(childId, childTurnId) && !settled && !signal.aborted) {
+          emit({ type: "native.notification", runId, notification, threadId: childId,
+            turnId: String(childTurnId) });
+        }
+      };
       let interrupt = () => {};
       const onNotification = (notification: {
         method: string;
@@ -365,7 +441,10 @@ export class CodexAgent {
       }) => {
         if (settled || !nativeStarted) return;
         const p = object(notification.params);
-        if (p?.threadId !== threadId) return;
+        if (p?.threadId !== threadId) {
+          if (typeof p?.threadId === "string") void emitChild(notification, p.threadId);
+          return;
+        }
         if (
           !context.turnId &&
           request.mode === "compact" &&
@@ -454,12 +533,15 @@ export class CodexAgent {
       cleanups.push(
         client.addRequestHandler(async (nativeRequest) => {
           const p = object(nativeRequest.params);
-          if (!nativeStarted || p?.threadId !== context.threadId)
+          if (!nativeStarted || typeof p?.threadId !== "string" || !(await ownsThread(p.threadId)))
             return undefined;
           // A request can precede the turn/start response. Wait for the native
           // identity before dispatching; an old turn must never execute a tool.
           if (!context.turnId) await untilAborted(turnReady, signal, undefined);
-          if (p.turnId !== undefined && p.turnId !== context.turnId)
+          const isChild = p.threadId !== threadId;
+          if (isChild && !await ownsChildTurn(p.threadId, p.turnId)) return undefined;
+          const callContext = isChild ? { ...context, threadId: p.threadId, turnId: String(p.turnId ?? "") } : context;
+          if (!isChild && p.turnId !== undefined && p.turnId !== context.turnId)
             return undefined;
           const fallback =
             nativeRequest.method === "item/tool/requestUserInput"
@@ -476,6 +558,7 @@ export class CodexAgent {
             typeof p.tool === "string"
           ) {
             const callId = p.callId;
+            const scopedCallId = `${p.threadId}:${callId}`;
             const tool = request.tools?.find(
               (tool) =>
                 tool.name === p.tool &&
@@ -486,7 +569,7 @@ export class CodexAgent {
               tool: p.tool,
               arguments: p.arguments,
             });
-            const prior = toolCalls.get(callId);
+            const prior = toolCalls.get(scopedCallId);
             if (prior && prior.signature !== signature)
               throw new Error("tool_call_identity_conflict");
             const interrupted: CodexDynamicToolCallResponse = {
@@ -509,6 +592,8 @@ export class CodexAgent {
               emit({
                 type: "tool.started",
                 runId,
+                threadId: callContext.threadId,
+                turnId: callContext.turnId,
                 callId,
                 tool: String(p.tool),
                 input,
@@ -519,15 +604,15 @@ export class CodexAgent {
                   ? await tool.execute(input, {
                       sessionId: request.sessionId,
                       runId,
-                      threadId,
-                      turnId: context.turnId,
+                      threadId: callContext.threadId,
+                      turnId: callContext.turnId,
                       signal,
                       callId,
                     })
                   : ((await routeInteraction(
                       request,
                       nativeRequest,
-                      context,
+                      callContext,
                     )) as CodexDynamicToolCallResponse | undefined);
               } catch (error) {
                 result = {
@@ -554,6 +639,8 @@ export class CodexAgent {
                 emit({
                   type: "tool.finished",
                   runId,
+                  threadId: callContext.threadId,
+                  turnId: callContext.turnId,
                   callId,
                   tool: String(p.tool),
                   result: output,
@@ -561,7 +648,7 @@ export class CodexAgent {
                 return output;
               },
             );
-            toolCalls.set(callId, { signature, result });
+            toolCalls.set(scopedCallId, { signature, result });
             return (await untilAborted(
               result,
               signal,
@@ -570,7 +657,7 @@ export class CodexAgent {
           }
           return untilAborted(
             Promise.resolve().then(() =>
-              routeInteraction(request, nativeRequest, context),
+              routeInteraction(request, nativeRequest, callContext),
             ),
             signal,
             fallback,
@@ -605,11 +692,10 @@ export class CodexAgent {
       signal.throwIfAborted();
       const input: CodexTurnInputItem[] =
         typeof request.input === "string"
-          ? [{ type: "text", text: request.input, text_elements: [] }]
+          ? request.turn?.toolOutput && request.input === "" ? [] : [{ type: "text", text: request.input, text_elements: [] }]
           : request.input;
-      const turnInput = request.context
-        ? [{ type: "text", text: request.context, text_elements: [] }, ...input]
-        : input;
+      if (request.turn?.toolOutput && input.length) throw new Error("tool_output_requires_standalone_turn");
+      const turnInput = input;
       nativeStarted = true;
       if (request.mode === "compact")
         compactTimeout = setTimeout(() => {
@@ -626,7 +712,12 @@ export class CodexAgent {
         request.mode === "compact" ? "thread/compact/start" : "turn/start",
         request.mode === "compact"
           ? { threadId }
-          : { ...request.turn, threadId, input: turnInput as JsonValue },
+          : { ...request.turn, threadId, input: turnInput as JsonValue,
+              ...(request.context ? { additionalContext: {
+                ...object(request.turn?.additionalContext),
+                agent_host: { kind: "untrusted", value: request.context },
+              } } : {}),
+            },
         { timeoutMs: this.options.requestTimeoutMs ?? 60_000 },
       );
       context.turnId =

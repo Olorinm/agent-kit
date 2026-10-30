@@ -1,5 +1,85 @@
 # Standalone HTTP service
 
+## Codex native management and extensions
+
+The Codex 0.165.0 integration adds native metadata, paginated turns/items,
+rename, archive/unarchive and explicit adoption through `/v1/native-sessions`.
+Read operations can inspect a running thread without resuming it. A fork accepts
+either `entryId` (inclusive last native turn) or `beforeEntryId` (exclusive).
+An active source can fork. Without an explicit boundary, Codex forks before its
+current unfinished turn; the target remains independently locked and bound.
+Adoption takes `sessionId`, `nativeSessionId`, stable `instructions` and `tools`;
+it validates the native identity/workspace and refuses active threads. The
+service owner must choose the correct tool contract for an adopted thread.
+It does not copy or rewrite transcripts or discover a user's other machines.
+
+`POST /v1/runs` accepts `requestKey`. Retrying the same normalized request returns
+the original run; reusing its key with different input is a conflict. Retrieve it
+with `GET /v1/runs/by-request?runtimeId=...&requestKey=...`, including after a
+restart with an explicitly unknown interrupted outcome. Check the health
+response's `capabilities.runIdempotency` before using this with an older server.
+`inputItems` carries native Codex input objects without reducing skills, mentions
+or future input variants to text. Other runtimes reject that extension. Mutable
+`context` uses Codex `additionalContext` with `kind: "untrusted"`; it is not a new
+user authorization or a developer instruction.
+
+Trusted task dispatch can use `toolOutput` with `input: ""` to preserve a native
+standalone tool delivery. It cannot be combined with user input items or media;
+this is Codex's own protocol constraint. Use the real product namespace and tool
+name, not `codex_app` or `codex_tui`. Skills selected in a user turn can use
+native `inputItems`; a tool-delivered task can reference installed skills for
+native on-demand reading. Never silently convert a delegated message into a
+new human instruction to bypass this distinction.
+
+Service owners can explicitly enable the complete native extension in a Codex
+profile. This administrative interface has the authority of that native server;
+do not expose its bearer token or arbitrary methods as a product's model tool.
+
+```json
+{
+  "id": "codex",
+  "kernel": "codex",
+  "cwd": "./workspace",
+  "nativeAccess": {
+    "methods": ["skills/list", "skills/config/write", "memory/status", "thread/memory/read", "thread/memoryMode/set"],
+    "callbackTimeoutMs": 120000
+  }
+}
+```
+
+Use `methods: "all"` only for a trusted native client that requires the full
+protocol. Methods remain subject to the installed Codex version, native account,
+permissions, feature flags and platform. `notifications` independently controls
+client-to-server notifications. Initialization is managed once by Host; an
+owner may supply the complete native `initialization` object in the profile.
+
+- `POST /v1/runtimes/native`: `{runtimeId, method, params?}` returns `{result}`;
+  add `notification: true` to send a permitted client notification.
+- `GET /v1/runtimes/:id/native-events?after=0&limit=200`: original native
+  notification envelopes, including timestamps, and request/lifecycle events.
+  Persist its `epoch` with its cursor; an epoch change or `historyTruncated`
+  requires a fresh native snapshot, never automatic replay of mutations.
+- `GET /v1/runtimes/:id/native-requests`: pending native requests with original
+  IDs and envelopes. Return exactly one of `result` or `error` to
+  `POST /v1/runtimes/:id/native-requests/:requestId/result`.
+
+Native error code/data survive HTTP in `nativeError`. Callbacks have deadlines;
+disconnect/restart closes them with an unknown outcome instead of replaying.
+Managed turn callbacks take precedence over native fallback handlers. A native
+background child that outlives its managed parent is serviced through this
+connection-wide extension. Inheriting a managed run's product callbacks requires
+both native thread ancestry and the exact child turn's `rootTurnId` matching that
+run's current turn. An old child cannot borrow a later parent turn's tool grants.
+Missing native lineage evidence leaves the callback on the owner extension.
+
+Profiles may attach to an existing server with
+`endpoint: {type: "websocket", url: "ws://127.0.0.1:4500"}` (optional server-owned
+headers), or `{type: "unix", path: "/path/to/codex.sock"}`. Closing an attached
+connection does not terminate its server. Authentication and endpoint ownership
+remain the service owner's responsibility. The default is a Host-owned stdio
+process. See the [protocol audit](codex-native-capability-audit.md) for evidence
+and verification boundaries.
+
 Agent Host has two entry points over the same native adapters:
 
 - **Embedded:** import an adapter in a product's Node backend. The product supplies its own lifecycle and storage.
@@ -162,9 +242,10 @@ Every operation requires `Authorization: Bearer <token>` and JSON bodies for POS
 | `GET /v1/health`                                | Service protocol version (`1`).                                                                                                |
 | `GET /v1/runtimes`                              | Configured profiles and control availability.                                                                                  |
 | `POST /v1/runtimes/inspect`                     | Check `{ runtimeId }` without running an Agent.                                                                                |
-| `POST /v1/runs`                                 | Submit `{ sessionId, runtimeId, instructions?, input, attachments?, context?, tools?, settings?, mode?, timeoutMs? }`; returns `202` with a run record. |
+| `POST /v1/runs`                                 | Submit `{ sessionId, runtimeId, requestKey?, instructions?, input, inputItems?, toolOutput?, attachments?, context?, tools?, settings?, mode?, timeoutMs? }`; returns `202` with a run record. |
 | `POST /v1/runtimes/discover` | Explicit native handshake for `{runtimeId}`; static fallback is labelled. |
-| `POST /v1/native-sessions` | `{runtimeId,action:"list"|"bindings"|"history"|"fork"|"delete",sessionId?,targetSessionId?,entryId?,limit?,cursor?}`. Native state is distinct from Host records. |
+| `POST /v1/native-sessions` | Native list/bindings/read/history/items/fork/delete/rename/archive/unarchive/adopt. See the native management contract above for boundaries and parameters. |
+| `GET /v1/runs/by-request?runtimeId=...&requestKey=...` | Find the original run for an idempotent submission. |
 | `GET /v1/sessions`                              | Session configurations.                                                                                                        |
 | `GET /v1/runs?sessionId=...`                    | Run records, newest first.                                                                                                     |
 | `GET /v1/runs/:id`                              | Status and independently persisted final answer.                                                                               |
@@ -224,7 +305,7 @@ AGENT_HOST_HTTP_NATIVE=1 npm run test:package
 
 Tests distinguish deterministic Agent/provider fixtures from native model-backed probes. The HTTP fixture matrix covers all seven existing adapters, approve/reject and native binding continuation across Host restart. Additional tests cover native interaction response shapes, observation disconnects, deadlines, duplicate results, authentication, file revisions and hard-process-crash recovery. The package test installs the archive in an independent consumer, starts its CLI and exercises the copied product example. Existing embedded consumer tests remain required.
 
-Products own their domain models, workflows, knowledge management, accounts and application distribution. These are not runtime dependencies of the service. Skills and MCP integrations already configured in a Kernel remain native capabilities; product extension administration is outside this HTTP contract.
+Products own their domain models, workflows, knowledge management, accounts and application distribution. These are not runtime dependencies of the service. Skills and MCP integrations remain native capabilities; the opt-in native extension carries their original administration protocol while the product retains authorization and distribution policy.
 
 
 Native session management, selectable settings, trusted hooks and receipt-based controls are documented in [common API](common-api.md). `allowedSettings` is configured by the owner, included in the runtime description and checked before side effects. Native session deletion retains a Host tombstone; it never silently turns continuation into a fresh conversation. The [native verification matrix](native-verification.md) records the separate model-backed HTTP results.

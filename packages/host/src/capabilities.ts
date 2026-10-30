@@ -32,6 +32,16 @@ export const capabilityNames = [
   "controls.compact",
   "extensions.nativeOptions",
   "events.native",
+  "sessions.read",
+  "sessions.items",
+  "sessions.rename",
+  "sessions.archive",
+  "sessions.adopt",
+  "input.nativeItems",
+  "extensions.nativeRpc",
+  "skills.native",
+  "memory.native",
+  "agents.native",
 ] as const;
 export type CapabilityName = (typeof capabilityNames)[number];
 export interface Capability {
@@ -123,6 +133,13 @@ export function getKernelCapabilities(
       : "The native adapter retains its typed options and extension entry points.",
   );
   if (kernel === "codex") {
+    for (const name of ["sessions.read", "sessions.items", "sessions.rename", "sessions.archive", "sessions.adopt", "input.nativeItems"] as const)
+      f[name] = supported("Native Codex adapter and HTTP interface; actual method availability follows the installed app-server version.");
+    f["extensions.nativeRpc"] = mode === "embedded" ? supported("Complete request/notification/server-request transport through connect().")
+      : conditional("configuration_required", "Service-owner nativeAccess policy enables the full-duplex native extension.");
+    f["skills.native"] = conditional("configuration_required", "Native discovery, config and skill input; files and enablement follow the selected runtime. HTTP management requires nativeAccess.");
+    f["memory.native"] = conditional("configuration_required", "Native memory settings and experimental RPCs. Generation/use depend on native feature/configuration and isolation; HTTP management requires nativeAccess.");
+    f["agents.native"] = conditional("configuration_required", "Native subagent execution. Product tools require multi_agent_v2 and multi_agent_v2_dynamic_tools; managed callbacks are scoped to verified descendants of the active run. Independent native threads use the native extension.");
     f["input.images"] = supported(
       "Native text/image/skill/mention input items.",
     );

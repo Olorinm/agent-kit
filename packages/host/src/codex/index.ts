@@ -6,3 +6,6 @@ export {
 } from "./client.js";
 export type * from "./types.js";
 export * from "./session.js";
+export * from "./native-bridge.js";
+export * from "./transports.js";
+export type { CodexJsonRpcTransport } from "./client.js";
