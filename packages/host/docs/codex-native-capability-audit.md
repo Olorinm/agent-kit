@@ -27,6 +27,10 @@ The source inventory intentionally includes more than the exported public schema
 
 Between 0.162.1 and 0.165.0, the declaration additions are `thread/sample`, `thread/sample/cancel`, `thread/memory/read`, `thread/readState/update`, `thread/items/read`, `feedback/save` and the notification `thread/readState/changed`. Main additionally declares `account/gcp/setup`, `accountSession/list` and `accountSession/switch`. No method removals were found in these four inventories. The main-only methods are covered by generic Host transport tests, not accepted as working operations in the pinned 0.165.0 executable.
 
+## 0.166.0 update (2026-11-03)
+
+The pin moved to [Codex 0.166.0](https://github.com/openai/codex/releases/tag/rust-v0.166.0), the latest non-prerelease release (published 2026-10-29). Generated experimental schemas were compared against 0.165.0: 3 client request methods were added (`account/gcp/setup`, `accountSession/list`, `accountSession/switch`), none were removed, and `ThreadItem` gained optional `startedAtMs`/`completedAtMs`. These pass through the existing native methods path; no Host projection depends on them. The full Host suite and the deterministic local-provider probe with the actual 0.166.0 executable (19 checks, including spawned-child ancestry and live fork) pass. The method tables above remain the 0.165.0 baseline.
+
 ## How Host retains the native surface
 
 Host keeps common product operations convenient and exposes the full native protocol through an explicit service-owner extension. It does not implement a replacement Codex model loop, memory engine, tool runner, OAuth system or subagent scheduler. Parameter objects and native results cross the extension without projection into a smaller common schema.

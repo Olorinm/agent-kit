@@ -132,7 +132,7 @@
   "devDependencies": {
     "@moonshot-ai/kimi-code": "2.2.0",
     "@olorinm/agent-ui": "https://github.com/Olorinm/agent-ui/releases/download/v0.1.0-alpha.2/olorinm-agent-ui-0.1.0-alpha.2.tgz",
-    "@openai/codex": "0.165.0",
+    "@openai/codex": "0.166.0",
     "@opencode/cli": "2.0.29",
     "@playwright/test": "1.63.0",
     "@types/cross-spawn": "6.0.6",

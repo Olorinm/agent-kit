@@ -1,6 +1,6 @@
 # Kernel support
 
-**Codex update, 2026-10-29:** the current Codex integration pin is **0.165.0**.
+**Codex update, 2026-11-03:** the current Codex integration pin is **0.166.0** (previously 0.165.0, 2026-10-29).
 The [complete native protocol audit](codex-native-capability-audit.md) separates
 full-duplex wire coverage from isolated native tests using a deterministic local
 provider, and from features requiring real accounts, platforms or services.
@@ -10,7 +10,7 @@ Stable targets checked on **2026-10-15**. These are explicit integration pins, n
 
 | Kernel | Tested version | Shared integration |
 | --- | --- | --- |
-| Codex | [0.165.0](https://github.com/openai/codex/releases/tag/rust-v0.165.0) | Native app-server, full-duplex native extension, pagination, skills input, subagent callback attribution, attached transports, native controls |
+| Codex | [0.166.0](https://github.com/openai/codex/releases/tag/rust-v0.166.0) | Native app-server, full-duplex native extension, pagination, skills input, subagent callback attribution, attached transports, native controls |
 | Claude Agent | [SDK 0.3.300](https://github.com/anthropics/claude-agent-sdk-typescript/releases/tag/v0.3.300), engine 2.1.300 | Native SDK lifecycle and options, session operations, MCP tools, full permission context and request cancellation |
 | Pi | [1.2.0](https://github.com/earendil-works/pi/releases/tag/v1.2.0) | Native durable conversations, nested/deferred tools, extension hooks, cancellation, fork, steer, compaction |
 | OpenCode | [2.0.29](https://www.npmjs.com/package/@opencode/cli/v/2.0.29) | ACP resume/history/fork/delete, model/config controls, MCP tools, native ACP compaction |
