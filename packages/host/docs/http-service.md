@@ -2,7 +2,7 @@
 
 ## Codex native management and extensions
 
-The Codex 0.165.0 integration adds native metadata, paginated turns/items,
+The Codex 0.165.0 integration (current pin 0.166.0) adds native metadata, paginated turns/items,
 rename, archive/unarchive and explicit adoption through `/v1/native-sessions`.
 Read operations can inspect a running thread without resuming it. A fork accepts
 either `entryId` (inclusive last native turn) or `beforeEntryId` (exclusive).
