@@ -229,7 +229,8 @@ export class AgentHostClient {
       typeof page.historyTruncated !== "boolean"
     )
       throw new Error("invalid_host_events");
-    return page as unknown as EventPage;
+    // Hosts before liveGap only reported historyTruncated.
+    return { ...page, liveGap: page.liveGap === true } as unknown as EventPage;
   }
   async calls(runId: string, signal?: AbortSignal): Promise<PendingCall[]> {
     const value = await this.request(

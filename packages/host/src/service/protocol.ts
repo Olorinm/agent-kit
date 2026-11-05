@@ -102,6 +102,10 @@ export const runSchema = z
     answer: z.string(),
     outputAvailable: z.boolean(),
     sequence: z.number().int().nonnegative(),
+    /** Highest sequence of a durable event dropped by the safety cap. */
+    lostThrough: z.number().int().nonnegative().optional(),
+    /** Highest sequence of a transient (superseded streaming) event dropped. */
+    liveDroppedThrough: z.number().int().nonnegative().optional(),
   })
   .strict();
 export type RunRecord = z.infer<typeof runSchema>;
@@ -156,7 +160,10 @@ export interface EventPage {
   events: Array<{ sequence: number; event: ServiceEvent }>;
   cursor: number;
   hasMore: boolean;
+  /** Durable events before the cursor were lost. */
   historyTruncated: boolean;
+  /** Transient streaming events before the cursor are gone; completed items supersede them. */
+  liveGap: boolean;
 }
 export interface RuntimeDescription {
   allowedSettings?: import("../settings.js").AllowedSettings;

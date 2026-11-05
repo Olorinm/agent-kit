@@ -84,7 +84,8 @@ export type AgentEvent =
       threadId: string;
       turnId: string;
     }
-  | { type: "assistant.delta"; runId: string; text: string }
+  /** `transient`: superseded by a completed native item; not kept after the run. */
+  | { type: "assistant.delta"; runId: string; text: string; transient?: true }
   | {
       type: "tool.started";
       runId: string;

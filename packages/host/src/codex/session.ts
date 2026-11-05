@@ -483,7 +483,7 @@ export class CodexAgent {
           const phase = p.phase ?? phases.get(id);
           if (phase !== "commentary") {
             textByItem.set(id, (textByItem.get(id) ?? "") + p.delta);
-            emit({ type: "assistant.delta", runId, text: p.delta });
+            emit({ type: "assistant.delta", runId, text: p.delta, transient: true });
           }
         }
         if (
