@@ -1,6 +1,6 @@
 {
   "name": "@olorinm/agent-host",
-  "version": "0.1.0-alpha.12",
+  "version": "0.1.0-alpha.13",
   "description": "Product-independent native Agent sessions, tools and interaction routing",
   "type": "module",
   "license": "MIT",
@@ -108,7 +108,8 @@
     }
   },
   "bin": {
-    "agent-host": "dist/service/cli.js"
+    "agent-host": "dist/service/cli.js",
+    "agent-host-relay": "dist/service/relay-cli.js"
   },
   "scripts": {
     "build": "node --input-type=module -e \"import { rmSync } from 'node:fs'; rmSync('dist', { recursive: true, force: true });\" && tsc -p tsconfig.json",

@@ -10,7 +10,7 @@ import {
 } from "node:http";
 import { join, resolve } from "node:path";
 import { z } from "zod";
-import type { TurnOutcome } from "../agent.js";
+import type { ProductTool, TurnOutcome } from "../agent.js";
 import { CallBroker } from "./calls.js";
 import { TaskStore } from "./store.js";
 import {
@@ -50,6 +50,26 @@ interface ActiveRun {
   controller: AbortController;
   broker: CallBroker;
   done: Promise<void>;
+  sessionId: string;
+  tools: ProductTool[];
+  /** Shell commands of this run that are executing now, keyed `threadId:itemId`, with their turn. */
+  commands: Map<string, string>;
+  relayed: number;
+}
+const relaySchema = z.object({
+  threadId: z.string().min(1).max(200), callId: z.string().min(1).max(200),
+  tool: z.string().min(1).max(200), input: z.json(),
+}).strict();
+/** Tracks Codex commandExecution items so a relay request can be tied to the command that sent it. */
+function trackCommand(commands: Map<string, string>, event: { type: string; [key: string]: unknown }) {
+  if (event.type !== "native.notification") return;
+  const notification = event.notification as { method?: string; params?: Record<string, unknown> };
+  const params = notification.params ?? {}, item = params.item as { id?: unknown; type?: unknown } | undefined;
+  if (item?.type !== "commandExecution" || typeof item.id !== "string") return;
+  const thread = typeof params.threadId === "string" ? params.threadId : String(event.threadId ?? "");
+  const turn = typeof params.turnId === "string" ? params.turnId : String(event.turnId ?? "");
+  if (notification.method === "item/started") commands.set(`${thread}:${item.id}`, turn);
+  if (notification.method === "item/completed") commands.delete(`${thread}:${item.id}`);
 }
 
 export async function startAgentHostServer(options: HostServerOptions) {
@@ -144,6 +164,25 @@ export async function startAgentHostServer(options: HostServerOptions) {
     };
   };
 
+  /** Runs one product tool of the active run on behalf of a shell command that is executing in it. */
+  async function relay(input: z.infer<typeof relaySchema>) {
+    const key = `${input.threadId}:${input.callId}`;
+    const task = [...active.values()].find((candidate) => candidate.commands.has(key));
+    if (!task || task.controller.signal.aborted) throw new HostError(403, "relay_command_not_running");
+    const tool = task.tools.find((candidate) => candidate.name === input.tool && !candidate.namespace);
+    if (!tool?.execute) throw new HostError(404, "relay_tool_not_available");
+    if (task.relayed >= 200) throw new HostError(429, "relay_limit");
+    const callId = `relay:${input.callId}:${++task.relayed}`;
+    const context = { sessionId: task.sessionId, runId: task.record.id, threadId: input.threadId,
+      turnId: task.commands.get(key)!, signal: task.controller.signal, callId };
+    store.append(task.record, { type: "tool.started", runId: task.record.id, threadId: input.threadId, turnId: context.turnId,
+      callId, tool: tool.name, input: input.input });
+    const result = await tool.execute(input.input, context);
+    store.append(task.record, { type: "tool.finished", runId: task.record.id, threadId: input.threadId, turnId: context.turnId,
+      callId, tool: tool.name, result });
+    return { result };
+  }
+
   async function execute(task: ActiveRun, input: StartRun) {
     const { record, runtime, controller, broker } = task;
     let outcome: TurnOutcome = {
@@ -179,12 +218,13 @@ export async function startAgentHostServer(options: HostServerOptions) {
             : input.context
               ? JSON.stringify(input.context)
               : undefined,
-        tools: broker.tools(input.tools),
+        tools: task.tools,
         signal: controller.signal,
         onRequest: (request, context) => broker.interaction(request, context),
       })) {
         if (event.runId !== record.id)
           throw new Error("runtime_event_run_mismatch");
+        trackCommand(task.commands, event as unknown as { type: string });
         if (event.type === "turn.finished") {
           outcome = event.outcome;
           continue;
@@ -301,6 +341,10 @@ export async function startAgentHostServer(options: HostServerOptions) {
       controller,
       broker,
       done: Promise.resolve(),
+      sessionId: input.sessionId,
+      tools: broker.tools(input.tools),
+      commands: new Map(),
+      relayed: 0,
     };
     active.set(record.id, task);
     task.done = Promise.resolve().then(() => execute(task, input));
@@ -355,6 +399,9 @@ export async function startAgentHostServer(options: HostServerOptions) {
         return;
       }
     }
+    // A shell command's relay is authorized by being that running command, not by the owner token.
+    if (request.method === "POST" && (request.url ?? "").split("?")[0] === "/v1/relay")
+      return reply(response, 200, await relay(relaySchema.parse(await body(request, 1_000_000))));
     const supplied = Buffer.from(request.headers.authorization ?? "");
     const expected = Buffer.from(`Bearer ${options.token}`);
     if (
