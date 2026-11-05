@@ -39,6 +39,7 @@ export interface HostServerOptions {
   port?: number;
   allowedOrigins?: string[];
   eventLimit?: number;
+  durableEventLimit?: number;
   interactionTimeoutMs?: number;
   /** Trusted local file access is opt-in, separate from native Agent permissions. */
   workspaceFiles?: boolean;
@@ -64,6 +65,7 @@ export async function startAgentHostServer(options: HostServerOptions) {
   const store = new TaskStore(
     join(resolve(options.stateDirectory), "tasks.sqlite"),
     options.eventLimit,
+    options.durableEventLimit,
   );
   const active = new Map<string, ActiveRun>();
   const managing = new Set<string>();

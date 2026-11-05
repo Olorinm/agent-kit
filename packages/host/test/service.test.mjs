@@ -90,8 +90,26 @@ async function until(read, predicate) {
     await new Promise((resolve) => setTimeout(resolve, 10));
   }
 }
+test("streaming deltas are live-only: completed items survive, deltas never evict them and are dropped at finish", async (t) => {
+  // A live window of one transient event: every new delta evicts the previous one.
+  const { api } = await fixture(t, { eventLimit: 1 });
+  const run = await api("/runs", { sessionId: "durable", runtimeId: "codex", input: "hello" }, 202);
+  await until(() => api(`/runs/${run.id}`), (value) => value.status !== "running");
+  const page = await api(`/runs/${run.id}/events`);
+  assert.equal(page.historyTruncated, false);
+  assert.equal(page.liveGap, true);
+  const kinds = page.events.map(({ event }) => event.type === "native.notification" ? event.notification.method : event.type);
+  assert.ok(!kinds.some((kind) => kind === "assistant.delta" || kind.endsWith("/delta")), kinds.join());
+  assert.ok(kinds.includes("item/started") && kinds.includes("item/completed"), kinds.join());
+  const completed = page.events.find(({ event }) => event.notification?.params?.item?.id === "answer" && event.notification.method === "item/completed");
+  assert.equal(completed.event.notification.params.item.text.includes("hello"), true);
+  assert.equal(page.events.at(-1).event.type, "turn.finished");
+  // Reading after the last dropped fragment reports no gap.
+  assert.equal((await api(`/runs/${run.id}/events?after=${page.cursor}`)).liveGap, false);
+});
+
 test("HTTP product tools remain scoped, duplicate results are idempotent, results survive restart", async (t) => {
-  const { api, restart } = await fixture(t, { eventLimit: 3 });
+  const { api, restart } = await fixture(t, { durableEventLimit: 3 });
   const input = {
     sessionId: "document",
     runtimeId: "codex",

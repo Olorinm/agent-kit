@@ -13,14 +13,36 @@ import {
   type EventPage,
 } from "./protocol.js";
 
+// Codex streaming fragments. Each is superseded by its item's `item/completed`,
+// which carries the full text/output, so (as in Codex rollouts) they are live-only.
+const supersededMethods = new Set([
+  "item/agentMessage/delta",
+  "item/reasoning/textDelta",
+  "item/reasoning/summaryTextDelta",
+  "item/commandExecution/outputDelta",
+  "item/fileChange/outputDelta",
+  "item/plan/delta",
+]);
+export function isTransientEvent(event: ServiceEvent): boolean {
+  if (event.type === "native.notification")
+    return supersededMethods.has(event.notification.method);
+  return (event.type === "assistant.delta" || event.type === "reasoning.delta") && event.transient === true;
+}
+
 /** One process owns the state directory. SQLite releases its exclusive lock on crash. */
 export class TaskStore {
   private readonly db: DatabaseSync;
+  /**
+   * `eventLimit` bounds the live window of transient events per run. Durable events
+   * (completed items, tool calls, outcomes) are kept until `durableEventLimit`, a
+   * safety cap; only losing those makes a run's history incomplete.
+   */
   constructor(
     path: string,
     private readonly eventLimit = 2_000,
+    private readonly durableEventLimit = 50_000,
   ) {
-    if (!Number.isInteger(eventLimit) || eventLimit < 1)
+    if (!Number.isInteger(eventLimit) || eventLimit < 1 || !Number.isInteger(durableEventLimit) || durableEventLimit < 1)
       throw new Error("invalid_event_limit");
     mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
     this.db = new DatabaseSync(path);
@@ -34,7 +56,11 @@ export class TaskStore {
         CREATE TABLE IF NOT EXISTS submissions (runtime_id TEXT NOT NULL, request_key TEXT NOT NULL, hash TEXT NOT NULL, run_id TEXT NOT NULL, PRIMARY KEY(runtime_id, request_key));
         CREATE TABLE IF NOT EXISTS events (run_id TEXT NOT NULL, sequence INTEGER NOT NULL, data TEXT NOT NULL, PRIMARY KEY(run_id, sequence));
         CREATE INDEX IF NOT EXISTS run_sessions ON runs(session_id);
-        CREATE INDEX IF NOT EXISTS call_runs ON calls(run_id);
+        CREATE INDEX IF NOT EXISTS call_runs ON calls(run_id);`);
+      const columns = this.db.prepare("PRAGMA table_info(events)").all().map((column) => column.name);
+      if (!columns.includes("transient"))
+        this.db.exec("ALTER TABLE events ADD COLUMN transient INTEGER NOT NULL DEFAULT 0");
+      this.db.exec(`CREATE INDEX IF NOT EXISTS event_kinds ON events(run_id, transient, sequence);
         COMMIT;`);
       // An interrupted native operation is never restarted or replayed by the Host.
       for (const run of this.runs())
@@ -126,12 +152,15 @@ export class TaskStore {
     this.db.exec("BEGIN");
     try {
       run.sequence++;
+      const transient = isTransientEvent(event) ? 1 : 0;
       this.db
-        .prepare("INSERT INTO events VALUES (?, ?, ?)")
-        .run(run.id, run.sequence, JSON.stringify(event));
-      this.db
-        .prepare("DELETE FROM events WHERE run_id = ? AND sequence <= ?")
-        .run(run.id, run.sequence - this.eventLimit);
+        .prepare("INSERT INTO events (run_id, sequence, data, transient) VALUES (?, ?, ?, ?)")
+        .run(run.id, run.sequence, JSON.stringify(event), transient);
+      const dropped = this.trim(run.id, transient, transient ? this.eventLimit : this.durableEventLimit);
+      if (dropped !== undefined) {
+        if (transient) run.liveDroppedThrough = Math.max(run.liveDroppedThrough ?? 0, dropped);
+        else run.lostThrough = Math.max(run.lostThrough ?? 0, dropped);
+      }
       this.saveRun(run);
       this.db.exec("COMMIT");
     } catch (error) {
@@ -139,11 +168,26 @@ export class TaskStore {
       throw error;
     }
   }
+  /** Drops the oldest events of one kind beyond `keep`; returns the highest dropped sequence. */
+  private trim(runId: string, transient: number, keep: number): number | undefined {
+    const boundary = this.db
+      .prepare("SELECT sequence FROM events WHERE run_id = ? AND transient = ? ORDER BY sequence DESC LIMIT 1 OFFSET ?")
+      .get(runId, transient, keep)?.sequence;
+    if (typeof boundary !== "number") return undefined;
+    this.db.prepare("DELETE FROM events WHERE run_id = ? AND transient = ? AND sequence <= ?").run(runId, transient, boundary);
+    return boundary;
+  }
   finish(run: RunRecord, outcome: NonNullable<RunRecord["outcome"]>) {
     run.status = outcome.status;
     run.outcome = outcome;
     run.finishedAt = new Date().toISOString();
     this.append(run, { type: "turn.finished", runId: run.id, outcome });
+    // Completed items supersede the streaming fragments; keep only durable history.
+    const dropped = this.trim(run.id, 1, 0);
+    if (dropped !== undefined) {
+      run.liveDroppedThrough = Math.max(run.liveDroppedThrough ?? 0, dropped);
+      this.saveRun(run);
+    }
   }
   events(run: RunRecord, after: number, limit: number): EventPage {
     const first = this.db
@@ -159,11 +203,14 @@ export class TaskStore {
       event: JSON.parse(String(row.data)) as ServiceEvent,
     }));
     const cursor = events.at(-1)?.sequence ?? after;
+    // Runs recorded before kinds were tracked evicted any event; treat a gap as loss.
+    const legacy = run.lostThrough === undefined && run.liveDroppedThrough === undefined && typeof first === "number" && after < first - 1;
     return {
       events,
       cursor,
       hasMore: cursor < run.sequence,
-      historyTruncated: typeof first === "number" && after < first - 1,
+      historyTruncated: after < (run.lostThrough ?? 0) || legacy,
+      liveGap: after < (run.liveDroppedThrough ?? 0),
     };
   }
   private read<T>(

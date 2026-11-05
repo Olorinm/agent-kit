@@ -2,7 +2,7 @@ import type { AgentEvent } from "./agent.js";
 import type { JsonObject, JsonValue } from "./types.js";
 
 export type ProgressEvent =
-  | { type: "reasoning.delta"; runId: string; text: string }
+  | { type: "reasoning.delta"; runId: string; text: string; transient?: true }
   | {
       type: "usage";
       runId: string;
@@ -31,9 +31,9 @@ export function projectProgress(event: AgentEvent): AgentEvent[] {
   const { method } = event.notification,
     p = obj(event.notification.params);
   const output: AgentEvent[] = [event];
-  const reason = (v: unknown) => {
+  const reason = (v: unknown, transient = false) => {
     if (typeof v === "string" && v)
-      output.push({ type: "reasoning.delta", runId: event.runId, text: v });
+      output.push({ type: "reasoning.delta", runId: event.runId, text: v, ...(transient ? { transient: true as const } : {}) });
   };
   const usage = (
     native: JsonObject,
@@ -75,7 +75,8 @@ export function projectProgress(event: AgentEvent): AgentEvent[] {
     method === "item/reasoning/textDelta" ||
     method === "item/reasoning/summaryTextDelta"
   )
-    reason(p.delta);
+    // The completed reasoning item carries the same text.
+    reason(p.delta, true);
   if (method === "thread/tokenUsage/updated")
     usage(obj(obj(p.tokenUsage).total), "session", {
       inputTokens: "inputTokens",
