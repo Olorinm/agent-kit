@@ -140,6 +140,21 @@ test("only a running shell command can relay a product tool call, through its ow
   assert.equal((await relay({ threadId, callId: "exec-relay", tool: "connected_apps", input: {} })).status, 403);
 });
 
+test("a relay sent before Codex reports its command waits for the report instead of being refused", async (t) => {
+  const { api, host, root } = await fixture(t);
+  const appsTool = { name: "connected_apps", description: "Apps", inputSchema: { type: "object" }, timeoutMs: 30_000 };
+  const run = await api("/runs", { sessionId: "relay-late", runtimeId: "codex", input: "relay-command-late", tools: [appsTool] }, 202);
+  // The thread id is known from the run's session once the turn started; the command is not reported yet.
+  const { thread } = await until(async () => ({ thread: (await api(`/runs/${run.id}/events`)).events.find(({ event }) => event.threadId)?.event.threadId }), (value) => value.thread);
+  const response = fetch(`${host.url}/v1/relay`, { method: "POST", headers: { "content-type": "application/json" },
+    body: JSON.stringify({ threadId: thread, callId: "exec-relay", tool: "connected_apps", input: { action: "tools" } }) });
+  const { calls } = await until(() => api(`/runs/${run.id}/calls`), (value) => value.calls.length === 1);
+  await api(`/runs/${run.id}/calls/${calls[0].id}/result`, { result: { success: true, contentItems: [{ type: "inputText", text: "ok" }] } });
+  assert.equal((await response).status, 200);
+  writeFileSync(join(root, "relay-done"), "");
+  await until(() => api(`/runs/${run.id}`), (value) => value.status !== "running");
+});
+
 test("HTTP product tools remain scoped, duplicate results are idempotent, results survive restart", async (t) => {
   const { api, restart } = await fixture(t, { durableEventLimit: 3 });
   const input = {

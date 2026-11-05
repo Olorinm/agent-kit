@@ -167,7 +167,13 @@ export async function startAgentHostServer(options: HostServerOptions) {
   /** Runs one product tool of the active run on behalf of a shell command that is executing in it. */
   async function relay(input: z.infer<typeof relaySchema>) {
     const key = `${input.threadId}:${input.callId}`;
-    const task = [...active.values()].find((candidate) => candidate.commands.has(key));
+    const find = () => [...active.values()].find((candidate) => candidate.commands.has(key));
+    // Codex may start the process before its item/started notification reaches the Host.
+    let task = find();
+    for (let waited = 0; !task && waited < 5_000; waited += 50) {
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      task = find();
+    }
     if (!task || task.controller.signal.aborted) throw new HostError(403, "relay_command_not_running");
     const tool = task.tools.find((candidate) => candidate.name === input.tool && !candidate.namespace);
     if (!tool?.execute) throw new HostError(404, "relay_tool_not_available");

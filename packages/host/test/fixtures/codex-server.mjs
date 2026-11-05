@@ -107,9 +107,11 @@ createInterface({ input: process.stdin }).on("line", async (line) => {
     : [p.additionalContext?.agent_host?.value, p.input?.map((i) => i.text ?? "").join("\n") ?? "compact"].filter(x => x !== undefined).join("\n");
   const input = p.input?.at(-1)?.text ?? "compact";
   active.set(threadId, turnId);
-  if (input === "relay-command") {
+  if (input === "relay-command" || input === "relay-command-late") {
     // A shell command stays running until the test creates relay-done in the working directory.
     reply(m.id, { turn: { id: turnId } });
+    // Codex can report the item after its process already started.
+    if (input === "relay-command-late") await new Promise((r) => setTimeout(r, 400));
     const item = { id: "exec-relay", type: "commandExecution", command: "gws gmail +triage", status: "inProgress" };
     notify("item/started", { threadId, turnId, item });
     for (let i = 0; i < 400 && !existsSync(`${cwds.get(threadId) ?? "."}/relay-done`); i++) await new Promise((r) => setTimeout(r, 25));
