@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { mkdtemp, rm } from "node:fs/promises";
+import { writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import {
@@ -106,6 +107,37 @@ test("streaming deltas are live-only: completed items survive, deltas never evic
   assert.equal(page.events.at(-1).event.type, "turn.finished");
   // Reading after the last dropped fragment reports no gap.
   assert.equal((await api(`/runs/${run.id}/events?after=${page.cursor}`)).liveGap, false);
+});
+
+test("only a running shell command can relay a product tool call, through its own run and broker", async (t) => {
+  const { api, host, root } = await fixture(t);
+  const appsTool = { name: "connected_apps", description: "Apps", inputSchema: { type: "object" }, timeoutMs: 30_000 };
+  const run = await api("/runs", { sessionId: "relay", runtimeId: "codex", input: "relay-command", tools: [appsTool] }, 202);
+  const started = await until(() => api(`/runs/${run.id}/events`), (page) => page.events.some(({ event }) =>
+    event.notification?.method === "item/started" && event.notification.params.item.type === "commandExecution"));
+  const threadId = started.events.find(({ event }) => event.notification?.method === "item/started").event.notification.params.threadId;
+  const relay = (body) => fetch(`${host.url}/v1/relay`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+  // No owner token is needed, but the thread and call must be a command running now.
+  assert.equal((await relay({ threadId, callId: "exec-other", tool: "connected_apps", input: {} })).status, 403);
+  assert.equal((await relay({ threadId: "other-thread", callId: "exec-relay", tool: "connected_apps", input: {} })).status, 403);
+  assert.equal((await relay({ threadId, callId: "exec-relay", tool: "not_offered", input: {} })).status, 404);
+  const pending = relay({ threadId, callId: "exec-relay", tool: "connected_apps", input: { action: "tools" } });
+  const { calls } = await until(() => api(`/runs/${run.id}/calls`), (value) => value.calls.length === 1);
+  assert.equal(calls[0].name, "connected_apps");
+  assert.deepEqual(calls[0].input, { action: "tools" });
+  assert.equal(calls[0].nativeCallId, "relay:exec-relay:1");
+  const result = { success: true, contentItems: [{ type: "inputText", text: "{\"status\":\"completed\",\"tools\":[]}" }] };
+  await api(`/runs/${run.id}/calls/${calls[0].id}/result`, { result });
+  const response = await pending;
+  assert.equal(response.status, 200);
+  assert.deepEqual((await response.json()).result, result);
+  const events = (await api(`/runs/${run.id}/events`)).events.map(({ event }) => event);
+  assert.ok(events.some((event) => event.type === "tool.started" && event.callId === "relay:exec-relay:1"));
+  assert.ok(events.some((event) => event.type === "tool.finished" && event.callId === "relay:exec-relay:1"));
+  writeFileSync(join(root, "relay-done"), "");
+  await until(() => api(`/runs/${run.id}`), (value) => value.status !== "running");
+  // Once the command finished, the same identity no longer relays.
+  assert.equal((await relay({ threadId, callId: "exec-relay", tool: "connected_apps", input: {} })).status, 403);
 });
 
 test("HTTP product tools remain scoped, duplicate results are idempotent, results survive restart", async (t) => {

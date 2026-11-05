@@ -266,6 +266,15 @@ Workspace file access is opt-in via `workspaceFiles: true`. Paths stay under the
 
 - Disconnecting HTTP or aborting `task.wait()` stops observation, not the native task. Call `task.cancel()` to request cancellation.
 - Reattach with `host.task(runId, productTools).wait(...)`. The SDK polls at 250 ms by default and reports network errors to the caller. It does not automatically resubmit a task after a failed request.
+- `POST /v1/relay` lets a connector CLI started from the Agent's own shell reach the run's product tools. Codex exports
+  `CODEX_THREAD_ID` and `CODEX_TOOL_CALL_ID` to each command; the request `{threadId, callId, tool, input}` is
+  accepted only while that exact commandExecution item is running in an active run, and only for a tool the run
+  already has. It needs no owner token and runs through the same CallBroker as a model-issued call, so admission,
+  grants and owner approvals apply unchanged; the call is recorded as `tool.started`/`tool.finished` events.
+  `agent-host-relay` (installed in the sandbox under a CLI's name, e.g. `gws`, `lark-cli`) is the client: it finds the
+  connector's `<connection>__<prefix>_read`/`_write` tools through `connected_apps`, tries the read tool, and uses
+  the write tool when the connector reports `*_command_requires_write_tool`. Set `AGENT_HOST_RELAY_URL` when the
+  Host does not listen on `http://127.0.0.1:37420`.
 - Progress keeps completed native items, tool events and outcomes for the whole run (safety cap `durableEventLimit`, default 50,000). Codex streaming fragments (`item/*/delta`, `item/*/outputDelta` and their `assistant.delta`/`reasoning.delta` projections, marked `transient: true`) are live-only, as in Codex rollouts: the latest `eventLimit` (default 2,000) stay readable while the run is active, and all are dropped when it finishes because each item's `item/completed` carries the full text/output.
 - Event pages report `historyTruncated` only when durable events before the cursor were lost; this requires explicit acknowledgement through `onHistoryGap`. `liveGap` means superseded fragments before the cursor are gone; rebuild from completed items or the stored final answer.
 - Call deadlines default to 120 seconds. Cancellation/deadline aborts pending handlers and rejects late replies. It cannot undo an effect already committed by a product.

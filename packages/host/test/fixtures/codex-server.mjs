@@ -1,10 +1,11 @@
-import { appendFileSync } from "node:fs";
+import { appendFileSync, existsSync } from "node:fs";
 import { createInterface } from "node:readline";
 let id = 0;
 const threads = new Set();
 const active = new Map();
 const requests = new Map();
 const parents = new Map();
+const cwds = new Map();
 const childRoots = new Map();
 let lateChild;
 const send = (message) => process.stdout.write(`${JSON.stringify(message)}\n`);
@@ -43,6 +44,7 @@ createInterface({ input: process.stdin }).on("line", async (line) => {
       });
     const threadId = `thread-${++id}`;
     threads.add(threadId);
+    if (p.cwd) cwds.set(threadId, p.cwd);
     if (process.env.AGENT_HOST_FIXTURE_DELAY === "1" && id === 2)
       return setTimeout(() => reply(m.id, { thread: { id: threadId } }), 400);
     return reply(m.id, { thread: { id: threadId } });
@@ -105,6 +107,16 @@ createInterface({ input: process.stdin }).on("line", async (line) => {
     : [p.additionalContext?.agent_host?.value, p.input?.map((i) => i.text ?? "").join("\n") ?? "compact"].filter(x => x !== undefined).join("\n");
   const input = p.input?.at(-1)?.text ?? "compact";
   active.set(threadId, turnId);
+  if (input === "relay-command") {
+    // A shell command stays running until the test creates relay-done in the working directory.
+    reply(m.id, { turn: { id: turnId } });
+    const item = { id: "exec-relay", type: "commandExecution", command: "gws gmail +triage", status: "inProgress" };
+    notify("item/started", { threadId, turnId, item });
+    for (let i = 0; i < 400 && !existsSync(`${cwds.get(threadId) ?? "."}/relay-done`); i++) await new Promise((r) => setTimeout(r, 25));
+    notify("item/completed", { threadId, turnId, item: { ...item, status: "completed", aggregatedOutput: "done", exitCode: 0 } });
+    notify("item/completed", { threadId, turnId, item: { id: "relay-answer", type: "agentMessage", text: "relayed" } });
+    return finish(threadId, turnId);
+  }
   if (input === "spawn-late-child") {
     reply(m.id, { turn: { id: turnId } });
     lateChild = `child-${++id}`;
