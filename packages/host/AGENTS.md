@@ -14,3 +14,8 @@ Read `README.md`, `docs/scope.md` and `docs/kernel-support.md` before changing p
 - For documentation-only changes, check local links and `git diff --check`. Runtime validation commands must be documented when executable packages are introduced.
 
 Runtime changes: run `npm test` and `npm run test:package`. Native probes are opt-in and must stay distinct from protocol fixture tests.
+
+CI keeps native package checks on Linux, macOS and Windows. Browser package acceptance runs
+in the official Playwright image pinned by version and digest. Update that pin together with
+`@playwright/test` and the lockfile; keep the image-version/browser check before acceptance.
+Do not reinstall browser system dependencies during each CI run.
