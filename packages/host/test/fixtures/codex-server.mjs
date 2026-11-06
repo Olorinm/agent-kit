@@ -108,13 +108,14 @@ createInterface({ input: process.stdin }).on("line", async (line) => {
   const input = p.input?.at(-1)?.text ?? "compact";
   active.set(threadId, turnId);
   if (input === "relay-command" || input === "relay-command-late") {
-    // A shell command stays running until the test creates relay-done in the working directory.
+    // A shell command stays running until the test creates relay-done in the working directory
+    // (at most 60 s: refused relays each wait up to 5 s for the command to be reported).
     reply(m.id, { turn: { id: turnId } });
     // Codex can report the item after its process already started.
     if (input === "relay-command-late") await new Promise((r) => setTimeout(r, 400));
     const item = { id: "exec-relay", type: "commandExecution", command: "gws gmail +triage", status: "inProgress" };
     notify("item/started", { threadId, turnId, item });
-    for (let i = 0; i < 400 && !existsSync(`${cwds.get(threadId) ?? "."}/relay-done`); i++) await new Promise((r) => setTimeout(r, 25));
+    for (let i = 0; i < 2400 && !existsSync(`${cwds.get(threadId) ?? "."}/relay-done`); i++) await new Promise((r) => setTimeout(r, 25));
     notify("item/completed", { threadId, turnId, item: { ...item, status: "completed", aggregatedOutput: "done", exitCode: 0 } });
     notify("item/completed", { threadId, turnId, item: { id: "relay-answer", type: "agentMessage", text: "relayed" } });
     return finish(threadId, turnId);
