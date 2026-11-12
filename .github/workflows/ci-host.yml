@@ -1,11 +1,16 @@
-name: Package contracts
+name: CI host
 on:
   push:
     branches: [main]
+    paths: [packages/host/**, .github/workflows/ci-host.yml]
   pull_request:
+    paths: [packages/host/**, .github/workflows/ci-host.yml]
 concurrency:
-  group: package-${{ github.ref }}
+  group: ci-host-${{ github.ref }}
   cancel-in-progress: true
+defaults:
+  run:
+    working-directory: packages/host
 jobs:
   package:
     timeout-minutes: 15
@@ -20,6 +25,7 @@ jobs:
         with:
           node-version: 24
           cache: npm
+          cache-dependency-path: packages/host/package-lock.json
       - run: npm ci --ignore-scripts
       - run: npm test
         timeout-minutes: 3
@@ -36,12 +42,14 @@ jobs:
     defaults:
       run:
         shell: bash
+        working-directory: packages/host
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: 24
           cache: npm
+          cache-dependency-path: packages/host/package-lock.json
       - run: npm ci --ignore-scripts
       - name: Check preinstalled Playwright browser
         run: |

@@ -1,15 +1,22 @@
 name: Bug report
-description: Report a reproducible Agent Router defect
+description: Report a reproducible defect in one of the packages
 title: "[Bug]: "
 labels: [bug]
 body:
   - type: markdown
     attributes:
-      value: Do not submit secrets or security vulnerabilities here. Follow SECURITY.md for private reporting.
+      value: Do not submit secrets or security vulnerabilities here. Follow packages/router/SECURITY.md for private reporting.
+  - type: dropdown
+    id: package
+    attributes:
+      label: Package
+      options: [host, router, connectors, environment]
+    validations:
+      required: true
   - type: input
     id: version
     attributes:
-      label: Agent Router version or commit
+      label: Package version or commit
     validations:
       required: true
   - type: textarea
@@ -29,4 +36,4 @@ body:
     id: verification
     attributes:
       label: Verification details
-      description: Relevant tests, A2A version, federation profile, and sanitized logs.
+      description: Relevant tests, protocol versions, and sanitized logs.

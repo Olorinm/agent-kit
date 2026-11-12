@@ -1,12 +1,18 @@
-name: CI
+name: CI router
 
 on:
   push:
     branches: [main]
+    paths: [packages/router/**, .github/workflows/ci-router.yml]
   pull_request:
+    paths: [packages/router/**, .github/workflows/ci-router.yml]
 
 permissions:
   contents: read
+
+defaults:
+  run:
+    working-directory: packages/router
 
 jobs:
   test:
@@ -18,9 +24,10 @@ jobs:
         with:
           node-version: 24.22.2
           cache: npm
+          cache-dependency-path: packages/router/package-lock.json
       - run: npm install --global npm@11.19.1 --no-audit --no-fund
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
-        with: { go-version-file: go.mod, cache: true }
+        with: { go-version-file: packages/router/go.mod, cache: true, cache-dependency-path: packages/router/go.sum }
       - run: sh scripts/build-cli.sh
       - run: npm ci
       - run: npm run typecheck
@@ -42,7 +49,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
-        with: { go-version-file: go.mod, cache: true }
+        with: { go-version-file: packages/router/go.mod, cache: true, cache-dependency-path: packages/router/go.sum }
       - run: go vet ./...
       - run: go test -race ./...
       - run: sh scripts/build-cli.sh

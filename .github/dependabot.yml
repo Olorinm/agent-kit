@@ -1,25 +1,25 @@
 version: 2
 updates:
   - package-ecosystem: gomod
-    directory: /
+    directory: /packages/router
     schedule:
       interval: weekly
   - package-ecosystem: npm
-    directory: /
+    directory: /packages/router
     schedule:
       interval: weekly
     ignore:
       - dependency-name: "@types/node"
         update-types: ["version-update:semver-major"]
   - package-ecosystem: npm
-    directory: /examples/echo-agent
+    directory: /packages/router/examples/echo-agent
     schedule:
       interval: weekly
     ignore:
       - dependency-name: "@types/node"
         update-types: ["version-update:semver-major"]
   - package-ecosystem: docker
-    directory: /
+    directory: /packages/router
     schedule:
       interval: weekly
     ignore:

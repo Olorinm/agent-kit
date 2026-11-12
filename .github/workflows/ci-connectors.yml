@@ -1,11 +1,16 @@
-name: Tests
+name: CI connectors
 on:
   push:
     branches: [main]
+    paths: [packages/connectors/**, .github/workflows/ci-connectors.yml]
   pull_request:
+    paths: [packages/connectors/**, .github/workflows/ci-connectors.yml]
 concurrency:
-  group: tests-${{ github.ref }}
+  group: ci-connectors-${{ github.ref }}
   cancel-in-progress: true
+defaults:
+  run:
+    working-directory: packages/connectors
 jobs:
   test:
     timeout-minutes: 10
@@ -20,6 +25,7 @@ jobs:
         with:
           node-version: 24
           cache: npm
+          cache-dependency-path: packages/connectors/package-lock.json
       - run: npm ci
       - run: npm test
         timeout-minutes: 3

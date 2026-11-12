@@ -1,7 +1,15 @@
-name: Check
-on: [push, pull_request]
+name: CI environment
+on:
+  push:
+    branches: [main]
+    paths: [packages/environment/**, .github/workflows/ci-environment.yml]
+  pull_request:
+    paths: [packages/environment/**, .github/workflows/ci-environment.yml]
 permissions:
   contents: read
+defaults:
+  run:
+    working-directory: packages/environment
 jobs:
   check:
     runs-on: ubuntu-latest
@@ -11,6 +19,7 @@ jobs:
         with:
           node-version: 24
           cache: npm
+          cache-dependency-path: packages/environment/package-lock.json
       - run: npm ci
       - run: npm test
       - run: npm run test:package
@@ -22,5 +31,5 @@ jobs:
         with:
           repository: BroZhong/open-managed-agents
           ref: e04695152219a91c2ecdff41955dfc3fab73b438
-          path: state/oma-reference
+          path: packages/environment/state/oma-reference
       - run: npm run check:upstream -- state/oma-reference
