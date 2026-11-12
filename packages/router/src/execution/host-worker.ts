@@ -103,7 +103,7 @@ export class HostWorker {
       // Complete inexpensive local work in this tick, but never wait for remote tools or a sibling's completion.
       await Promise.race([Promise.allSettled([...this.observing.values()]), new Promise<void>(resolve => setImmediate(resolve))]);
       await Promise.race([Promise.allSettled([...this.executingTools.values()]), new Promise<void>(resolve => setImmediate(resolve))]);
-      // Internal work is observed through its saved task/run records, not the Matrix/channel outboxes.
+      // Internal work is observed through its saved task/run records, not the channel outbox.
       this.validate();
       for (const event of this.work.events()) if (this.store.get("work_session_inputs", event.value.id)) this.work.ack(event.id);
       if (uncertain.length && !this.lastError) this.lastError = uncertain[0]!.error ?? "host_submission_unknown";

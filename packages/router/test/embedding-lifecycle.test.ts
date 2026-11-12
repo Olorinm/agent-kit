@@ -9,8 +9,7 @@ afterEach(async () => { for (const close of cleanup.splice(0).reverse()) await c
 function fixture() {
   const stateDir = mkdtempSync(join(tmpdir(), "embedded-router-"));
   cleanup.push(() => rmSync(stateDir, { recursive: true, force: true }));
-  const router = createRouter({ serverName: "example.test", homeserver: "https://example.test", publicUrl: "https://example.test/_agent-router/v1",
-    stateDir, asToken: "a".repeat(48), hsToken: "h".repeat(48) });
+  const router = createRouter({ serverName: "example.test", publicUrl: "https://example.test/_agent-router/v1", stateDir });
   cleanup.push(() => router.close());
   return router;
 }

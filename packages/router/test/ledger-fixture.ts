@@ -1,9 +1,8 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { ManagedService, createManagedApp, type ManagedAgent, type ServiceConfig, type ServiceExtension } from "../src/service/managed.js";
-import type { ApplicationInbox } from "../src/matrix/application-service.js";
-import type { MatrixTransport } from "../src/matrix/transport.js";
+import { ManagedService, createManagedApp, type ServiceConfig, type ServiceExtension } from "../src/service/managed.js";
+import { withChat } from "./fixtures/chat-channel.js";
 import { channelConfigSchema, createChannelRuntime } from "../src/service/channels.js";
 import { ChannelHttpError } from "../src/http.js";
 import type { HostCall, HostPort, HostRun } from "../src/execution/host.js";
@@ -58,30 +57,23 @@ export class Host implements HostPort {
   /** Close a call in the Host's own UI (no Router answer). */
   answerNatively(runId: string, callId: string) { const call = this.calling.get(runId)!.find((item) => item.id === callId)!; call.status = "resolved"; }
 }
-function transport(agent: ManagedAgent, inbox: ApplicationInbox): MatrixTransport {
-  return { identity: async () => agent.matrixId,
-    sync: async (since) => { await new Promise((r) => setTimeout(r, 20)); return inbox.next(agent.id, since) ?? { next_batch: since ?? "0" }; },
-    state: async () => [], history: async () => ({ events: [] }), createRoom: async () => "!room:example.test",
-    join: async () => {}, send: async () => "$sent", stop: () => {} };
-}
 export async function until<T>(read: () => T | Promise<T>, predicate: (value: T) => boolean, ms = 15_000): Promise<T> {
   const deadline = Date.now() + ms;
   for (;;) { const value = await read(); if (predicate(value)) return value; if (Date.now() > deadline) throw new Error(`timed out: ${JSON.stringify(value).slice(0, 2000)}`); await new Promise((r) => setTimeout(r, 25)); }
 }
-export async function setup(cleanup: Array<() => void | Promise<void>>, overrides: Partial<ServiceConfig> = {}, connections: unknown[] = [{ id: "matrix", kind: "matrix" }]) {
+export async function setup(cleanup: Array<() => void | Promise<void>>, overrides: Partial<ServiceConfig> = {}, connections: unknown[] = []) {
   const stateDir = mkdtempSync(join(tmpdir(), "ledger-phase4-"));
   cleanup.push(() => rmSync(stateDir, { recursive: true, force: true }));
   const host = new Host(), extensions = new Map<string, ServiceExtension>();
-  const service: ManagedService = new ManagedService({ serverName: "example.test", homeserver: "https://example.test", publicUrl: "https://example.test/_agent-router/v1",
-    stateDir, asToken: "a".repeat(48), hsToken: "h".repeat(48), ledgerRead: true, ledgerSend: true, ledgerCards: true, ledgerControl: true, ...overrides }, {
+  const service: ManagedService = new ManagedService({ serverName: "example.test", publicUrl: "https://example.test/_agent-router/v1",
+    stateDir, ledgerRead: true, ledgerSend: true, ledgerCards: true, ledgerControl: true, ...overrides }, {
     authenticate: async (token) => { if (token === "alice") return owner; if (token === "bob") return other; throw new Error("bad_credentials"); },
-    provision: async () => {}, transport,
-    configure: async (agent, connector) => {
+    configure: async (agent, runtime) => {
       const config = channelConfigSchema.parse({ agents: [{ agentId: agent.id, connections, host: { binding: "fixture", runtimeId: "fixture" } }] }).agents[0]!;
-      const extension = await createChannelRuntime(agent, connector, config, stateDir, (name) => {
+      const extension = withChat(await createChannelRuntime(agent, runtime, config, stateDir, (name) => {
         const issued = service.issue(agent.id, name);
         return { id: issued.instance.id, validate: () => { service.instance(issued.token, agent.id); } };
-      }, host, { persons: service.persons, watching: (sessionKey) => service.hubs.hub(agent.owner).watching(agent.id, sessionKey) });
+      }, host, { persons: service.persons, watching: (sessionKey) => service.hubs.hub(agent.owner).watching(agent.id, sessionKey) }), [owner]);
       if (extension.control) extension.control.replanGraceMs = 0;
       extensions.set(agent.id, extension);
       return extension;
@@ -98,7 +90,7 @@ export async function setup(cleanup: Array<() => void | Promise<void>>, override
     return { status: response.status, data: response.status === 204 ? null : await response.json() as any };
   }
   const agent = await service.create(owner, "helper");
-  const ledger = AgentLedger.attached((await service.runtime(agent.id)).connector.store)!;
+  const ledger = AgentLedger.attached((await service.runtime(agent.id)).store)!;
   const chatId = `dm:${agent.id}`, chat = `${root}/web/chats/${enc(chatId)}`;
   const send = (body: Record<string, unknown>, token = "alice") => api(`${chat}/messages`, token, "POST", body);
   const events = async () => (await api(`${chat}/events?limit=200`)).data.events as any[];

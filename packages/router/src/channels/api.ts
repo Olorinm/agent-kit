@@ -52,17 +52,11 @@ export interface ChannelFiles {
   /** A configured file, trimmed. */
   read(file: string): string;
 }
-/**
- * Router services for built-in adapters (Matrix). External adapters do not use it. A built-in module adds its own
- * entry by declaration merging (`declare module "../api.js" { interface ChannelServices { … } }`).
- */
-export interface ChannelServices {}
 export interface ChannelFactoryContext {
   agentId: string;
   /** The agent owner's Router id (`@user:server`). */
   owner: string;
   files: ChannelFiles;
-  services: ChannelServices;
 }
 export interface ChannelInstance {
   adapter: ChannelAdapter;
@@ -72,8 +66,6 @@ export interface ChannelInstance {
   ownerAddresses?: string[];
   /** Identity namespace of sender ids (ADR 0005 section 9), e.g. the Feishu app id; default `""`. */
   namespace?: string;
-  /** Start before Router's first receive (Matrix installs its synchronous receipt hook this way). */
-  eager?: boolean;
   /** `/link` pairing codes are accepted over this mail connection from provider-verified senders. */
   mailPairing?: boolean;
   /** The connection notifies the owner (a one-way push channel); see `notifyPolicy`. */

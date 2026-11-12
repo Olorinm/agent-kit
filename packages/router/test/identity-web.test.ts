@@ -1,33 +1,34 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { ManagedService, createManagedApp, type ManagedAgent, type ServiceConfig } from "../src/service/managed.js";
-import type { ApplicationInbox } from "../src/matrix/application-service.js";
-import type { MatrixTransport } from "../src/matrix/transport.js";
+import { ManagedService, createManagedApp, type ServiceConfig } from "../src/service/managed.js";
 import { channelConfigSchema, createChannelRuntime } from "../src/service/channels.js";
 import { loadServiceConfig } from "../src/service/config.js";
 import { personId } from "../src/ledger/registry.js";
 
 const cleanup: Array<() => void | Promise<void>> = [];
-afterEach(async () => { for (const close of cleanup.splice(0).reverse()) await close(); });
+afterEach(async () => { for (const close of cleanup.splice(0).reverse()) await close(); vi.unstubAllGlobals(); });
 const owner = "@alice:example.test", root = "/_agent-router/v1/web";
-function transport(agent: ManagedAgent, inbox: ApplicationInbox): MatrixTransport {
-  return { identity: async () => agent.matrixId,
-    sync: async (since) => { await new Promise((r) => setTimeout(r, 20)); return inbox.next(agent.id, since) ?? { next_batch: since ?? "0" }; },
-    state: async () => [], history: async () => ({ events: [] }), createRoom: async () => "!room:example.test",
-    join: async () => {}, send: async () => "$sent", stop: () => {} };
-}
+const mail = "https://mail.example.test", inbox = "agent@example.test";
 async function setup(overrides: Partial<ServiceConfig> = {}) {
   const stateDir = mkdtempSync(join(tmpdir(), "identity-web-"));
   cleanup.push(() => rmSync(stateDir, { recursive: true, force: true }));
-  const service: ManagedService = new ManagedService({ serverName: "example.test", homeserver: "https://example.test", publicUrl: "https://example.test/_agent-router/v1",
-    stateDir, asToken: "a".repeat(48), hsToken: "h".repeat(48), ledgerRead: true, ledgerIdentity: true, ...overrides }, {
+  // The mail service of the agent's connection: the inbox exists and has no events.
+  writeFileSync(join(stateDir, "mail-key"), "fixture-mail-key");
+  const actualFetch = globalThis.fetch;
+  vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = new URL(String(input));
+    if (url.origin !== mail) return actualFetch(input, init);
+    return Response.json(url.pathname.endsWith("/events/lifecycle") ? { events: [], next_cursor: Number(url.searchParams.get("after")) } : { inbox_id: inbox });
+  });
+  const service: ManagedService = new ManagedService({ serverName: "example.test", publicUrl: "https://example.test/_agent-router/v1",
+    stateDir, ledgerRead: true, ledgerSend: true, ledgerIdentity: true, ...overrides }, {
     authenticate: async (token) => { if (token === "alice") return owner; throw new Error("bad_credentials"); },
-    provision: async () => {}, transport,
-    configure: async (agent, connector) => {
-      const config = channelConfigSchema.parse({ agents: [{ agentId: agent.id, connections: [{ id: "matrix", kind: "matrix", ownerAddresses: [owner, "@alice-ops:example.test"] }] }] }).agents[0]!;
-      return createChannelRuntime(agent, connector, config, stateDir, (name) => {
+    configure: async (agent, runtime) => {
+      const config = channelConfigSchema.parse({ agents: [{ agentId: agent.id, connections: [{ id: "mail", kind: "grove-mail", url: mail, inboxId: inbox,
+        apiKeyFile: "mail-key", ownerAddresses: ["alice@example.test"] }] }] }).agents[0]!;
+      return createChannelRuntime(agent, runtime, config, stateDir, (name) => {
         const issued = service.issue(agent.id, name);
         return { id: issued.instance.id, validate: () => { service.instance(issued.token, agent.id); } };
       }, undefined, { persons: service.persons, identity: service.identity });
@@ -49,10 +50,7 @@ async function setup(overrides: Partial<ServiceConfig> = {}) {
 
 describe("identity web API (features.identity)", () => {
   it("reads the flag from AGENT_LEDGER_IDENTITY", () => {
-    const dir = mkdtempSync(join(tmpdir(), "identity-env-")); cleanup.push(() => rmSync(dir, { recursive: true, force: true }));
-    writeFileSync(join(dir, "as"), "a".repeat(48)); writeFileSync(join(dir, "hs"), "h".repeat(48));
-    const env = { MATRIX_SERVER_NAME: "example.test", MATRIX_HOMESERVER_URL: "https://example.test", AGENT_SERVICE_URL: "https://example.test",
-      MATRIX_AS_TOKEN_FILE: join(dir, "as"), MATRIX_HS_TOKEN_FILE: join(dir, "hs") };
+    const env = { MATRIX_SERVER_NAME: "example.test", AGENT_SERVICE_URL: "https://example.test" };
     expect(loadServiceConfig({ ...env, AGENT_LEDGER_IDENTITY: "1" }).ledgerIdentity).toBe(true);
     expect(loadServiceConfig(env).ledgerIdentity).toBeUndefined();
   });
@@ -63,7 +61,7 @@ describe("identity web API (features.identity)", () => {
     const listed = await t.api("/identities");
     expect(listed.status).toBe(200);
     expect(listed.data.data.map((item: any) => [item.provider, item.namespace, item.subject, item.verifiedBy, item.removable])).toEqual([
-      ["matrix", "example.test", owner, "config", false], ["matrix", "example.test", "@alice-ops:example.test", "config", false]]);
+      ["matrix", "example.test", owner, "config", false], ["grove-mail", "", "alice@example.test", "config", false]]);
     expect(listed.data.data[0]).toMatchObject({ personId: personId(owner), fixed: "identity_from_config", lastSeenAt: null, createdAt: expect.any(String) });
     expect(await t.api(`/identities/${listed.data.data[0].identityId}`, "DELETE")).toEqual({ status: 409, data: { error: "identity_from_config" } });
     expect(await t.api("/identities/idn_missing", "DELETE")).toEqual({ status: 404, data: { error: "identity_not_found" } });

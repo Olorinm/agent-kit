@@ -32,13 +32,13 @@ export function createRouter(config: ServiceConfig, options: {
   };
 }
 export { ManagedService, type ManagedAgent, type ServiceConfig, type ServiceDependencies, type ServiceExtension } from "./service/managed.js";
+export type { AgentRuntime } from "./agents/runtime.js";
 export { ConnectionConfiguration, type HostBindingProvider } from "./connections/configuration.js";
 export { WorkError as RouterError } from "./execution/work.js";
 export { HttpAgentHost, type HostPort, type HostStartInput, type HostAdmission, type NativeSessionInput, type HostRun, type HostCall } from "./execution/host.js";
 export { ServiceHttp, ChannelHttpError } from "./http.js";
 export type { HostTool, HostToolResult, HostTools } from "./execution/tools.js";
 export { checkChannels } from "./service/check.js";
-export { externalIdentityConfigSchema } from "./matrix/external-identity.js";
 export { edgeIdentityConfigSchema, loadEdgeIdentityConfig, type EdgeIdentityConfig, type OwnerPrincipal, type OwnerRequest } from "./auth/edge-identity.js";
 export { loadServiceConfig } from "./service/config.js";
 

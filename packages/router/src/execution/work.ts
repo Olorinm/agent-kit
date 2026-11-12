@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto";
 import { Artifact, Message, Task, TaskState, type SendMessageRequest } from "@a2a-js/sdk";
 import type { ExecutionBackend, ExecutionSource } from "./types.js";
 import { DurableStore } from "../communication/store.js";
-import { digest, encodeResult, newTask, sized, statusMessage, terminal } from "./protocol.js";
+import { digest, encodeResult, newTask, statusMessage, terminal } from "./protocol.js";
 
 interface Claim { id: string; worker: string; revision: number; deferred?: boolean; }
 interface Work { task: Task; input: Message; source: ExecutionSource; revision: number; claim?: Claim; cancelRequested?: boolean; }
@@ -193,10 +193,9 @@ export class CliWork implements ExecutionBackend {
   }
   private fit(task: Task): void {
     task.history = task.history.slice(-20);
-    // Keep result contents intact; recent history is a bounded projection, not the Matrix archive.
+    // Keep result contents intact; recent history is a bounded projection, not an archive.
     while (task.history.length && Buffer.byteLength(JSON.stringify(encodeResult(task))) > 42000) task.history.shift();
     if (Buffer.byteLength(JSON.stringify(encodeResult(task))) > 44000) throw new WorkError("result_too_large_use_file_reference", 413);
-    sized(encodeResult(task));
   }
   private view(work: Work) {
     return { id: work.task.id, from: work.source.sender, conversation: work.source.room, contextId: work.task.contextId,

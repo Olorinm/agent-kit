@@ -1,4 +1,4 @@
-/** An adapter kind (`matrix`, `feishu`, `web`, …); the core treats it as an opaque label. */
+/** An adapter kind (`feishu`, `telegram`, `web`, …); the core treats it as an opaque label. */
 export type ChannelKind = string;
 
 /** Provider-specific reply data is frozen on receipt, never inferred from the latest chat. */

@@ -317,7 +317,7 @@ export class WorkSessions {
     const hash = digest(input), prior = this.store.get<{ hash: string }>("work_session_deliveries", input.eventId);
     if (prior && prior.hash !== hash) throw new WorkError("delivery_event_id_reused", 409);
     if (!prior) this.store.transaction(() => {
-      // The newest route that still exists: an owner-main session outlives the channels it came through (Matrix off).
+      // The newest route that still exists: an owner-main session outlives the channels it came through.
       const inputs = this.ownerInputs(input.targetSessionId);
       const push = target !== undefined && this.communication.notifies(target);
       const chosen = target === undefined ? inputs.find(item => this.communication.connected(item.connectionId)) ?? inputs[0]!

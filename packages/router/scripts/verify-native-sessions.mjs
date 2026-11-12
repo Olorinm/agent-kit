@@ -54,12 +54,9 @@ try {
       return calls.filter(call => call.name !== "coordinate");
     }
   }
-  const host = new ProductHost(http), config = { serverName: "example.test", homeserver: "https://example.test", publicUrl: "https://example.test/_agent-router/v1",
-    stateDir: join(root, "router"), asToken: "a".repeat(48), hsToken: "h".repeat(48) };
+  const host = new ProductHost(http), config = { serverName: "example.test", publicUrl: "https://example.test/_agent-router/v1", stateDir: join(root, "router") };
   const options = { hosts: { assertReady() {}, host: () => host, http: () => http }, dependencies: {
-    authenticate: async token => { if (token !== "owner") throw new Error("unauthorized"); return owner; }, provision: async () => {},
-    transport: agent => ({ identity: async () => agent.matrixId, sync: async since => { await sleep(20); return { next_batch: since ?? "0" }; },
-      state: async () => [], history: async () => ({ events: [] }), createRoom: async () => "!fixture:example.test", join: async () => {}, send: async () => "$fixture", stop() {} }),
+    authenticate: async token => { if (token !== "owner") throw new Error("unauthorized"); return owner; },
   } };
   router = createRouter(config, options);
   const agent = await router.service.create(owner, "worker");

@@ -20,20 +20,6 @@ import type { Identities } from "./identity.js";
 import { identityRoutes } from "./identity-web.js";
 
 export type { OwnerPrincipal, OwnerAuthenticator, OwnerRequest } from "../auth/edge-identity.js";
-/** Wraps the service's whoami check and caches the result for 60 s by token hash. Tokens are never stored. */
-export class SynapseWhoamiAuthenticator {
-  private readonly cache = new Map<string, { principal: OwnerPrincipal; expires: number }>();
-  constructor(private readonly whoami: (token: string) => Promise<string>, private readonly ttlMs = 60_000) {}
-  async authenticate(token: string): Promise<OwnerPrincipal> {
-    const hash = digest(["owner-token", token]), now = Date.now(), cached = this.cache.get(hash);
-    if (cached && cached.expires > now) return cached.principal;
-    const ownerId = await this.whoami(token);
-    const principal: OwnerPrincipal = { personId: personId(ownerId), ownerId, via: "bearer", matrixUserId: ownerId };
-    if (this.cache.size > 10_000) this.cache.clear();
-    this.cache.set(hash, { principal, expires: now + this.ttlMs });
-    return principal;
-  }
-}
 export interface WebLedgerDependencies {
   hubs: OwnerHubs; persons: PersonRegistry; authenticator: OwnerAuthenticator;
   /** Opens the agent runtime (and so its ledger) when a chat names an agent that is not running yet. */
@@ -54,8 +40,6 @@ export interface WebLedgerDependencies {
   kick?(): void;
   /** ADR 0005 `identity` (phase 6, `AGENT_LEDGER_IDENTITY`): the identity page and pairing codes. */
   identity?: Identities | undefined;
-  /** ADR 0005 19.1: the deployment's Matrix switch, always reported as `features.matrix` (client contract 1). */
-  matrix?: boolean | undefined;
 }
 /** The request's credentials, kept in memory with a socket ticket so the socket can be re-checked. */
 const credentials = (req: IncomingMessage): OwnerRequest => ({ headers: Object.fromEntries(["authorization", "cf-access-jwt-assertion"]
@@ -104,10 +88,9 @@ export function createWebLedger(dependencies: WebLedgerDependencies) {
   const send = Boolean(dependencies.send && dependencies.channel);
   const cards = send && Boolean(dependencies.cards && dependencies.control), reset = send && Boolean(dependencies.reset && dependencies.control);
   const groups = send && Boolean(dependencies.groups);
-  const limits = { ...baseLimits, features: { history: true, send, cards, attachments: Boolean(dependencies.attachments), reset, groups, identity: Boolean(dependencies.identity),
-    matrix: dependencies.matrix !== false } };
+  const limits = { ...baseLimits, features: { history: true, send, cards, attachments: Boolean(dependencies.attachments), reset, groups, identity: Boolean(dependencies.identity) } };
   const router = express.Router();
-  // Its own bound before authentication (each request may cost a whoami); the service-wide 1200/min also applies.
+  // Its own bound before authentication; the service-wide 1200/min also applies.
   router.use(rateLimit({ windowMs: 60_000, limit: 600, standardHeaders: "draft-8", legacyHeaders: false,
     keyGenerator: (req) => ipKeyGenerator(req.ip ?? req.socket.remoteAddress ?? "unknown"), message: { error: "rate_limit_exceeded" } }));
   router.use(async (req, res, next) => {

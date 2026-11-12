@@ -10,8 +10,8 @@ import { channelModules } from "../src/channels/registry.js";
  */
 const root = resolve(import.meta.dirname, ".."), src = join(root, "src"), channels = join(src, "channels");
 const api = join(channels, "api.ts"), registry = join(channels, "registry.ts");
-/** Router-owned surfaces bound to Router internals (Matrix connector, ledger); they ship with Router. */
-const BUILT_IN = new Set(["matrix", "web", "room"]);
+/** Router-owned surfaces bound to Router internals (the ledger); they ship with Router. */
+const BUILT_IN = new Set(["web", "room"]);
 /** External adapters: the public API only. Feishu personal tools stay in `src/services/feishu` until they move to connectors. */
 const EXTERNAL_EXCEPTIONS: Record<string, string[]> = { feishu: ["src/services/feishu/"] };
 /** Router code outside the channel layer that may use one adapter's public entry (kind-specific connection setup). */

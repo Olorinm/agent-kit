@@ -31,7 +31,7 @@ async function bark() {
 
 it("a web turn's answer is pushed to Bark, encrypted, unless the owner has the chat open in a browser", async () => {
   const push = await bark();
-  const t = await setup(cleanup, {}, [{ id: "matrix", kind: "matrix" }, push.connection]);
+  const t = await setup(cleanup, {}, [push.connection]);
   expect((await t.send({ idempotencyKey: ik("w"), text: "查一下机票" })).status).toBe(200);
   await until(() => push.pushes, (items) => items.length === 1);
   expect(push.pushes[0]!.path).toBe("/device-1");
@@ -54,11 +54,11 @@ it("a web turn's answer is pushed to Bark, encrypted, unless the owner has the c
 
 it("schedule notices go where the rule says (ADR 16.6): web only, an explicit push, or a channel without a conversation", async () => {
   const push = await bark();
-  const t = await setup(cleanup, {}, [{ id: "matrix", kind: "matrix" }, { ...push.connection, notify: { replies: false } }]);
+  const t = await setup(cleanup, {}, [{ ...push.connection, notify: { replies: false } }]);
   await t.send({ idempotencyKey: ik("w"), text: "你好" });
   await until(t.events, (items) => items.some((event) => event.kind === "message" && event.text === "回答-1"));
   const sessions = t.extension().sessions!, session = t.extension().communication!.status().inbox[0]!.conversationId;
-  expect(sessions.deliveryConnections()).toEqual(["web", "matrix", "bark"]);
+  expect(sessions.deliveryConnections()).toEqual(["web", "bark", "chat"]);
   expect(sessions.deliveryConnection(session)).toBe("web");
   expect(() => sessions.deliver({ eventId: "e0", targetSessionId: session, text: "x", connectionId: "nope" })).toThrow("delivery_connection_not_found");
 
@@ -75,7 +75,7 @@ it("schedule notices go where the rule says (ADR 16.6): web only, an explicit pu
   await until(() => frames, (items) => items.some((frame) => frame.type === "res"));
 
   // A channel the owner never used here: recorded only, with a suppressed receipt; the open chat is not pushed.
-  expect(sessions.deliver({ eventId: "e2", targetSessionId: session, text: "十点复盘", connectionId: "matrix" }))
+  expect(sessions.deliver({ eventId: "e2", targetSessionId: session, text: "十点复盘", connectionId: "chat" }))
     .toMatchObject({ state: "suppressed", error: "no_conversation_on_connection" });
   // An explicit push target is pushed even with the chat open; its receipt is the push's.
   sessions.deliver({ eventId: "e3", targetSessionId: session, text: "十一点出发", connectionId: "bark" });

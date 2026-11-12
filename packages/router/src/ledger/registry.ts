@@ -2,10 +2,11 @@ import type { DurableStore } from "../communication/store.js";
 import { digest, key } from "../execution/protocol.js";
 import { REGISTRY_V1, REGISTRY_V2 } from "./schema.js";
 
+/** `matrix` is the owner's account id; the provider keeps the name it has in stored identities. */
 export type IdentityProvider = "matrix" | "web" | "oidc" | "feishu" | "feishu-union" | "grove-mail" | "agentmail" | "telegram" | "weixin" | "bark" | "cloudflare-access";
 export type VerifiedBy = "login" | "config" | "pairing" | "admin";
 export interface Identity { identityId: string; personId: string; provider: string; namespace: string; subject: string; verifiedBy: string; createdAt: string; lastSeenAt: string | null }
-/** Today an owner is identified by the owner's Matrix id; the person id is derived from it (ADR 0005 15.2.4). */
+/** An owner is identified by the owner's account id (`@name:namespace`); the person id is derived from it (ADR 0005 15.2.4). */
 export const personId = (ownerId: string) => `prs_${digest(key("person", ownerId)).slice(0, 24)}`;
 const MAIL = new Set(["grove-mail", "agentmail", "cloudflare-access"]);
 /** Mail and login subjects are addresses: NFC and lowercase. Other subjects are provider ids and kept as given. */

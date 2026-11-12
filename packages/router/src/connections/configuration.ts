@@ -9,7 +9,7 @@ import {
   type AgentChannelConfig,
 } from "../service/channels.js";
 import type { ManagedAgent, ManagedService } from "../service/managed.js";
-import type { MatrixConnector } from "../agents/connector.js";
+import type { AgentRuntime } from "../agents/runtime.js";
 import type { HostPort } from "../execution/host.js";
 import type { ServiceHttp } from "../http.js";
 import { WorkError } from "../execution/work.js";
@@ -88,14 +88,14 @@ export class ConnectionConfiguration {
   }
   private runtime(
     agent: ManagedAgent,
-    connector: MatrixConnector,
+    runtime: AgentRuntime,
     config?: AgentChannelConfig,
   ) {
     if (!config) return undefined;
     if (config.host?.binding && !this.hosts) throw new WorkError("host_binding_provider_required", 503);
     return createChannelRuntime(
       agent,
-      connector,
+      runtime,
       config,
       this.agentDirectory(agent.id),
       (name) => {
@@ -115,16 +115,13 @@ export class ConnectionConfiguration {
       config.host?.binding
         ? this.hosts!.host(agent.id, config.host.binding)
         : undefined,
-      // Groups of only the owner and the owner's agents are private for Matrix admission.
-      { ownedAgent: (matrixId) => this.service.agents(agent.owner).some((owned) => owned.matrixId === matrixId), persons: this.service.persons,
+      { persons: this.service.persons,
         identity: this.service.identity, attachments: this.service.attachments, ...this.service.roomOptions(agent),
-        // ADR 0005 19.2: Matrix connections are kept but not registered while Matrix is off for this agent.
-        matrix: this.service.matrixEnabled(agent.id),
         watching: (sessionKey) => this.service.hubs.hub(agent.owner).watching(agent.id, sessionKey) },
     );
   }
-  factory = async (agent: ManagedAgent, connector: MatrixConnector) =>
-    this.runtime(agent, connector, this.configuration(agent));
+  factory = async (agent: ManagedAgent, runtime: AgentRuntime) =>
+    this.runtime(agent, runtime, this.configuration(agent));
   assertFeishuAvailable(appId: string, agentId: string) {
     for (const agent of this.service.agents()) {
       if (agent.id === agentId) continue;
@@ -195,31 +192,31 @@ export class ConnectionConfiguration {
           unlinkSync(validationFile);
         }
         const runtime = await this.service.runtime(agentId),
-          priorScope = runtime.connector.store.get<string>(
+          priorScope = runtime.store.get<string>(
             "communication_host",
             "scope",
           );
         let hasRuns =
-          runtime.connector.store.entries("communication_runs").length > 0;
+          runtime.store.entries("communication_runs").length > 0;
         const executionCollections = ["communication_host", "execution_sessions", "communication_runs",
           "communication_run_events", "communication_questions", "communication_actions",
           "communication_control_receipts", "communication_tools"];
         let savedExecution: Array<{ collection: string; rows: Array<{ id: string; value: unknown }> }> | undefined;
         const restore = () => {
-          if (savedExecution) runtime.connector.store.transaction(() => {
+          if (savedExecution) runtime.store.transaction(() => {
             for (const { collection, rows } of savedExecution!) {
-              for (const { id } of runtime.connector.store.entries(collection)) runtime.connector.store.delete(collection, id);
-              for (const { id, value } of rows) runtime.connector.store.set(collection, id, value);
+              for (const { id } of runtime.store.entries(collection)) runtime.store.delete(collection, id);
+              for (const { id, value } of rows) runtime.store.set(collection, id, value);
             }
           });
           if (!hasRuns) {
             if (priorScope)
-              runtime.connector.store.set(
+              runtime.store.set(
                 "communication_host",
                 "scope",
                 priorScope,
               );
-            else runtime.connector.store.delete("communication_host", "scope");
+            else runtime.store.delete("communication_host", "scope");
           }
           this.pending.delete(agentId);
           if (commitAttempted) {
@@ -232,21 +229,21 @@ export class ConnectionConfiguration {
         try {
           await this.service.configureRuntime(
             agentId,
-            async (agent, connector) => {
+            async (agent, runtime) => {
               signal?.throwIfAborted();
               hasRuns =
-                connector.store.entries("communication_runs").length > 0;
-              if (resetExecution) connector.store.transaction(() => {
-                savedExecution = executionCollections.map(collection => ({ collection, rows: connector.store.entries(collection) }));
-                for (const { collection, rows } of savedExecution) for (const { id } of rows) connector.store.delete(collection, id);
+                runtime.store.entries("communication_runs").length > 0;
+              if (resetExecution) runtime.store.transaction(() => {
+                savedExecution = executionCollections.map(collection => ({ collection, rows: runtime.store.entries(collection) }));
+                for (const { collection, rows } of savedExecution) for (const { id } of rows) runtime.store.delete(collection, id);
               });
-              else if (!hasRuns) connector.store.delete("communication_host", "scope");
+              else if (!hasRuns) runtime.store.delete("communication_host", "scope");
               this.pending.set(agentId, config);
-              return this.runtime(agent, connector, config);
+              return this.runtime(agent, runtime, config);
             },
-            async (agent, connector) => {
+            async (agent, runtime) => {
               restore();
-              return this.runtime(agent, connector, prior);
+              return this.runtime(agent, runtime, prior);
             },
             () => {
               signal?.throwIfAborted();
@@ -272,8 +269,8 @@ export class ConnectionConfiguration {
   async withStoppedRuntime(owner: string, agentId: string, operation: () => Promise<void>, rollback: () => Promise<void>) {
     this.service.owned(agentId, owner);
     await this.service.configureRuntime(agentId,
-      async (agent, connector) => { await operation(); return this.factory(agent, connector); },
-      async (agent, connector) => { await rollback(); return this.factory(agent, connector); });
+      async (agent, runtime) => { await operation(); return this.factory(agent, runtime); },
+      async (agent, runtime) => { await rollback(); return this.factory(agent, runtime); });
   }
   summary(agent: ManagedAgent) {
     const config = this.configuration(agent);

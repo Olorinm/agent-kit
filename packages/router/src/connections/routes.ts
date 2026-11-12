@@ -70,7 +70,6 @@ export function createConnections(
             token: z.string().min(1).max(1024),
           })
           .strict(),
-        z.object({ kind: z.literal("matrix") }).strict(),
         z
           .object({
             kind: z.literal("grove-mail"),
@@ -83,9 +82,6 @@ export function createConnections(
       ])
       .parse(req.body);
     const agent = service.owned(String(req.params.agentId), res.locals.owner);
-    // ADR 0005 19.2: no new Matrix connection while Matrix is off for the deployment or this agent.
-    if (body.kind === "matrix" && !service.matrixEnabled(agent.id))
-      throw new WorkError("matrix_disabled", 409);
     if (
       configuration
         .configuration(agent)
@@ -114,20 +110,6 @@ export function createConnections(
             body.kind === "weixin" ? {} : body,
           ),
         );
-      return;
-    }
-    if (body.kind === "matrix") {
-      res.json(
-        await configuration.edit(res.locals.owner, agent.id, (config) => {
-          config.connections.push({
-            id: "matrix",
-            kind: "matrix",
-            ownerAddresses: [agent.owner],
-            peerAddresses: [],
-            groupIds: [],
-          });
-        }),
-      );
       return;
     }
     if (body.kind !== "grove-mail") throw new WorkError("invalid_request", 400);
@@ -203,7 +185,6 @@ export function createConnections(
               id: string;
               started: boolean;
               error?: string;
-              disabled?: string;
             }>;
           }
         | undefined;
@@ -222,13 +203,10 @@ export function createConnections(
         const running = live?.connections?.find(
           (connection) => connection.id === check.connectionId,
         );
-        if (running?.disabled) {
-          check.status = "disabled";
-          check.detail = "Matrix is off for this deployment or Agent";
-        } else if (!running?.started || running.error) {
+        if (!running?.started || running.error) {
           check.status = "needs_action";
           check.detail = "Connection is not running cleanly";
-        } else if (["matrix", "weixin"].includes(check.kind)) {
+        } else if (check.kind === "weixin") {
           check.status = "verified";
           check.detail =
             "Connection started; send a real message to verify a reply";

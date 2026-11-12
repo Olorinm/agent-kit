@@ -100,7 +100,7 @@ describe("reset (ADR 0005 16.3)", () => {
   it("runs /new from a Feishu owner DM against the shared session, replying only there", async () => {
     const dir = mkdtempSync(join(tmpdir(), "ledger-feishu-")); cleanup.push(() => rmSync(dir, { recursive: true, force: true }));
     writeFileSync(join(dir, "secret"), "feishu-secret");
-    const t = await setup(cleanup, {}, [{ id: "matrix", kind: "matrix" }, { id: "feishu", kind: "feishu", appId: "cli_test", appSecretFile: join(dir, "secret"), ownerAddresses: ["ou_owner"] }]);
+    const t = await setup(cleanup, {}, [{ id: "feishu", kind: "feishu", appId: "cli_test", appSecretFile: join(dir, "secret"), ownerAddresses: ["ou_owner"] }]);
     await t.send({ idempotencyKey: ik(), text: "网页消息" });
     await until(t.events, (items) => items.some((event) => event.text === "回答-1"));
     const feishu = (externalId: string, text: string) => t.extension().communication!.receive("feishu", { externalId, sender: "ou_owner", scope: "direct",
@@ -126,9 +126,9 @@ describe("purge (ADR 0005 16.4)", () => {
   it("needs the typed confirmation, deletes the transcript, tombstones claims and continues in a new window", async () => {
     const t = await setup(cleanup);
     await t.send({ idempotencyKey: ik(), text: "要删掉的话" });
-    const matrix = { externalId: "$m1", sender: owner, scope: "direct" as const, threadId: "!dm:example.test", text: "Matrix 私信",
+    const direct = { externalId: "$m1", sender: owner, scope: "direct" as const, threadId: "!dm:example.test", text: "渠道私信",
       reply: { target: "!dm:example.test", messageId: "$m1", data: { sender: owner, thread: "" } } };
-    t.extension().communication!.receive("matrix", matrix);
+    t.extension().communication!.receive("chat", direct);
     const before = await until(t.events, (items) => items.some((event) => event.text === "回答-2"));
     const frames = await socket(t);
     const purge = (body: Record<string, unknown>) => t.api(`${t.chat}/purge`, "alice", "POST", body);
@@ -139,11 +139,11 @@ describe("purge (ADR 0005 16.4)", () => {
     const page = (await t.api(`${t.chat}/events`)).data;
     expect(page).toMatchObject({ generation: 2, lastSeq: 1, events: [{ seq: 1, kind: "window", window: 2 }] });
     expect(JSON.stringify(page)).not.toContain("要删掉的话");
-    const store = (await t.service.runtime(t.agent.id)).connector.store;
+    const store = (await t.service.runtime(t.agent.id)).store;
     expect(JSON.stringify(store.entries("communication_inbox"))).not.toContain("要删掉的话");
-    expect(t.ledger.claimFor("matrix", "$m1")).toMatchObject({ state: "tombstone", eventId: null });
+    expect(t.ledger.claimFor("chat", "$m1")).toMatchObject({ state: "tombstone", eventId: null });
     // A redelivered channel message does not come back.
-    t.extension().communication!.receive("matrix", matrix);
+    t.extension().communication!.receive("chat", direct);
     await new Promise((r) => setTimeout(r, 300));
     expect((await t.events()).map((event) => event.kind)).toEqual(["window"]);
     // The chat continues in the new window and execution context.

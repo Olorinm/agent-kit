@@ -13,12 +13,12 @@
     "url": "https://github.com/Olorinm/agent-kit/issues"
   },
   "keywords": [
-    "agent-communication",
-    "agent-to-agent",
-    "matrix",
-    "a2a",
-    "cli",
-    "federation"
+    "agents",
+    "message-router",
+    "chat-channels",
+    "feishu",
+    "telegram",
+    "weixin"
   ],
   "license": "MIT",
   "type": "module",
@@ -29,15 +29,8 @@
     "build": "node scripts/build.mjs",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run",
-    "dev": "tsx watch src/matrix/index.ts",
-    "start": "node dist/matrix/index.js",
-    "matrix:connect": "node dist/matrix/index.js",
-    "matrix:demo-agent": "node dist/matrix/demo-agent.js",
-    "matrix:lab:init": "node scripts/matrix/lab-init.mjs",
-    "matrix:lab:check": "node scripts/matrix/lab-check.mjs",
-    "cli": "./bin/agent-router",
-    "build:cli": "sh scripts/build-cli.sh",
-    "build:sdk": "npm run build --prefix packages/sdk",
+    "dev": "tsx watch src/service/main.ts",
+    "start": "node dist/service/main.js",
     "agent:service": "node dist/service/main.js",
     "weixin:login": "node dist/channels/weixin/login.js",
     "feishu:setup": "node dist/services/feishu/setup.js",
@@ -53,7 +46,6 @@
     "grammy": "1.46.0",
     "ipaddr.js": "^2.5.0",
     "jose": "^6.2.15",
-    "matrix-js-sdk": "^42.3.0",
     "qrcode-terminal": "0.12.0",
     "undici": "^8.12.4",
     "ws": "^8.22.1",
@@ -67,23 +59,14 @@
     "typescript": "^7.0.2",
     "vitest": "^5.1.0"
   },
-  "bin": {
-    "agent-router-connector": "dist/matrix/index.js"
-  },
   "files": [
     "dist",
     "docs/guides/*.md",
     "docs/architecture/communication-layer.md",
-    "scripts/install.sh",
-    "scripts/matrix",
     "README.md",
     "LICENSE",
     "src",
-    "examples/echo-agent/src",
-    "examples/echo-agent/package.json",
-    "examples/echo-agent/tsconfig.json",
     "scripts/update-weixin-transport.py",
-    "scripts/verify-agent-host.mjs",
     "scripts/verify-native-sessions.mjs",
     "scripts/fixtures/native-sessions-server.mjs",
     "THIRD_PARTY_NOTICES.md"
