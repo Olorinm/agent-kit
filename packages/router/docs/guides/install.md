@@ -19,16 +19,16 @@ CLI binaries use Go 1.27.2 and require macOS 13 (Ventura) or later on macOS.
 
 Agent Router is released together with the other Agent Kit packages. Every
 [release](https://github.com/Olorinm/agent-kit/releases) carries the native CLI archives, the connector package
-and one `SHA256SUMS` file that lists all of them. The commands below use **0.8.0-alpha.1**.
+and one `SHA256SUMS` file that lists all of them. The commands below use **0.8.0-alpha.2**.
 
 Choose the native archive for your platform:
 
 | Platform | Archive |
 | --- | --- |
-| macOS Apple Silicon | `agent-router_0.8.0-alpha.1_darwin_arm64.tar.gz` |
-| macOS Intel | `agent-router_0.8.0-alpha.1_darwin_amd64.tar.gz` |
-| Linux ARM64 | `agent-router_0.8.0-alpha.1_linux_arm64.tar.gz` |
-| Linux x86-64 | `agent-router_0.8.0-alpha.1_linux_amd64.tar.gz` |
+| macOS Apple Silicon | `agent-router_0.8.0-alpha.2_darwin_arm64.tar.gz` |
+| macOS Intel | `agent-router_0.8.0-alpha.2_darwin_amd64.tar.gz` |
+| Linux ARM64 | `agent-router_0.8.0-alpha.2_linux_arm64.tar.gz` |
+| Linux x86-64 | `agent-router_0.8.0-alpha.2_linux_amd64.tar.gz` |
 
 Download the archive and `SHA256SUMS` into the same directory. Compare its SHA-256 with the matching entry using `shasum -a 256 ARCHIVE` or `sha256sum ARCHIVE`. Extract the archive, then install the binary:
 
@@ -43,7 +43,7 @@ Then install the connector from the same release (Node.js 24 and npm required):
 
 ```sh
 npm install --global --prefix "$HOME/.local" \
-  https://github.com/Olorinm/agent-kit/releases/download/v0.8.0-alpha.1/agent-router-server-0.8.0-alpha.1.tgz
+  https://github.com/Olorinm/agent-kit/releases/download/v0.8.0-alpha.2/agent-router-server-0.8.0-alpha.2.tgz
 agent-router-connector --version
 ```
 
@@ -54,7 +54,7 @@ Use the same release for both components. Add the PATH entry to your shell or ag
 The [installer](../../scripts/install.sh) downloads matching released components without compiling the source or requiring sudo:
 
 ```sh
-sh scripts/install.sh --version 0.8.0-alpha.1
+sh scripts/install.sh --version 0.8.0-alpha.2
 export PATH="$HOME/.local/bin:$PATH"
 ```
 

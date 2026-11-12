@@ -78,7 +78,7 @@ carries:
 Install a package straight from a release, for example:
 
 ```sh
-npm install https://github.com/Olorinm/agent-kit/releases/download/v0.8.0-alpha.1/olorinm-agent-host-0.8.0-alpha.1.tgz
+npm install https://github.com/Olorinm/agent-kit/releases/download/v0.8.0-alpha.2/olorinm-agent-host-0.8.0-alpha.2.tgz
 ```
 
 A tag may point at any commit whose checks have passed, including a branch that
