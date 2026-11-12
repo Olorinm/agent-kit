@@ -1,0 +1,25 @@
+# Changelog
+
+Notable changes to Agent Kit, newest first. All packages share one version. Pushing a `v<version>`
+tag publishes a GitHub Release whose notes are this file's section for that version, so add the
+section in the version-bump commit before tagging. Changes up to the versions listed under
+0.8.0-alpha.1 are in each package's own `CHANGELOG.md`.
+
+## [0.8.0-alpha.1] - 2026-11-12
+
+First release from this repository. Host, Router, Connectors and Environment now share one
+version and one release; they continue from Host 0.1.0-alpha.14, Router 0.7.0-alpha.14,
+Connectors 0.1.0-alpha.11 and Environment 0.2.0-alpha.3.
+
+- **Release:** one tag `v<version>` publishes every package, the Router CLI archives and a single
+  `SHA256SUMS` covering all of them. `scripts/set-version.mjs` sets the version everywhere.
+- **Environment:** Cloudflare is the only provider; the provider interface is unchanged and
+  further providers are added through the factory table in `src/config.ts`. Removed the Alibaba
+  and Volcengine providers, the E2B driver, the OSS and TOS workspace stores, and the `./sandbox`,
+  `./contracts`, `./sdk`, `./oma` and `./workspace` exports. The package has no runtime
+  dependencies and is distributed as a regular `.tgz` archive.
+- **Host:** removed the React editor example and the UI package test; dropped the unused
+  `@earendil-works/pi-agent-core` dependency. No runtime change.
+- **Router:** the CLI reads its version from `package.json`. `scripts/install.sh` installs
+  releases from this repository.
+- **Connectors:** no functional change.

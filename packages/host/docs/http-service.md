@@ -89,7 +89,7 @@ The service manages transport, task storage and callbacks around the shared adap
 
 ## Start a service
 
-Node.js 24+ is required. Install a [GitHub Release archive](quickstart.md), or build one from a checkout with `npm pack`. The current archive is `olorinm-agent-host-0.1.0-alpha.6.tgz`; it is not published to the npm registry.
+Node.js 24+ is required. Install a [GitHub Release archive](quickstart.md), or build one from a checkout with `npm pack`. It is not published to the npm registry.
 
 Create `host.json`:
 

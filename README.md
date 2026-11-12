@@ -1,7 +1,8 @@
 # Agent Kit
 
-Building blocks for agent products. Each package lives in its own directory,
-has its own dependencies, changelog and tests, and is released on its own.
+Building blocks for agent products. Each package lives in its own directory with
+its own dependencies and tests. All packages share one version and are released
+together.
 
 | Package | Directory | npm name |
 | --- | --- | --- |
@@ -52,13 +53,37 @@ when that package changes.
 
 ## Releases
 
-Each package is released from a tag `<package>-v<version>`, for example
-`host-v0.1.0-alpha.15`. The [release workflow](.github/workflows/release.yml)
-checks that the tag matches the package version and that `CHANGELOG.md` has a
-`## [<version>]` section, which becomes the release notes. It builds on Linux
-with a pinned Node.js and npm, so a release archive can be reproduced from its
-source revision. Running the workflow manually builds and packs a package
-without publishing and prints the archive integrities.
+All packages share one version. To release:
+
+```sh
+node scripts/set-version.mjs 0.8.0-alpha.2   # every package.json and lockfile
+# add a "## [0.8.0-alpha.2]" section to CHANGELOG.md, commit, wait for CI
+git tag v0.8.0-alpha.2 && git push origin v0.8.0-alpha.2
+```
+
+The [release workflow](.github/workflows/release.yml) builds every package at the
+tagged commit on Linux with a pinned Node.js and npm and publishes one GitHub
+Release. Its notes are the `CHANGELOG.md` section for that version. The release
+carries:
+
+| Asset | Contents |
+| --- | --- |
+| `olorinm-agent-host-<version>.tgz` | Host npm package |
+| `agent-router-server-<version>.tgz` | Router npm package |
+| `agent-router_<version>_<os>_<arch>.tar.gz` | Router CLI for macOS and Linux, amd64 and arm64 |
+| `olorinm-agent-connectors-<version>.tgz` | Connectors npm package |
+| `olorinm-agent-environment-<version>.tgz` | Environment npm package |
+| `SHA256SUMS` | Checksums of every archive above |
+
+Install a package straight from a release, for example:
+
+```sh
+npm install https://github.com/Olorinm/agent-kit/releases/download/v0.8.0-alpha.1/olorinm-agent-host-0.8.0-alpha.1.tgz
+```
+
+A tag may point at any commit whose checks have passed, including a branch that
+is still under review, so a product can try a change before it is merged.
+Running the workflow manually builds and packs without publishing.
 
 ## License
 

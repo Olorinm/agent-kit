@@ -2,7 +2,7 @@
 # Install a released Go CLI and its matching connector into a user-owned prefix.
 set -eu
 
-install_version=${AGENT_ROUTER_VERSION:-0.6.0}
+install_version=${AGENT_ROUTER_VERSION:-0.8.0-alpha.1}
 install_prefix=${AGENT_ROUTER_INSTALL_PREFIX:-"$HOME/.local"}
 install_connector=true
 usage() {
@@ -10,7 +10,7 @@ usage() {
 Usage: sh scripts/install.sh [--version VERSION] [--prefix DIRECTORY] [--cli-only]
 
 Downloads the native Go CLI and installs the matching connector release.
-Default: version 0.6.0, prefix $HOME/.local. No sudo or source compilation.
+Default: version 0.8.0-alpha.1, prefix $HOME/.local. No sudo or source compilation.
 The connector requires Node.js 24+ and npm. --cli-only needs neither.
 Profiles, accounts and shell configuration are not changed.
 EOF
@@ -27,7 +27,7 @@ while [ "$#" -gt 0 ]; do
     *) fail "Unknown option: $1 (use --help)" ;;
   esac
 done
-case "$install_version" in ''|*[!0-9A-Za-z.-]*) fail 'Invalid release version; use a version such as 0.6.0 without the v prefix.' ;; esac
+case "$install_version" in ''|*[!0-9A-Za-z.-]*) fail 'Invalid release version; use a version such as 0.8.0-alpha.1 without the v prefix.' ;; esac
 case "$install_prefix" in /*) ;; *) fail 'Installation prefix must be an absolute path.' ;; esac
 case "$(uname -s)" in Darwin) install_os=darwin ;; Linux) install_os=linux ;; *) fail 'Supported platforms: macOS and Linux.' ;; esac
 case "$(uname -m)" in arm64|aarch64) install_arch=arm64 ;; x86_64|amd64) install_arch=amd64 ;; *) fail 'Supported architectures: amd64 and arm64.' ;; esac
@@ -51,20 +51,14 @@ mkdir -p "$install_prefix/bin"
 install_stage=$(mktemp -d "$install_prefix/.agent-router-install.XXXXXX")
 trap 'rm -rf "$install_stage"' 0
 trap 'exit 1' 1 2 15
-# Releases are published in Olorinm/agent-kit as router-v<version>. Versions up to
-# 0.7.0-alpha.14 were released in the former Olorinm/agent-router repository.
-install_base="https://github.com/Olorinm/agent-kit/releases/download/router-v$install_version"
-install_legacy_base="https://github.com/Olorinm/agent-router/releases/download/v$install_version"
+install_base="https://github.com/Olorinm/agent-kit/releases/download/v$install_version"
 install_archive="agent-router_${install_version}_${install_os}_${install_arch}.tar.gz"
 download() {
   curl --fail --location --silent --show-error --proto '=https' --tlsv1.2 \
     --connect-timeout 15 --max-time 180 --retry 2 "$install_base/$1" --output "$install_stage/$1"
 }
 printf 'Downloading Agent Router %s for %s/%s\n' "$install_version" "$install_os" "$install_arch"
-if ! download "$install_archive" 2>/dev/null; then
-  install_base=$install_legacy_base
-  download "$install_archive"
-fi
+download "$install_archive"
 download SHA256SUMS
 install_expected=$(awk -v name="$install_archive" '$2 == name || $2 == "./" name {print $1}' "$install_stage/SHA256SUMS")
 [ -n "$install_expected" ] || fail 'The release checksum file does not list this CLI archive.'
@@ -81,8 +75,6 @@ tar -xzf "$install_stage/$install_archive" -C "$install_stage/cli" agent-router
 if [ "$install_connector" = true ]; then
   install_package="agent-router-server-${install_version}.tgz"
   download "$install_package"
-  # Connector packages are distributed by HTTPS in the same GitHub release.
-  # v0.6.0's SHA256SUMS covers the CLI archives only.
   npm install --global --prefix "$install_prefix" --no-audit --no-fund "$install_stage/$install_package"
   "$install_prefix/bin/agent-router-connector" --version
 fi

@@ -22,7 +22,6 @@ Agent Environment
 - Execute argv commands with streaming stdout/stderr, observed exit status, and cancellation.
 - Read and write exact file bytes; recursively list files.
 - Return an authenticated HTTP endpoint for a port inside the environment.
-- Validate artifact paths and infer content types (`@olorinm/agent-environment/workspace`).
 
 Choose the image, CPU, memory and disk in the gateway **template**. Choose Codex, Pi, Claude Code, or another runtime in that image or in your own bootstrap command. This module does not choose an agent kernel.
 

@@ -14,6 +14,10 @@ defaults:
   run:
     working-directory: packages/router
 
+concurrency:
+  group: ci-router-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   test:
     runs-on: ubuntu-latest
@@ -42,7 +46,6 @@ jobs:
           (cd "$RUNNER_TEMP/agent-router-connector" && node --input-type=module -e 'await import("@agent-router/server")')
           "$RUNNER_TEMP/agent-router-connector/node_modules/.bin/agent-router-connector" --version | node -e 'let data="";process.stdin.on("data",c=>data+=c);process.stdin.on("end",()=>{if(JSON.parse(data).component!=="connector")process.exit(1)})'
 
-
   cli:
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -64,6 +67,6 @@ jobs:
       - name: Verify Linux release archive
         run: |
           mkdir -p "$RUNNER_TEMP/agent-router-cli"
-          tar -xzf state/release/agent-router_0.7.0-alpha.14_linux_amd64.tar.gz -C "$RUNNER_TEMP/agent-router-cli"
+          tar -xzf state/release/agent-router_*_linux_amd64.tar.gz -C "$RUNNER_TEMP/agent-router-cli"
           PATH=/nonexistent "$RUNNER_TEMP/agent-router-cli/agent-router" --version
           (cd state/release && shasum -a 256 -c SHA256SUMS)

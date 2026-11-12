@@ -1,16 +1,7 @@
 # Changelog
 
-Notable changes to Agent Host, newest first. Each version has a GitHub Release with the same notes
-and the package archive. When releasing, add the new section here in the version-bump commit; the
-Release notes are copied from it.
-
-## [0.1.0-alpha.15] - 2026-11-12
-
-- Removed the React document editor example (`examples/react-editor`), the React UI guide and the
-  UI package test (`test:ui:package`, `scripts/test-ui-package.mjs`, `scripts/smoke-ui-native.mjs`).
-  The package no longer installs Agent UI, React, esbuild or Playwright for development. The
-  published archive no longer contains `examples/react-editor`. No runtime change.
-- Dropped the unused runtime dependency `@earendil-works/pi-agent-core`; nothing imports it.
+Changes to Agent Host before it joined the shared Agent Kit version. Later changes are in the
+[repository changelog](../../CHANGELOG.md).
 
 ## [0.1.0-alpha.14] - 2026-11-05
 

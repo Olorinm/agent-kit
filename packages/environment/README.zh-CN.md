@@ -21,7 +21,6 @@ Agent Environment
 - 执行命令，流式返回标准输出和错误输出，保留退出码，支持取消。
 - 按原始字节读写文件、递归列出文件。
 - 为环境内某个端口返回带鉴权的 HTTP 地址。
-- 校验文件路径、推断内容类型（`@olorinm/agent-environment/workspace`）。
 
 镜像、CPU、内存和磁盘由网关**模板**定义。环境里运行 Codex、Pi、Claude Code 还是其他内核，由调用方的镜像或启动命令决定。
 
