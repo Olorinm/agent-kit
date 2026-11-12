@@ -51,14 +51,20 @@ mkdir -p "$install_prefix/bin"
 install_stage=$(mktemp -d "$install_prefix/.agent-router-install.XXXXXX")
 trap 'rm -rf "$install_stage"' 0
 trap 'exit 1' 1 2 15
-install_base="https://github.com/Olorinm/agent-router/releases/download/v$install_version"
+# Releases are published in Olorinm/agent-kit as router-v<version>. Versions up to
+# 0.7.0-alpha.14 were released in the former Olorinm/agent-router repository.
+install_base="https://github.com/Olorinm/agent-kit/releases/download/router-v$install_version"
+install_legacy_base="https://github.com/Olorinm/agent-router/releases/download/v$install_version"
 install_archive="agent-router_${install_version}_${install_os}_${install_arch}.tar.gz"
 download() {
   curl --fail --location --silent --show-error --proto '=https' --tlsv1.2 \
     --connect-timeout 15 --max-time 180 --retry 2 "$install_base/$1" --output "$install_stage/$1"
 }
 printf 'Downloading Agent Router %s for %s/%s\n' "$install_version" "$install_os" "$install_arch"
-download "$install_archive"
+if ! download "$install_archive" 2>/dev/null; then
+  install_base=$install_legacy_base
+  download "$install_archive"
+fi
 download SHA256SUMS
 install_expected=$(awk -v name="$install_archive" '$2 == name || $2 == "./" name {print $1}' "$install_stage/SHA256SUMS")
 [ -n "$install_expected" ] || fail 'The release checksum file does not list this CLI archive.'

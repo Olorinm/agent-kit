@@ -1,4 +1,4 @@
-module github.com/Olorinm/agent-router
+module github.com/Olorinm/agent-kit/packages/router
 
 go 1.26.0
 

@@ -6,7 +6,8 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/Olorinm/agent-connectors.git"
+    "url": "https://github.com/Olorinm/agent-kit.git",
+    "directory": "packages/connectors"
   },
   "engines": {
     "node": ">=24"

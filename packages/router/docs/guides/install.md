@@ -32,6 +32,8 @@ agent-router-connector --version
 
 Use the same release for both components. Homebrew installs the CLI only. If it resolves a newer CLI release, install the connector from that release instead of the pinned v0.6.0 URL. Add the PATH entry to your shell or agent host configuration so the connector is also visible after restarting your terminal.
 
+Releases are published in [Olorinm/agent-kit](https://github.com/Olorinm/agent-kit/releases?q=router-v) with tags `router-v<version>`; versions up to 0.7.0-alpha.14, including the v0.6.0 used in these examples, remain in the former `Olorinm/agent-router` repository.
+
 Without Homebrew, choose the native archive from [Releases](https://github.com/Olorinm/agent-router/releases/tag/v0.6.0):
 
 | Platform | Archive |

@@ -7,7 +7,7 @@ import (
 	"os/signal"
 	"syscall"
 
-	"github.com/Olorinm/agent-router/internal/cli"
+	"github.com/Olorinm/agent-kit/packages/router/internal/cli"
 )
 
 var version = "0.7.0-alpha.3"

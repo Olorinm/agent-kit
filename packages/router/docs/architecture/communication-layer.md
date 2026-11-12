@@ -200,7 +200,7 @@ Grove Mail 的 WebSocket 是实时通知，断线恢复仍需持久化事件 API
 | [工作队列与认领](../../src/matrix/cli-work.ts) | 工作状态、修订、认领、结果收据、取消和上下文串行 | 输入来源改为渠道中立引用，执行绑定以逻辑会话为键 |
 | [Host worker](../../src/execution/host-worker.ts) | 从任务队列调用 Host、持久化会话绑定 | 通用 Agent 统一走 Host；专用任务消费者使用公开领取协议 |
 | [Grove Mail 适配器](../../src/channels/grove-mail/channel.ts) | 事件回放、webhook、邮箱作用域、幂等发送、回复与不确定状态 | 新增 Router 邮件适配器，保存游标和邮箱到 Agent 的绑定 |
-| [Agent Host 公共边界](https://github.com/Olorinm/agent-host/blob/main/docs/scope.md)、[HTTP 服务](https://github.com/Olorinm/agent-host/blob/main/docs/http-service.md) | 内核集成、原生会话绑定、运行与输出、取消和恢复 | 新增执行桥和绑定账本；Host 不承担渠道与联系人业务 |
+| [Agent Host 公共边界](https://github.com/Olorinm/agent-kit/blob/main/packages/host/docs/scope.md)、[HTTP 服务](https://github.com/Olorinm/agent-kit/blob/main/packages/host/docs/http-service.md) | 内核集成、原生会话绑定、运行与输出、取消和恢复 | 新增执行桥和绑定账本；Host 不承担渠道与联系人业务 |
 
 当前已实现文字、媒体与原生交互闭环：显式配置的聊天入口进入统一队列，由固定 Host runtime 执行，最终结果回复原渠道。未配置个人聊天的 Agent 保持原 `say` / `send` 行为。协议测试通过不等于平台账号已经上线，真实联调仍需要渠道凭据和可用的 Host runtime。
 
