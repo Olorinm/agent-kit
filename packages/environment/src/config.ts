@@ -1,34 +1,45 @@
 import { readFile, stat } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { EnvironmentManager } from "./manager.js";
-import { createAlibabaProvider, createVolcengineProvider } from "./providers.js";
 import { EnvironmentError } from "./errors.js";
 import { createCloudflareProvider } from "./cloudflare.js";
+import type { EnvironmentProvider } from "./types.js";
+
+/** One entry of the `providers` array, with its key file already read. */
+export interface ProviderConfiguration {
+  id: string;
+  kind: string;
+  apiUrl?: string;
+  apiKey: string;
+  requestTimeoutMs?: number;
+  allowHttp?: boolean;
+}
+export type ProviderFactory = (options: ProviderConfiguration) => EnvironmentProvider;
+
+/** Provider kinds accepted in configuration files. Add a provider by adding its factory here. */
+const factories: Record<string, ProviderFactory> = {
+  cloudflare: options => createCloudflareProvider({ ...options, apiUrl: options.apiUrl ?? "" }),
+};
 
 export async function loadConfiguration(path: string): Promise<EnvironmentManager> {
   const document = JSON.parse(await readFile(path, "utf8")) as {
-    providers: Array<{ id: string; kind: string; domain?: string; apiUrl?: string; sandboxUrl?: string; serviceUrl?: string;
-      apiKeyFile: string; requestTimeoutMs?: number; allowHttp?: boolean; pausedRetention?: string }>;
+    providers: Array<{ id: string; kind: string; apiUrl?: string; apiKeyFile: string; requestTimeoutMs?: number; allowHttp?: boolean }>;
   };
   if (!Array.isArray(document.providers)) throw new EnvironmentError("invalid_config", "providers must be an array.");
   const providers = [];
   for (const item of document.providers) {
-    if (!["alibaba", "volcengine", "cloudflare"].includes(item.kind) || typeof item.apiKeyFile !== "string")
-      throw new EnvironmentError("invalid_config", "Each provider needs kind and apiKeyFile.");
+    const factory = Object.hasOwn(factories, item.kind) ? factories[item.kind] : undefined;
+    if (!factory || typeof item.apiKeyFile !== "string")
+      throw new EnvironmentError("invalid_config", "Each provider needs a supported kind and apiKeyFile.");
     const secretPath = resolve(dirname(resolve(path)), item.apiKeyFile);
     const metadata = await stat(secretPath);
     if (!metadata.isFile() || process.platform !== "win32" && (metadata.mode & 0o077) !== 0)
       throw new EnvironmentError("insecure_key_file", "API key files must be private regular files (0600).");
-    const options = {
-      id: item.id, domain: item.domain, apiUrl: item.apiUrl,
-      sandboxUrl: item.sandboxUrl, serviceUrl: item.serviceUrl,
+    providers.push(factory({
+      id: item.id, kind: item.kind, apiUrl: item.apiUrl,
       apiKey: (await readFile(secretPath, "utf8")).trim(),
       requestTimeoutMs: item.requestTimeoutMs, allowHttp: item.allowHttp,
-      pausedRetention: item.pausedRetention,
-    };
-    providers.push(item.kind === "cloudflare"
-      ? createCloudflareProvider({ ...options, apiUrl: item.apiUrl ?? "" })
-      : item.kind === "alibaba" ? createAlibabaProvider(options) : createVolcengineProvider(options));
+    }));
   }
   return new EnvironmentManager(providers);
 }

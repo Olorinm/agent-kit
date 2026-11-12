@@ -1,18 +1,10 @@
 {
   "providers": [
     {
-      "id": "ali",
-      "kind": "alibaba",
-      "domain": "sandbox.example.com",
-      "apiKeyFile": "./alibaba-sandbox.key",
-      "pausedRetention": "24h"
-    },
-    {
-      "id": "volc",
-      "kind": "volcengine",
-      "domain": "sandbox.example.net",
-      "apiUrl": "https://sandbox.example.net",
-      "apiKeyFile": "./volcengine-sandbox.key"
+      "id": "cloudflare",
+      "kind": "cloudflare",
+      "apiUrl": "https://YOUR-WORKER.YOUR-SUBDOMAIN.workers.dev",
+      "apiKeyFile": "./gateway-key"
     }
   ]
 }

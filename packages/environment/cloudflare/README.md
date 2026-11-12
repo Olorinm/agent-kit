@@ -64,7 +64,7 @@ unrelated users. Mau must load an Environment build containing this adapter.
 The first launch installs the verified Host package, pinned native Codex CLI,
 system CA certificates and basic tools. Subsequent launches reuse the snapshot.
 For production, replace runtime installation with a verified immutable image.
-SSH upgrade forwarding and shared OMA object-storage mounts are not validated
+SSH upgrade forwarding and shared object-storage mounts are not validated
 for this gateway; do not enable those profile options.
 
 ## Security and lifecycle

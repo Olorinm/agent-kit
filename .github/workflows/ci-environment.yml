@@ -10,11 +10,6 @@ permissions:
 defaults:
   run:
     working-directory: packages/environment
-env:
-  # scripts/build.mjs applies the E2B patch with `git apply`, which skips paths
-  # outside the current directory inside a repository. Stop repository discovery
-  # above the package so the patch applies to the package's build copy.
-  GIT_CEILING_DIRECTORIES: ${{ github.workspace }}/packages
 jobs:
   check:
     runs-on: ubuntu-latest
@@ -32,9 +27,3 @@ jobs:
       - run: npm run check --prefix cloudflare
       - run: npm test --prefix cloudflare
       - run: node --test cloudflare/backup/test/*.test.mjs
-      - uses: actions/checkout@v4
-        with:
-          repository: BroZhong/open-managed-agents
-          ref: e04695152219a91c2ecdff41955dfc3fab73b438
-          path: packages/environment/state/oma-reference
-      - run: npm run check:upstream -- state/oma-reference
