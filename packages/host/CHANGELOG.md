@@ -10,6 +10,7 @@ Release notes are copied from it.
   UI package test (`test:ui:package`, `scripts/test-ui-package.mjs`, `scripts/smoke-ui-native.mjs`).
   The package no longer installs Agent UI, React, esbuild or Playwright for development. The
   published archive no longer contains `examples/react-editor`. No runtime change.
+- Dropped the unused runtime dependency `@earendil-works/pi-agent-core`; nothing imports it.
 
 ## [0.1.0-alpha.14] - 2026-11-05
 
