@@ -1,6 +1,6 @@
 {
   "name": "@olorinm/agent-host",
-  "version": "0.1.0-alpha.14",
+  "version": "0.1.0-alpha.15",
   "description": "Product-independent native Agent sessions, tools and interaction routing",
   "type": "module",
   "license": "MIT",
@@ -28,12 +28,6 @@
     "examples/http-editor/package.json",
     "examples/http-editor/host.example.json",
     "plugins",
-    "examples/react-editor/app.jsx",
-    "examples/react-editor/build.mjs",
-    "examples/react-editor/editor.css",
-    "examples/react-editor/index.html",
-    "examples/react-editor/README.md",
-    "examples/react-editor/server.mjs",
     "examples/cloud"
   ],
   "exports": {
@@ -116,8 +110,7 @@
     "test": "npm run build && node --test test/*.test.mjs",
     "prepack": "npm run build",
     "test:package": "node scripts/test-package.mjs",
-    "probe:codex": "node scripts/probe-codex.mjs",
-    "test:ui:package": "node scripts/test-ui-package.mjs"
+    "probe:codex": "node scripts/probe-codex.mjs"
   },
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "0.3.300",
@@ -132,16 +125,11 @@
   },
   "devDependencies": {
     "@moonshot-ai/kimi-code": "2.2.0",
-    "@olorinm/agent-ui": "https://github.com/Olorinm/agent-ui/releases/download/v0.1.0-alpha.2/olorinm-agent-ui-0.1.0-alpha.2.tgz",
     "@openai/codex": "0.166.0",
     "@opencode/cli": "2.0.29",
-    "@playwright/test": "1.63.0",
     "@types/cross-spawn": "6.0.6",
     "@types/node": "24.10.1",
     "@types/ws": "8.18.1",
-    "esbuild": "0.28.2",
-    "react": "19.3.0",
-    "react-dom": "19.3.0",
     "typescript": "5.9.3"
   }
 }
