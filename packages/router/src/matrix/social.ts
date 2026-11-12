@@ -1,5 +1,5 @@
 import { z } from "zod";
-import type { MatrixConnector, Contact, Conversation } from "./connector.js";
+import type { MatrixConnector, Contact, Conversation } from "../agents/connector.js";
 import { digest, key, mxid, ROOM_EVENT, type RoomEvent } from "./protocol.js";
 import type { AccountEvent, MatrixDataTransport } from "./transport.js";
 

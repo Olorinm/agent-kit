@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { ManagedService, createManagedApp, type ServiceConfig } from "../src/matrix/managed.js";
+import { ManagedService, createManagedApp, type ServiceConfig } from "../src/service/managed.js";
 import { loadServiceConfig } from "../src/service/config.js";
 
 /** `GET /web/me` → `limits.features` lists every ADR 0005 feature; each flag is independent and off by default. */

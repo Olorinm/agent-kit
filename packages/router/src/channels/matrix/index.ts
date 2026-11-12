@@ -1,5 +1,5 @@
 import { z } from "zod";
-import type { MatrixConnector } from "../../matrix/connector.js";
+import type { MatrixConnector } from "../../agents/connector.js";
 import { connectionFields, defineChannel } from "../api.js";
 import { MatrixChannel } from "./channel.js";
 

@@ -1,10 +1,10 @@
 import { createClient, MatrixError } from "matrix-js-sdk";
 import { z } from "zod";
-import { ConnectorStore } from "./store.js";
+import { DurableStore } from "../communication/store.js";
 import { SdkMatrixTransport, type SyncBatch } from "./transport.js";
 import { digest, type RoomEvent } from "./protocol.js";
-import { delay } from "./connector.js";
-import { WorkError } from "./cli-work.js";
+import { delay } from "../agents/connector.js";
+import { WorkError } from "../execution/work.js";
 
 const eventSchema = z.object({ event_id: z.string().min(1), room_id: z.string().min(1),
   sender: z.string().min(1), type: z.string().min(1), state_key: z.string().optional(),
@@ -14,7 +14,7 @@ export const transactionSchema = z.object({ events: z.array(eventSchema).max(100
 /** ACK follows the atomic transaction journal + per-Agent fanout, never model execution. */
 export class ApplicationInbox {
   /** `accepts` drops events for agents whose Matrix adapter does not run (dormant, ADR 0005 19.1). */
-  constructor(readonly store: ConnectorStore, readonly agentForUser: (userId: string) => string | undefined,
+  constructor(readonly store: DurableStore, readonly agentForUser: (userId: string) => string | undefined,
     readonly accepts: (agentId: string) => boolean = () => true) {}
   receive(id: string, input: unknown): void {
     const { events } = transactionSchema.parse(input);

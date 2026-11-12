@@ -11,11 +11,11 @@ import {
   ManagedService,
   createManagedApp,
   type ManagedAgent,
-} from "../src/matrix/managed.js";
+} from "../src/service/managed.js";
 import type { ApplicationInbox } from "../src/matrix/application-service.js";
 import type { MatrixTransport } from "../src/matrix/transport.js";
 import type { RoomEvent } from "../src/matrix/protocol.js";
-import { WorkError } from "../src/matrix/cli-work.js";
+import { WorkError } from "../src/execution/work.js";
 import { ConnectionSetup } from "../src/connections/connections.js";
 import { ConnectionConfiguration } from "../src/connections/configuration.js";
 import { createConnections } from "../src/connections/routes.js";

@@ -5,7 +5,7 @@ import { mkdtemp, writeFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
-import { ManagedService, createManagedApp } from "../dist/matrix/managed.js";
+import { ManagedService, createManagedApp } from "../dist/service/managed.js";
 import { createChannelRuntime, channelConfigSchema } from "../dist/service/channels.js";
 import { CommunicationCore } from "../dist/communication/core.js";
 import { DurableStore } from "../dist/communication/store.js";

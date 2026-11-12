@@ -11,9 +11,9 @@ import {
 } from "../services/feishu/cli.js";
 import { feishuApplication } from "../services/feishu/application.js";
 import { apiGetFetch, apiPostFetch, loadWeixinCredentials } from "../channels/weixin/index.js";
-import { key } from "../matrix/protocol.js";
-import type { ManagedService } from "../matrix/managed.js";
-import { WorkError } from "../matrix/cli-work.js";
+import { key } from "../execution/protocol.js";
+import type { ManagedService } from "../service/managed.js";
+import { WorkError } from "../execution/work.js";
 import type { ConnectionConfiguration } from "./configuration.js";
 
 interface JobRecord {

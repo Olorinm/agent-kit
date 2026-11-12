@@ -38,7 +38,7 @@
     "cli": "./bin/agent-router",
     "build:cli": "sh scripts/build-cli.sh",
     "build:sdk": "npm run build --prefix packages/sdk",
-    "agent:service": "node dist/matrix/service.js",
+    "agent:service": "node dist/service/main.js",
     "weixin:login": "node dist/channels/weixin/login.js",
     "feishu:setup": "node dist/services/feishu/setup.js",
     "channels:check": "node dist/service/check-cli.js",

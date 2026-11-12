@@ -2356,7 +2356,7 @@ above or deviate from it:
 
 ## Implementation notes (phase 7: Matrix optional)
 
-Phase 7 is implemented in `src/matrix/managed.ts` (switches, gated paths, toggle), `src/matrix/transport.ts`
+Phase 7 is implemented in `src/service/managed.ts` (switches, gated paths, toggle), `src/matrix/transport.ts`
 (`DormantTransport`), `src/matrix/removal.ts` and `removal-cli.ts` (runbook tooling) and the Go CLI edge login
 (`internal/cli/edge.go`). These choices fill gaps in section 19 or deviate from it:
 

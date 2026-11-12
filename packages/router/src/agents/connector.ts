@@ -1,12 +1,12 @@
 import { randomUUID } from "node:crypto";
 import { Message, SendMessageRequest, Task, TaskState, type SendMessageResult } from "@a2a-js/sdk";
-import type { ExecutionBackend } from "./backend.js";
-import { ConnectorStore } from "./store.js";
-import { MatrixSocial } from "./social.js";
-import { CliWork, WorkError } from "./cli-work.js";
-import type { MatrixTransport, SyncBatch } from "./transport.js";
+import type { ExecutionBackend } from "../execution/types.js";
+import { DurableStore } from "../communication/store.js";
+import { MatrixSocial } from "../matrix/social.js";
+import { CliWork, WorkError } from "../execution/work.js";
+import type { MatrixTransport, SyncBatch } from "../matrix/transport.js";
 import { decodeRequest, decodeResult, digest, encodeResult, key, mxid, newTask, REQUEST_EVENT, requestSchema,
-  RESPONSE_EVENT, responseSchema, sized, statusMessage, terminal, type RequestEvent, type ResponseEvent, type RoomEvent } from "./protocol.js";
+  RESPONSE_EVENT, responseSchema, sized, statusMessage, terminal, type RequestEvent, type ResponseEvent, type RoomEvent } from "../matrix/protocol.js";
 
 export interface Contact { address: string; note: string; tags?: string[]; receive?: "allow" | "ask" | "deny"; execution: "allow" | "ask" | "deny"; }
 export interface Conversation { id: string; room: string; peer: string; }
@@ -40,7 +40,7 @@ export class MatrixConnector {
     const lease = this.store.get<{ owner: string; expires: number }>("meta", "lease");
     if (!lease || lease.owner !== this.leaseOwner || lease.expires <= Date.now()) throw new Error("connector_lease_lost");
   }
-  constructor(readonly userId: string, readonly store: ConnectorStore, readonly transport: MatrixTransport,
+  constructor(readonly userId: string, readonly store: DurableStore, readonly transport: MatrixTransport,
     readonly backend: ExecutionBackend | undefined, readonly pollMs = 1_000) {
     mxid.parse(userId); this.social = transport.data ? new MatrixSocial(this, transport.data) : undefined;
     if (!backend) {

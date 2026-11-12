@@ -8,11 +8,11 @@ import {
   loadChannelConfiguration,
   type AgentChannelConfig,
 } from "../service/channels.js";
-import type { ManagedAgent, ManagedService } from "../matrix/managed.js";
-import type { MatrixConnector } from "../matrix/connector.js";
+import type { ManagedAgent, ManagedService } from "../service/managed.js";
+import type { MatrixConnector } from "../agents/connector.js";
 import type { HostPort } from "../execution/host.js";
 import type { ServiceHttp } from "../http.js";
-import { WorkError } from "../matrix/cli-work.js";
+import { WorkError } from "../execution/work.js";
 export interface HostBindingProvider {
   assertReady(agentId: string, binding: string): void;
   /** Called, possibly repeatedly, while deliverable work waits on a binding that is not ready. Must not block or throw. */

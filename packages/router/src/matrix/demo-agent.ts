@@ -7,16 +7,16 @@ import { AgentEvent, DefaultRequestHandler, type AgentExecutor, type ExecutionEv
   type ServerCallContext, type TaskStore } from "@a2a-js/sdk/server";
 import { jsonRpcHandler, restHandler } from "@a2a-js/sdk/server/express";
 import { agentCardRoute } from "./agent-card.js";
-import { ConnectorStore } from "./store.js";
+import { DurableStore } from "../communication/store.js";
 import { key, newTask, statusMessage, terminal } from "./protocol.js";
-import { delay } from "./connector.js";
+import { delay } from "../agents/connector.js";
 import { CodexSessionRuntime } from "./runtime-codex.js";
 
 const port = Number(process.env.PORT ?? "8080");
 const base = process.env.PUBLIC_BASE_URL ?? `http://127.0.0.1:${port}`;
 const token = process.env.ENDPOINT_BEARER_TOKEN_FILE ? readFileSync(process.env.ENDPOINT_BEARER_TOKEN_FILE, "utf8").trim() : process.env.ENDPOINT_BEARER_TOKEN;
 if (!token || token.length < 16) throw new Error("ENDPOINT_BEARER_TOKEN_required");
-const store = new ConnectorStore(process.env.DEMO_STORE_PATH ?? "state/demo.sqlite", "a2a-demo-fixture");
+const store = new DurableStore(process.env.DEMO_STORE_PATH ?? "state/demo.sqlite", "a2a-demo-fixture");
 class DurableTasks implements TaskStore {
   async save(task: Task, context: ServerCallContext) { store.set("tasks", key(context.tenant ?? "", context.user?.userName ?? "", task.id), task); }
   async load(id: string, context: ServerCallContext) { return store.get<Task>("tasks", key(context.tenant ?? "", context.user?.userName ?? "", id)); }
