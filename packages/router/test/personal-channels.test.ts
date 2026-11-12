@@ -7,7 +7,7 @@ import { GroveMailChannel } from "../src/channels/grove-mail/index.js";
 import { WeixinChannel } from "../src/channels/weixin/index.js";
 import { getUpdates } from "../src/channels/weixin/vendor/api.js";
 import { MatrixChannel } from "../src/channels/matrix/index.js";
-import { MatrixConnector } from "../src/matrix/connector.js";
+import { MatrixConnector } from "../src/agents/connector.js";
 import type { MatrixTransport } from "../src/matrix/transport.js";
 import type { RoomEvent } from "../src/matrix/protocol.js";
 import { CommunicationCore } from "../src/communication/core.js";

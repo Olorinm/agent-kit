@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { ManagedService, createManagedApp, type ManagedAgent, type ServiceConfig } from "../src/matrix/managed.js";
+import { ManagedService, createManagedApp, type ManagedAgent, type ServiceConfig } from "../src/service/managed.js";
 import type { ApplicationInbox } from "../src/matrix/application-service.js";
 import type { MatrixTransport } from "../src/matrix/transport.js";
 import { channelConfigSchema, createChannelRuntime } from "../src/service/channels.js";

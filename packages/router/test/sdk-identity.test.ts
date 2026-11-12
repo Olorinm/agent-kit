@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
-import { ManagedService, createManagedApp, type ManagedAgent } from "../src/matrix/managed.js";
+import { ManagedService, createManagedApp, type ManagedAgent } from "../src/service/managed.js";
 import { AgentRouterClient, taskText } from "../packages/sdk/src/index.js";
 import type { ApplicationInbox } from "../src/matrix/application-service.js";
 import type { MatrixTransport } from "../src/matrix/transport.js";

@@ -3,10 +3,10 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { SendMessageRequest, TaskState } from "@a2a-js/sdk";
-import { LEGACY_CHANNEL_COLLECTIONS, ManagedService, createManagedApp, type ManagedAgent, type ServiceConfig } from "../src/matrix/managed.js";
+import { LEGACY_CHANNEL_COLLECTIONS, ManagedService, createManagedApp, type ManagedAgent, type ServiceConfig } from "../src/service/managed.js";
 import { ApplicationInbox } from "../src/matrix/application-service.js";
-import { ConnectorStore } from "../src/matrix/store.js";
-import { CliWork } from "../src/matrix/cli-work.js";
+import { DurableStore as ConnectorStore } from "../src/communication/store.js";
+import { CliWork } from "../src/execution/work.js";
 import { REQUEST_EVENT, type RoomEvent } from "../src/matrix/protocol.js";
 import type { MatrixTransport } from "../src/matrix/transport.js";
 

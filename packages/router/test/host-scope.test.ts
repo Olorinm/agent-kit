@@ -2,10 +2,10 @@ import { afterEach, describe, expect, it } from "vitest";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { ConnectorStore } from "../src/matrix/store.js";
-import { MatrixConnector } from "../src/matrix/connector.js";
+import { DurableStore as ConnectorStore } from "../src/communication/store.js";
+import { MatrixConnector } from "../src/agents/connector.js";
 import { DormantTransport } from "../src/matrix/transport.js";
-import type { ManagedAgent } from "../src/matrix/managed.js";
+import type { ManagedAgent } from "../src/service/managed.js";
 import { agentChannelConfigSchema, createChannelRuntime } from "../src/service/channels.js";
 import type { HostPort } from "../src/execution/host.js";
 

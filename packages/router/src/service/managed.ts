@@ -1,17 +1,17 @@
-import { ExternalIdentitySessions, type ExternalIdentityConfig } from "./external-identity.js";
+import { ExternalIdentitySessions, type ExternalIdentityConfig } from "../matrix/external-identity.js";
 import { randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 import { rmSync } from "node:fs";
 import { join } from "node:path";
 import express from "express";
 import { rateLimit, ipKeyGenerator } from "express-rate-limit";
 import { z } from "zod";
-import { MatrixConnector } from "./connector.js";
-import { ConnectorStore } from "./store.js";
-import { createConnectorApp } from "./index.js";
-import { ApplicationInbox, ApplicationTransport } from "./application-service.js";
-import { digest, mxid } from "./protocol.js";
-import { WorkError } from "./cli-work.js";
-import { DormantTransport, type MatrixTransport } from "./transport.js";
+import { MatrixConnector } from "../agents/connector.js";
+import { DurableStore } from "../communication/store.js";
+import { createConnectorApp } from "../agents/gateway.js";
+import { ApplicationInbox, ApplicationTransport } from "../matrix/application-service.js";
+import { digest, mxid } from "../matrix/protocol.js";
+import { WorkError } from "../execution/work.js";
+import { DormantTransport, type MatrixTransport } from "../matrix/transport.js";
 import { AgentLedger } from "../ledger/ledger.js";
 import { OwnerHubs } from "../ledger/hub.js";
 import { PersonRegistry, personId } from "../ledger/registry.js";
@@ -122,7 +122,7 @@ function equal(a: string, b: string): boolean {
 function publicInstance({ tokenHash: _hash, ...instance }: Instance) { return instance; }
 
 export class ManagedService {
-  readonly store: ConnectorStore;
+  readonly store: DurableStore;
   readonly inbox: ApplicationInbox;
   readonly externalIdentity: ExternalIdentitySessions | undefined;
   readonly persons: PersonRegistry;
@@ -152,7 +152,7 @@ export class ManagedService {
     if (matrixOn && config.externalIdentity && !config.externalIdentity.adminToken) throw new Error("matrix_admin_token_required");
     // Without Matrix the console can only send through the ledger (ADR 0005 15.3).
     if (!matrixOn && config.ledgerRead && !config.ledgerSend) throw new Error("matrix_off_requires_ledger_send");
-    this.store = new ConnectorStore(join(config.stateDir, "registry.sqlite"), config.serverName);
+    this.store = new DurableStore(join(config.stateDir, "registry.sqlite"), config.serverName);
     // Only agents whose Matrix adapter runs get queued events; a dormant agent's rooms stay joined but are ignored (19.1).
     this.inbox = new ApplicationInbox(this.store, (user) => this.store.get<string>("matrix_agents", user),
       (agentId) => { const agent = this.store.get<ManagedAgent>("agents", agentId); return !agent || this.matrixState(agent) === "active"; });
@@ -377,7 +377,7 @@ export class ManagedService {
     // Matrix off for the deployment or the agent: no homeserver call, a dormant transport (ADR 0005 19.2).
     const matrix = this.matrixOn && this.matrixState(agent) === "active";
     if (matrix) await this.provision(agent);
-    const store = new ConnectorStore(join(this.config.stateDir, "agents", `${agent.id}.sqlite`), agent.matrixId);
+    const store = new DurableStore(join(this.config.stateDir, "agents", `${agent.id}.sqlite`), agent.matrixId);
     // This is an AS-owned journal, not an account restored from Matrix history.
     if (!store.get("meta", "sync")) store.set("meta", "sync", "0");
     // A new activation checkpoint after a dormant period: queued and late Matrix events of that period are ignored (19.1).

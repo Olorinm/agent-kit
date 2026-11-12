@@ -1,7 +1,7 @@
 # Combine with compose.lab.yaml. The base lab retains its native conformance fixtures.
 x-managed: &managed
   image: agent-router-matrix:managed
-  command: [node, dist/matrix/service.js]
+  command: [node, dist/service/main.js]
   restart: unless-stopped
   read_only: true
   cap_drop: [ALL]

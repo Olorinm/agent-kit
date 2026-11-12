@@ -3,8 +3,8 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { SendMessageRequest, TaskState } from '@a2a-js/sdk';
-import { CliWork } from '../src/matrix/cli-work.js';
-import { ConnectorStore } from '../src/matrix/store.js';
+import { CliWork } from '../src/execution/work.js';
+import { DurableStore as ConnectorStore } from '../src/communication/store.js';
 
 const stores: ConnectorStore[] = [];
 afterEach(() => stores.splice(0).forEach(s => s.close()));

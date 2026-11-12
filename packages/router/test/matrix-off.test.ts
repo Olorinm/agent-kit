@@ -7,7 +7,7 @@ import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { SignJWT, exportJWK, generateKeyPair } from "jose";
 import { createRouter, loadServiceConfig, type ServiceConfig } from "../src/server.js";
-import type { ManagedAgent } from "../src/matrix/managed.js";
+import type { ManagedAgent } from "../src/service/managed.js";
 import type { ApplicationInbox } from "../src/matrix/application-service.js";
 import type { MatrixTransport, SyncBatch } from "../src/matrix/transport.js";
 import { Host, until } from "./ledger-fixture.js";
@@ -398,7 +398,7 @@ describe("external identity sessions without Synapse (19.2)", () => {
       if (url === "https://issuer.example.test/userinfo") return new Response(JSON.stringify({ sub: "u-1", roles: ["member"] }), { headers: { "Content-Type": "application/json" } });
       return original(input, init);
     });
-    const { ManagedService } = await import("../src/matrix/managed.js");
+    const { ManagedService } = await import("../src/service/managed.js");
     const service = new ManagedService({ serverName: "example.test", publicUrl: "https://example.test/_agent-router/v1", stateDir, matrix: { enabled: false },
       externalIdentity: { providers: { issuer: { issuer: "https://issuer.example.test", userInfoUrl: "https://issuer.example.test/userinfo", subjectPath: ["sub"],
         rolesPath: ["roles"], requiredRoles: ["member"] } } } });

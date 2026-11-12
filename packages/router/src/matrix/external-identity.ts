@@ -1,8 +1,8 @@
 import { randomBytes, randomUUID } from "node:crypto";
 import { z } from "zod";
 import { digest } from "./protocol.js";
-import { WorkError } from "./cli-work.js";
-import type { ManagedService } from "./managed.js";
+import { WorkError } from "../execution/work.js";
+import type { ManagedService } from "../service/managed.js";
 
 const fieldPath=z.array(z.string().min(1).max(80)).min(1).max(8);
 const providerSchema = z.object({ issuer:z.string().min(1).max(512), userInfoUrl:z.url().refine(v=>{const u=new URL(v);return u.protocol==="https:"&&!u.username&&!u.password&&!u.hash&&!u.search;}), subjectPath:fieldPath,rolesPath:fieldPath,requiredRoles:z.array(z.string().min(1)).min(1) }).strict();

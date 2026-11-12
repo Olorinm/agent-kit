@@ -1,7 +1,7 @@
 /** Public embedding API. Router remains independently runnable via agent:service. */
 import type { IncomingMessage } from "node:http";
 import type { Duplex } from "node:stream";
-import { ManagedService, createManagedApp, type ServiceConfig, type ServiceDependencies } from "./matrix/managed.js";
+import { ManagedService, createManagedApp, type ServiceConfig, type ServiceDependencies } from "./service/managed.js";
 import { ConnectionConfiguration, type ConnectionOptions, type HostBindingProvider } from "./connections/configuration.js";
 import { createConnections } from "./connections/routes.js";
 
@@ -31,9 +31,9 @@ export function createRouter(config: ServiceConfig, options: {
     },
   };
 }
-export { ManagedService, type ManagedAgent, type ServiceConfig, type ServiceDependencies, type ServiceExtension } from "./matrix/managed.js";
+export { ManagedService, type ManagedAgent, type ServiceConfig, type ServiceDependencies, type ServiceExtension } from "./service/managed.js";
 export { ConnectionConfiguration, type HostBindingProvider } from "./connections/configuration.js";
-export { WorkError as RouterError } from "./matrix/cli-work.js";
+export { WorkError as RouterError } from "./execution/work.js";
 export { HttpAgentHost, type HostPort, type HostStartInput, type HostAdmission, type NativeSessionInput, type HostRun, type HostCall } from "./execution/host.js";
 export { ServiceHttp, ChannelHttpError } from "./http.js";
 export type { HostTool, HostToolResult, HostTools } from "./execution/tools.js";

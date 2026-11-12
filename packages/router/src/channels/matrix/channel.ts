@@ -1,4 +1,4 @@
-import type { MatrixConnector } from "../../matrix/connector.js";
+import type { MatrixConnector } from "../../agents/connector.js";
 import type { RoomEvent } from "../../matrix/protocol.js";
 import { bindAccount, ChannelSendError, splitText, digest, mediaContent, type ChannelAdapter, type ChannelContext, type ReplyRoute, type AttachmentReference, type ChannelMessage, type ChannelContent } from "../api.js";
 

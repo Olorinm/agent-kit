@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { SignJWT, exportJWK, generateKeyPair, type JWK } from "jose";
 import { WebSocket as NodeSocket } from "ws";
 import { CloudflareAccessAuthenticator, edgeIdentityConfigSchema, loadEdgeIdentityConfig, type EdgeIdentityConfig } from "../src/auth/edge-identity.js";
-import { ManagedService, createManagedApp, type ManagedAgent, type ServiceConfig } from "../src/matrix/managed.js";
+import { ManagedService, createManagedApp, type ManagedAgent, type ServiceConfig } from "../src/service/managed.js";
 import type { ApplicationInbox } from "../src/matrix/application-service.js";
 import type { MatrixTransport } from "../src/matrix/transport.js";
 import { personId } from "../src/ledger/registry.js";

@@ -11,7 +11,7 @@ import {
   apiGetFetch,
   apiPostFetch,
 } from "../src/channels/weixin/vendor/api.js";
-import type { ManagedService } from "../src/matrix/managed.js";
+import type { ManagedService } from "../src/service/managed.js";
 import type { ConnectionConfiguration } from "../src/connections/configuration.js";
 import { agentChannelConfigSchema } from "../src/service/channels.js";
 import { key } from "../src/matrix/protocol.js";

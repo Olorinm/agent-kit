@@ -1,10 +1,10 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
-import type { ConnectorStore } from "./store.js";
+import type { DurableStore } from "../communication/store.js";
 
 /** A2A context -> persisted Codex session, using the official CLI's JSON and resume interfaces. */
 export class CodexSessionRuntime {
   private children = new Map<string, ChildProcessWithoutNullStreams>();
-  constructor(private readonly store: ConnectorStore) {}
+  constructor(private readonly store: DurableStore) {}
   cancel(taskId: string): void { this.children.get(taskId)?.kill("SIGTERM"); }
   async run(taskId: string, contextId: string, prompt: string): Promise<string> {
     if (prompt.length > 20_000) throw new Error("codex_prompt_too_large");

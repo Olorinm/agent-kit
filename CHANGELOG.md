@@ -5,6 +5,14 @@ tag publishes a GitHub Release whose notes are this file's section for that vers
 section in the version-bump commit before tagging. Changes up to the versions listed under
 0.8.0-alpha.1 are in each package's own `CHANGELOG.md`.
 
+## [Unreleased]
+
+- **Router:** the service (`ManagedService`, `createManagedApp`) moved from `src/matrix/` to
+  `src/service/managed.ts`, the standalone entry to `src/service/main.ts` (`npm run agent:service`
+  now starts `dist/service/main.js`), and the per-agent runtime and gateway to `src/agents/`.
+  `src/matrix/` holds only Matrix modules. The re-export files `src/matrix/cli-work.ts` and
+  `src/matrix/store.ts` are gone. The package root exports and behaviour are unchanged.
+
 ## [0.8.0-alpha.2] - 2026-11-12
 
 - **Router:** removed the one-time migration tools that moved a deployment from Matrix to the

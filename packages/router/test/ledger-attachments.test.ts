@@ -4,7 +4,7 @@ import { mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { createServer, request, type IncomingMessage, type Server } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { ManagedService, createManagedApp, type ManagedAgent, type ServiceConfig } from "../src/matrix/managed.js";
+import { ManagedService, createManagedApp, type ManagedAgent, type ServiceConfig } from "../src/service/managed.js";
 import type { ApplicationInbox } from "../src/matrix/application-service.js";
 import type { MatrixTransport } from "../src/matrix/transport.js";
 import { CommunicationCore } from "../src/communication/core.js";

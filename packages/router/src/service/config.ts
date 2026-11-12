@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { externalIdentityConfigSchema } from "../matrix/external-identity.js";
 import { loadEdgeIdentityConfig } from "../auth/edge-identity.js";
-import type { ServiceConfig } from "../matrix/managed.js";
+import type { ServiceConfig } from "./managed.js";
 import { blobConfigFromEnv } from "../ledger/blobs.js";
 
 /** Operator configuration shared by the standalone Router and embedding products. */

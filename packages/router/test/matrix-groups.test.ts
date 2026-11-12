@@ -3,7 +3,7 @@ import { MatrixChannel } from "../src/channels/matrix/index.js";
 import { CommunicationCore } from "../src/communication/core.js";
 import { DurableStore } from "../src/communication/store.js";
 import { CliWork } from "../src/execution/work.js";
-import type { MatrixConnector } from "../src/matrix/connector.js";
+import type { MatrixConnector } from "../src/agents/connector.js";
 import type { ChannelAdapter, ChannelContext, ChannelMessage } from "../src/communication/types.js";
 
 const close: Array<() => void> = [];

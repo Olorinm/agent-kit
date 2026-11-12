@@ -6,7 +6,7 @@ import { A2A_PROTOCOL_VERSION, AgentCard, Message, Task, TaskState, TaskArtifact
 import { type A2ARequestHandler, type ServerCallContext } from "@a2a-js/sdk/server";
 import { PushNotificationNotSupportedError, RequestMalformedError, TaskNotCancelableError,
   TaskNotFoundError, UnsupportedOperationError } from "@a2a-js/sdk/errors";
-import { MatrixConnector, delay, type Conversation, type Outgoing } from "./connector.js";
+import { MatrixConnector, delay, type Conversation, type Outgoing } from "../agents/connector.js";
 import { digest, key, newTask, terminal } from "./protocol.js";
 
 export const requestSignal = new AsyncLocalStorage<AbortSignal>();

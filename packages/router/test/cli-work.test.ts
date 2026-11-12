@@ -8,11 +8,11 @@ import { ProfileStore } from "../src/matrix/profile.js";
 import { afterEach, describe, expect, it } from "vitest";
 import { SendMessageRequest, TaskState, type Task } from "@a2a-js/sdk";
 import { ServerCallContext } from "@a2a-js/sdk/server";
-import { CliWork } from "../src/matrix/cli-work.js";
-import { ConnectorStore } from "../src/matrix/store.js";
-import { MatrixConnector } from "../src/matrix/connector.js";
+import { CliWork } from "../src/execution/work.js";
+import { DurableStore as ConnectorStore } from "../src/communication/store.js";
+import { MatrixConnector } from "../src/agents/connector.js";
 import { MatrixA2AHandler } from "../src/matrix/gateway.js";
-import { createConnectorApp } from "../src/matrix/index.js";
+import { createConnectorApp } from "../src/agents/gateway.js";
 import { ROOM_EVENT, type RoomEvent } from "../src/matrix/protocol.js";
 import type { MatrixTransport } from "../src/matrix/transport.js";
 

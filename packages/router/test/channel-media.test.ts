@@ -11,7 +11,7 @@ import { encryptAesEcb } from "../src/channels/weixin/vendor/aes-ecb.js";
 import { channelConfigSchema } from "../src/service/channels.js";
 import { MatrixChannel } from "../src/channels/matrix/index.js";
 import { SdkMatrixTransport } from "../src/matrix/transport.js";
-import type { MatrixConnector } from "../src/matrix/connector.js";
+import type { MatrixConnector } from "../src/agents/connector.js";
 import { uploadWeixinMedia } from "../src/channels/weixin/media.js";
 import { decryptAesEcb } from "../src/channels/weixin/vendor/aes-ecb.js";
 import type { ChannelContext, ChannelMessage, ReplyRoute } from "../src/communication/types.js";

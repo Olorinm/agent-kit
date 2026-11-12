@@ -194,10 +194,10 @@ Grove Mail 的 WebSocket 是实时通知，断线恢复仍需持久化事件 API
 
 | 已有实现 | 可以复用 | 需要调整 |
 | --- | --- | --- |
-| [managed Agent 与实例注册](../../src/matrix/managed.ts)、[现有身份决策](decisions/0004-managed-agents.md) | Agent UUID、所有者与实例关系、实例凭据、会话固定实例 | 将逻辑 Agent 与 Matrix 地址分开；平台连接通过绑定挂到 Agent |
+| [managed Agent 与实例注册](../../src/service/managed.ts)、[现有身份决策](decisions/0004-managed-agents.md) | Agent UUID、所有者与实例关系、实例凭据、会话固定实例 | 将逻辑 Agent 与 Matrix 地址分开；平台连接通过绑定挂到 Agent |
 | [Matrix Application Inbox](../../src/matrix/application-service.ts) | 持久化平台事务、去重和按 Agent 投递 | 保留为 Matrix 入口，接入渠道中立 Inbox |
-| [Matrix Connector](../../src/matrix/connector.ts)、[Store](../../src/communication/store.ts) | 收发状态事务、稳定发送键、游标、SQLite 存储原语 | 通用 Store 已抽到通信目录，Matrix 保留兼容导出；普通聊天 hook 与原游标共用事务 |
-| [工作队列与认领](../../src/matrix/cli-work.ts) | 工作状态、修订、认领、结果收据、取消和上下文串行 | 输入来源改为渠道中立引用，执行绑定以逻辑会话为键 |
+| [Matrix Connector](../../src/agents/connector.ts)、[Store](../../src/communication/store.ts) | 收发状态事务、稳定发送键、游标、SQLite 存储原语 | 通用 Store 已抽到通信目录；普通聊天 hook 与原游标共用事务 |
+| [工作队列与认领](../../src/execution/work.ts) | 工作状态、修订、认领、结果收据、取消和上下文串行 | 输入来源改为渠道中立引用，执行绑定以逻辑会话为键 |
 | [Host worker](../../src/execution/host-worker.ts) | 从任务队列调用 Host、持久化会话绑定 | 通用 Agent 统一走 Host；专用任务消费者使用公开领取协议 |
 | [Grove Mail 适配器](../../src/channels/grove-mail/channel.ts) | 事件回放、webhook、邮箱作用域、幂等发送、回复与不确定状态 | 新增 Router 邮件适配器，保存游标和邮箱到 Agent 的绑定 |
 | [Agent Host 公共边界](https://github.com/Olorinm/agent-kit/blob/main/packages/host/docs/scope.md)、[HTTP 服务](https://github.com/Olorinm/agent-kit/blob/main/packages/host/docs/http-service.md) | 内核集成、原生会话绑定、运行与输出、取消和恢复 | 新增执行桥和绑定账本；Host 不承担渠道与联系人业务 |
