@@ -1,5 +1,0 @@
-Agent Environment
-
-src/workspace/path.ts and src/workspace/content-type.ts are adapted from
-https://github.com/BroZhong/open-managed-agents at revision
-e04695152219a91c2ecdff41955dfc3fab73b438; each file names its source.

@@ -1,7 +1,8 @@
 #!/bin/sh
 set -eu
 cd "$(dirname "$0")/.."
-release_version=${AGENT_ROUTER_VERSION:-0.7.0-alpha.14}
+# The CLI carries the package version.
+release_version=$(sed -n 's/^  "version": "\(.*\)",$/\1/p' package.json)
 release_dir=${AGENT_ROUTER_RELEASE_DIR:-state/release}
 mkdir -p "$release_dir"
 for release_os in darwin linux; do

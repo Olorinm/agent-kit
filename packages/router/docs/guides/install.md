@@ -1,6 +1,6 @@
 # Install and connect
 
-This page is the installation entry point for the native Go CLI and its separate communication service. The commands below use the published **v0.6.0** release. Changes to guides or CLI behavior in `main` reach installed users when a new release is published.
+This page is the installation entry point for the native Go CLI and its separate communication service. Changes to guides or CLI behavior in `main` reach installed users when a new release is published.
 
 ## What you need
 
@@ -13,35 +13,22 @@ This page is the installation entry point for the native Go CLI and its separate
 
 The Go executable itself does not need Go, Node or npm. Node.js 24 is the tested connector runtime; its package requires Node 24 or newer. Installing the CLI alone does not install the connector or start an agent model. Windows binaries are not currently published.
 
-CLI binaries built from current `main` use Go 1.27.2 and require macOS 13 (Ventura) or later on macOS. This applies to current source builds and subsequent releases; the v0.6.0 download examples below refer to an earlier release.
+CLI binaries use Go 1.27.2 and require macOS 13 (Ventura) or later on macOS.
 
 ## Install released components
 
-With Homebrew available on macOS or Linux:
+Agent Router is released together with the other Agent Kit packages. Every
+[release](https://github.com/Olorinm/agent-kit/releases) carries the native CLI archives, the connector package
+and one `SHA256SUMS` file that lists all of them. The commands below use **0.8.0-alpha.1**.
 
-```sh
-brew install Olorinm/tap/agent-router
-# Install Node.js 24 and npm if they are not already available.
-node --version
-npm install --global --prefix "$HOME/.local" \
-  https://github.com/Olorinm/agent-router/releases/download/v0.6.0/agent-router-server-0.6.0.tgz
-export PATH="$HOME/.local/bin:$PATH"
-agent-router --version
-agent-router-connector --version
-```
-
-Use the same release for both components. Homebrew installs the CLI only. If it resolves a newer CLI release, install the connector from that release instead of the pinned v0.6.0 URL. Add the PATH entry to your shell or agent host configuration so the connector is also visible after restarting your terminal.
-
-Releases are published in [Olorinm/agent-kit](https://github.com/Olorinm/agent-kit/releases?q=router-v) with tags `router-v<version>`; versions up to 0.7.0-alpha.14, including the v0.6.0 used in these examples, remain in the former `Olorinm/agent-router` repository.
-
-Without Homebrew, choose the native archive from [Releases](https://github.com/Olorinm/agent-router/releases/tag/v0.6.0):
+Choose the native archive for your platform:
 
 | Platform | Archive |
 | --- | --- |
-| macOS Apple Silicon | `agent-router_0.6.0_darwin_arm64.tar.gz` |
-| macOS Intel | `agent-router_0.6.0_darwin_amd64.tar.gz` |
-| Linux ARM64 | `agent-router_0.6.0_linux_arm64.tar.gz` |
-| Linux x86-64 | `agent-router_0.6.0_linux_amd64.tar.gz` |
+| macOS Apple Silicon | `agent-router_0.8.0-alpha.1_darwin_arm64.tar.gz` |
+| macOS Intel | `agent-router_0.8.0-alpha.1_darwin_amd64.tar.gz` |
+| Linux ARM64 | `agent-router_0.8.0-alpha.1_linux_arm64.tar.gz` |
+| Linux x86-64 | `agent-router_0.8.0-alpha.1_linux_amd64.tar.gz` |
 
 Download the archive and `SHA256SUMS` into the same directory. Compare its SHA-256 with the matching entry using `shasum -a 256 ARCHIVE` or `sha256sum ARCHIVE`. Extract the archive, then install the binary:
 
@@ -52,18 +39,26 @@ export PATH="$HOME/.local/bin:$PATH"
 agent-router --version
 ```
 
-Then install the connector using the npm command above. In v0.6.0, SHA256SUMS covers the CLI archives; the connector `.tgz` is served over HTTPS from the same release.
+Then install the connector from the same release (Node.js 24 and npm required):
+
+```sh
+npm install --global --prefix "$HOME/.local" \
+  https://github.com/Olorinm/agent-kit/releases/download/v0.8.0-alpha.1/agent-router-server-0.8.0-alpha.1.tgz
+agent-router-connector --version
+```
+
+Use the same release for both components. Add the PATH entry to your shell or agent host configuration so the connector is also visible after restarting your terminal.
 
 ### One installer from a source checkout
 
 The [installer](../../scripts/install.sh) downloads matching released components without compiling the source or requiring sudo:
 
 ```sh
-sh scripts/install.sh --version 0.6.0
+sh scripts/install.sh --version 0.8.0-alpha.1
 export PATH="$HOME/.local/bin:$PATH"
 ```
 
-Run it from this repository's root, with Node.js 24 and npm already on PATH. `--prefix /absolute/path` selects another installation prefix. `--cli-only` installs just the native binary. The script verifies the CLI checksum, installs the connector first and then replaces the CLI. It leaves account profiles and shell configuration untouched. To upgrade, stop your connector, run the installer with the chosen release version, then start `connect` again. Failed npm installs can be retried with the same prefix and version.
+Run it from `packages/router`, with Node.js 24 and npm already on PATH. `--prefix /absolute/path` selects another installation prefix. `--cli-only` installs just the native binary. The script verifies the CLI checksum, installs the connector first and then replaces the CLI. It leaves account profiles and shell configuration untouched. To upgrade, stop your connector, run the installer with the chosen release version, then start `connect` again. Failed npm installs can be retried with the same prefix and version.
 
 ### Build current source instead
 

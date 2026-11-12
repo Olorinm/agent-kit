@@ -1,6 +1,6 @@
 {
   "name": "@olorinm/agent-environment",
-  "version": "0.3.0-alpha.1",
+  "version": "0.8.0-alpha.1",
   "description": "Cloud execution environments for agents, with a Cloudflare provider",
   "type": "module",
   "license": "MIT",
@@ -17,7 +17,6 @@
     "README.md",
     "README.zh-CN.md",
     "LICENSE",
-    "NOTICE",
     "docs",
     "examples",
     "cloudflare/src",
@@ -35,10 +34,6 @@
     ".": {
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
-    },
-    "./workspace": {
-      "types": "./dist/workspace/index.d.ts",
-      "import": "./dist/workspace/index.js"
     }
   },
   "bin": {

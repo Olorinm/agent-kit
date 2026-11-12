@@ -1,23 +1,7 @@
 # Changelog
 
-Notable changes to Agent Environment, newest first. Each version has a GitHub Release with the same
-notes and the package archive. When releasing, add the new section here in the version-bump commit;
-the Release notes are copied from it.
-
-## [0.3.0-alpha.1] - 2026-11-12
-
-- Cloudflare is the only provider. The provider interface is unchanged; configuration selects a
-  provider through a factory table in `src/config.ts`, so further providers can be added there.
-- Removed the Alibaba and Volcengine providers and the E2B-based driver, the extracted sandbox
-  implementation and contracts, the patched E2B runtime and its patch, and the upstream sync checks.
-- Removed the OSS and TOS workspace stores, workspace backends and mount verification. `./workspace`
-  now exports only `validateArtifactPath` and `resolveArtifactContentType`.
-- Removed the `./sandbox`, `./contracts`, `./sdk` and `./oma` exports, `ExecAbortedBeforeStartError`,
-  and the `test:oma`, `test:workspace:oma` and `check:upstream` scripts.
-- No runtime dependencies. Removed `@kubernetes/client-node`, `ali-oss`, `@connectrpc/connect`,
-  `@bufbuild/protobuf`, `openapi-fetch`, `e2b`, `@volcengine/tos-sdk` and `esbuild`; tests use
-  `node --test` only.
-- MIT license.
+Changes to Agent Environment before it joined the shared Agent Kit version. Later changes are in the
+[repository changelog](../../CHANGELOG.md).
 
 ## [0.2.0-alpha.3] - 2026-10-21
 

@@ -1,198 +1,77 @@
 name: Release
 
-# Push a tag <package>-v<version> (for example host-v0.1.0-alpha.15) to build that
-# package on Linux with the pinned toolchain and publish its GitHub Release.
-# Run it manually with dry_run (the default) to build and pack without
-# publishing; the archives and their integrities are kept as a workflow artifact.
+# Push a tag v<version> to build every package at that commit and publish one GitHub
+# Release with all archives. Run it manually to build and pack without publishing.
+# Tests run in the CI workflows; tag a commit whose checks have passed.
 
 on:
   push:
-    tags: ["host-v*", "router-v*", "connectors-v*", "environment-v*"]
+    tags: ["v*"]
   workflow_dispatch:
-    inputs:
-      package:
-        description: Package to build
-        type: choice
-        options: [host, router, connectors, environment]
-        required: true
-      dry_run:
-        description: Build and pack only (no GitHub Release)
-        type: boolean
-        default: true
-      ref:
-        description: Source revision to build in a dry run (default the selected branch or tag)
-        type: string
-        default: ""
 
 permissions:
   contents: read
 
 env:
-  # Release archive bytes depend on these versions. Reproduce archives with the same pair.
+  # Archive bytes depend on these versions.
   NODE_VERSION: 24.22.2
   NPM_VERSION: 11.19.1
 
 jobs:
   release:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 20
     permissions:
       contents: write
     steps:
-      - name: Select package
-        id: target
-        env:
-          EVENT: ${{ github.event_name }}
-          INPUT_PACKAGE: ${{ inputs.package }}
-          INPUT_DRY_RUN: ${{ inputs.dry_run }}
-          INPUT_REF: ${{ inputs.ref }}
-        run: |
-          set -eu
-          if [ "$EVENT" = push ]; then
-            tag="$GITHUB_REF_NAME"
-            package="${tag%%-v*}"
-            version="${tag#"$package"-v}"
-            dry_run=false
-          else
-            package="$INPUT_PACKAGE"
-            dry_run="$INPUT_DRY_RUN"
-            version=""
-            if [ "$dry_run" != true ]; then
-              if [ -n "$INPUT_REF" ]; then
-                echo "A release is built from its tag; leave ref empty and run the workflow on the tag." >&2
-                exit 1
-              fi
-              case "$GITHUB_REF" in
-                refs/tags/"$package"-v*) tag="$GITHUB_REF_NAME"; version="${tag#"$package"-v}" ;;
-                *) echo "Publishing requires running the workflow on a $package-v* tag." >&2; exit 1 ;;
-              esac
-            fi
-          fi
-          case "$package" in
-            host|router|connectors|environment) ;;
-            *) echo "Unknown package in $GITHUB_REF_NAME" >&2; exit 1 ;;
-          esac
-          {
-            echo "package=$package"
-            echo "version=$version"
-            echo "dry_run=$dry_run"
-            echo "directory=packages/$package"
-          } >> "$GITHUB_OUTPUT"
-
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ inputs.ref || github.ref }}
           persist-credentials: false
-
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
         with:
           node-version: ${{ env.NODE_VERSION }}
-
       - run: npm install --global "npm@$NPM_VERSION" --no-audit --no-fund
-
-      - name: Check toolchain
-        run: |
-          test "$(node --version)" = "v$NODE_VERSION"
-          test "$(npm --version)" = "$NPM_VERSION"
-          echo "Node $(node --version), npm $(npm --version)"
-
-      - if: steps.target.outputs.package == 'router'
-        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with: { go-version-file: packages/router/go.mod, cache: false }
 
-      - name: Check version and release notes
+      - name: Check versions and release notes
         id: meta
-        working-directory: ${{ steps.target.outputs.directory }}
-        env:
-          TAG_VERSION: ${{ steps.target.outputs.version }}
-          DRY_RUN: ${{ steps.target.outputs.dry_run }}
-          INPUT_REF: ${{ inputs.ref }}
         run: |
           set -eu
-          name=$(node -p 'require("./package.json").name')
-          version=$(node -p 'require("./package.json").version')
-          if [ -n "$TAG_VERSION" ] && [ "$TAG_VERSION" != "$version" ]; then
-            echo "Tag version $TAG_VERSION does not match package.json version $version" >&2
-            exit 1
+          version=$(node -p 'require("./packages/host/package.json").version')
+          for package in host router connectors environment; do
+            found=$(node -p "require('./packages/$package/package.json').version")
+            [ "$found" = "$version" ] || { echo "packages/$package is $found, packages/host is $version" >&2; exit 1; }
+          done
+          if [ "$GITHUB_REF_TYPE" = tag ] && [ "$GITHUB_REF_NAME" != "v$version" ]; then
+            echo "Tag $GITHUB_REF_NAME does not match package version $version" >&2; exit 1
           fi
-          awk -v heading="## [$version]" 'index($0, heading) == 1 { found = 1; next } found && /^## / { exit } found { print }' CHANGELOG.md > "$RUNNER_TEMP/notes.md" 2>/dev/null || true
-          if ! grep -q '[^[:space:]]' "$RUNNER_TEMP/notes.md"; then
-            if [ "$DRY_RUN" = true ] && [ -n "$INPUT_REF" ]; then
-              echo "::warning::CHANGELOG.md has no section for $version at $INPUT_REF"
-            else
-              echo "CHANGELOG.md has no section for $version" >&2
-              exit 1
-            fi
-          fi
-          echo "name=$name" >> "$GITHUB_OUTPUT"
+          awk -v heading="## [$version]" 'index($0, heading) == 1 { found = 1; next } found && /^## / { exit } found { print }' CHANGELOG.md > "$RUNNER_TEMP/notes.md"
+          grep -q '[^[:space:]]' "$RUNNER_TEMP/notes.md" || { echo "CHANGELOG.md has no section for $version" >&2; exit 1; }
           echo "version=$version" >> "$GITHUB_OUTPUT"
-          echo "Building $name $version"
 
-      - name: Test and pack
-        working-directory: ${{ steps.target.outputs.directory }}
-        env:
-          PACKAGE: ${{ steps.target.outputs.package }}
-          VERSION: ${{ steps.meta.outputs.version }}
+      - name: Build and pack
         run: |
           set -eu
           out="$RUNNER_TEMP/release"
           mkdir -p "$out"
-          case "$PACKAGE" in
-            host)
-              npm ci --ignore-scripts
-              npm test
-              npm pack --pack-destination "$out"
-              ;;
-            environment)
-              # Up to 0.2.x the build applies an SDK patch with `git apply`, which skips paths
-              # outside the current directory inside a repository. Build it as a standalone package.
-              export GIT_CEILING_DIRECTORIES="$GITHUB_WORKSPACE/packages"
-              npm ci
-              npm test
-              npm pack --pack-destination "$out"
-              ;;
-            connectors)
-              npm ci
-              npm test
-              npm pack --pack-destination "$out"
-              ;;
-            router)
-              go test -race ./...
-              npm ci
-              AGENT_ROUTER_VERSION="$VERSION" sh scripts/build-cli.sh
-              npm test
-              npm run build
-              AGENT_ROUTER_VERSION="$VERSION" AGENT_ROUTER_RELEASE_DIR="$out" sh scripts/package-cli.sh
-              rm -rf "$out"/agent-router_*/
-              npm pack --pack-destination "$out"
-              ;;
-          esac
-          if [ "$PACKAGE" = environment ]; then
-            # The environment package is distributed as the uncompressed npm tarball.
-            for archive in "$out"/*.tgz; do
-              gzip -dc "$archive" > "${archive%.tgz}.tar"
-              rm "$archive"
-            done
-          fi
-
-      - name: Print archive integrities
-        working-directory: ${{ runner.temp }}/release
-        run: |
-          for file in *; do
-            integrity=$(node -e 'const c=require("node:crypto"),f=require("node:fs");console.log("sha512-"+c.createHash("sha512").update(f.readFileSync(process.argv[1])).digest("base64"))' "$file")
-            echo "$file $integrity sha256:$(sha256sum "$file" | cut -d' ' -f1)" | tee -a "$GITHUB_STEP_SUMMARY"
-          done
+          (cd packages/host && npm ci --ignore-scripts && npm pack --pack-destination "$out")
+          (cd packages/connectors && npm ci && npm pack --pack-destination "$out")
+          (cd packages/environment && npm ci && npm pack --pack-destination "$out")
+          (cd packages/router && npm ci && npm run build && npm pack --pack-destination "$out" \
+            && AGENT_ROUTER_RELEASE_DIR="$out" sh scripts/package-cli.sh && rm -rf "$out"/agent-router_*/)
+          (cd "$out" && sha256sum ./*.tgz ./*.tar.gz > SHA256SUMS && cat SHA256SUMS >> "$GITHUB_STEP_SUMMARY")
 
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: ${{ steps.target.outputs.package }}-${{ steps.meta.outputs.version }}
+          name: agent-kit-${{ steps.meta.outputs.version }}
           path: ${{ runner.temp }}/release
           if-no-files-found: error
 
       - name: Publish GitHub Release
-        if: steps.target.outputs.dry_run != 'true'
+        if: github.ref_type == 'tag'
         working-directory: ${{ runner.temp }}/release
         env:
           GH_TOKEN: ${{ github.token }}
-          TITLE: ${{ steps.meta.outputs.name }} ${{ steps.meta.outputs.version }}
-        run: gh release create "$GITHUB_REF_NAME" ./* --repo "$GITHUB_REPOSITORY" --title "$TITLE" --notes-file "$RUNNER_TEMP/notes.md" --verify-tag
+          TITLE: Agent Kit ${{ steps.meta.outputs.version }}
+        run: gh release create "$GITHUB_REF_NAME" ./* --repo "$GITHUB_REPOSITORY" --title "$TITLE" --notes-file "$RUNNER_TEMP/notes.md" --verify-tag ${{ contains(steps.meta.outputs.version, '-') && '--prerelease' || '' }}

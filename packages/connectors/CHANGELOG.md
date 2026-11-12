@@ -1,8 +1,7 @@
 # Changelog
 
-Notable changes to Agent Connectors, newest first. Each version has a GitHub Release with the same
-notes and the package archive. When releasing, add the new section here in the version-bump commit;
-the Release notes are copied from it.
+Changes to Agent Connectors before it joined the shared Agent Kit version. Later changes are in the
+[repository changelog](../../CHANGELOG.md).
 
 ## [0.1.0-alpha.11] - 2026-11-09
 

@@ -1,8 +1,7 @@
 # Changelog
 
-Notable changes to Agent Router, newest first. Pushing a `v*` tag publishes a GitHub Release whose
-notes are this file's section for that version (`.github/workflows/release.yml`), so add the section
-in the version-bump commit before tagging.
+Changes to Agent Router before it joined the shared Agent Kit version. Later changes are in the
+[repository changelog](../../CHANGELOG.md).
 
 ## [0.7.0-alpha.14] - 2026-11-09
 
