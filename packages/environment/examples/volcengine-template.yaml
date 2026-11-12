@@ -1,0 +1,27 @@
+# Apply only to a VKE test cluster with the official agent-sandbox addon.
+# Each running sandbox provisions billable VCI capacity.
+apiVersion: extensions.agents.x-k8s.io/v1alpha1
+kind: SandboxTemplate
+metadata:
+  name: agent-environment-test
+  namespace: default
+spec:
+  podTemplate:
+    metadata:
+      annotations:
+        agent.sandbox.io/enable-envd-injection: "true"
+        vci.vke.volcengine.com/enable-auto-create-imc: "true"
+        vci.vke.volcengine.com/preferred-instance-family: vci.u1,vci.n3i
+        vci.volcengine.com/persistent-container: "true"
+        vci.volcengine.com/tls-enable: "false"
+        vci.volcengine.com/usable-disk-capacity: "40"
+        vke.volcengine.com/burst-to-vci: enforce
+    spec:
+      automountServiceAccountToken: false
+      containers:
+        - name: main
+          image: e2bdev/code-interpreter:latest
+          resources:
+            requests: {cpu: "2", memory: 4Gi}
+            limits: {cpu: "2", memory: 4Gi}
+      terminationGracePeriodSeconds: 1

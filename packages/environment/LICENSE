@@ -1,0 +1,11 @@
+Distribution status
+
+This working version includes source extracted from BroZhong/open-managed-agents
+at the revision recorded in upstream.json. That revision supplies no LICENSE.
+No license grant for that source is asserted by this repository. Redistribution
+of this derived package is pending confirmation from the upstream rights holder.
+The package is marked private and UNLICENSED until that is resolved.
+
+The original independently authored components retain the Apache-2.0 terms in
+LICENSE.original-components. Those terms do not relicense the extracted source.
+E2B retains its MIT license, included in dist/E2B-LICENSE in built archives.

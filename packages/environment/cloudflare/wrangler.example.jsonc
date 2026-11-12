@@ -1,0 +1,66 @@
+{
+  "name": "agent-environment-trial",
+  "main": "./src/index.ts",
+  "compatibility_date": "2026-10-20",
+  "compatibility_flags": [
+    "enable_request_signal"
+  ],
+  "workers_dev": true,
+  "observability": {
+    "enabled": true,
+    "logs": {
+      "enabled": true,
+      "invocation_logs": false
+    }
+  },
+  "containers": [
+    {
+      "class_name": "AgentSandbox",
+      "scheduling_policy": "durable_object"
+    }
+  ],
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "SANDBOXES",
+        "class_name": "AgentSandbox"
+      },
+      {
+        "name": "CATALOG",
+        "class_name": "Catalog"
+      }
+    ]
+  },
+  "exports": {
+    "AgentSandbox": {
+      "type": "durable-object",
+      "storage": "sqlite"
+    },
+    "Catalog": {
+      "type": "durable-object",
+      "storage": "sqlite"
+    },
+    "AgentEgress": {
+      "type": "worker"
+    }
+  },
+  "vars": {
+    "MAX_ENVIRONMENTS": "3",
+    "BACKUP_RECIPIENT": "YOUR-AGE-PUBLIC-RECIPIENT",
+    "AGE_KEY": "artifacts/YOUR-VERIFIED-AGE-LINUX-AMD64",
+    "AGE_SHA256": "YOUR-AGE-BINARY-SHA256",
+    "DAILY_RUNTIME_MINUTES": "240"
+  },
+  "preview_urls": false,
+  "r2_buckets": [
+    {
+      "binding": "BACKUPS",
+      "bucket_name": "YOUR-PRIVATE-BACKUP-BUCKET"
+    }
+  ],
+  "triggers": {
+    "crons": [
+      "31 19 * * *"
+    ]
+  }
+}

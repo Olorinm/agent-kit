@@ -1,0 +1,106 @@
+{
+  "repository": "https://github.com/BroZhong/open-managed-agents.git",
+  "revision": "e04695152219a91c2ecdff41955dfc3fab73b438",
+  "files": [
+    {
+      "upstream": "server/packages/sandbox/src/provision-source.ts",
+      "local": "src/sandbox/provision-source.ts",
+      "sha256": "8bcdbe4ffa34fb9d758fac8a7e53e3a21454b6b3ccde3c8cfd8fd3f8994d9bb4"
+    },
+    {
+      "upstream": "server/packages/sandbox/src/sandbox-file-system.ts",
+      "local": "src/sandbox/sandbox-file-system.ts",
+      "sha256": "931b2f135198ed402bc5bc6a667c3d5441998a043a81625af507e9f8f06de446"
+    },
+    {
+      "upstream": "server/packages/sandbox/src/fake-sandbox-client.ts",
+      "local": "src/sandbox/fake-sandbox-client.ts",
+      "sha256": "c42677ebc5a90bb8bd85c89392dd8e8f79dbeb78f59b648fd6ae2bc77228cf05"
+    },
+    {
+      "upstream": "server/packages/sandbox/src/workspace-mount-probe.ts",
+      "local": "src/sandbox/workspace-mount-probe.ts",
+      "sha256": "56fefe638e9b42056320bcc925f33814dfb6b18e7b4ecd565e37d83330ae7c99"
+    },
+    {
+      "upstream": "server/packages/sandbox/src/workspace-mount.ts",
+      "local": "src/sandbox/workspace-mount.ts",
+      "sha256": "35b761bebfd95ce3f2af93fb1d6de24e6ed7d77abdd0ae71717865c2a72e4ca5"
+    },
+    {
+      "upstream": "server/packages/sandbox/src/sandbox-manager.ts",
+      "local": "src/sandbox/sandbox-manager.ts",
+      "sha256": "59e4e81f3897f792bdf43ead48ce0d2643df4996469211c72de7e29d48302138"
+    },
+    {
+      "upstream": "server/packages/sandbox/src/e2b-sandbox-client.ts",
+      "local": "src/sandbox/e2b-sandbox-client.ts",
+      "sha256": "d46ca9ac73fb12fb529ca852f6df51ba8975d5e0cc1c0eb4b585fb5475703669"
+    },
+    {
+      "upstream": "server/packages/sandbox/src/index.ts",
+      "local": "src/sandbox/index.ts",
+      "sha256": "b947131d1fcd4d5e35426743fd2abbc6a5e26f31c8d9cbef4f148590a0250507"
+    },
+    {
+      "upstream": "server/packages/sandbox/src/sandbox-client.ts",
+      "local": "src/sandbox/sandbox-client.ts",
+      "sha256": "d98657de2e35d2fde15e5c96f064574f1f73013e812819ea4c2f0b22dfd64083"
+    },
+    {
+      "upstream": "server/packages/sandbox/test/native-lifecycle.test.ts",
+      "local": "test/sandbox/native-lifecycle.test.ts",
+      "sha256": "708ee690c24a7ef483f76a60e558418782829b0b5c0b135195ded91de4f16dc4"
+    },
+    {
+      "upstream": "server/packages/sandbox/test/sandbox-manager.test.ts",
+      "local": "test/sandbox/sandbox-manager.test.ts",
+      "sha256": "f079401af7241cb7511045916033f77ae73675e3b8610a2bf137c93a0092f164"
+    },
+    {
+      "upstream": "server/packages/sandbox/test/e2b-sandbox-client.test.ts",
+      "local": "test/sandbox/e2b-sandbox-client.test.ts",
+      "sha256": "d92ab0edbb8d1264a810f22da9152fe7a94a1457268dd33ebddd7578dcee4eca"
+    },
+    {
+      "upstream": "server/packages/sandbox/test/provision-source.test.ts",
+      "local": "test/sandbox/provision-source.test.ts",
+      "sha256": "6c76c0159c714b5f5f22d217f410c7d50cd2c380091756dcf85b2c4cff7dbce7"
+    },
+    {
+      "upstream": "server/packages/sandbox/test/e2b-command-stream.test.ts",
+      "local": "test/sandbox/e2b-command-stream.test.ts",
+      "sha256": "7887a074df2ec98b8d66dc25221906beba3f80ac6b18941a5196328c0fa7e933"
+    },
+    {
+      "upstream": "server/packages/sandbox/test/sandbox-file-system.test.ts",
+      "local": "test/sandbox/sandbox-file-system.test.ts",
+      "sha256": "579d38599b3d01157ed9233e7bde1d4a01be5ebcd81b82a5974fc38b37e1fd59"
+    },
+    {
+      "upstream": "adapter/packages/core/src/tool-executor.ts",
+      "local": "src/contracts/tool-executor.ts",
+      "sha256": "e5e530e84a007e2496b6a941dc495fde13e14607830110ba5d0a8fe02fb084ef"
+    },
+    {
+      "upstream": "server/packages/store/src/workspace-path.ts",
+      "local": "src/contracts/workspace-path.ts",
+      "sha256": "93c54ead0d1b055c26ef74b05f1046049ae18f29d8d7b114e524ce4a29733643"
+    },
+    {
+      "upstream": "server/packages/store/src/interfaces/skill-artifact-store.ts",
+      "local": "src/contracts/skill-artifact-store.ts",
+      "sha256": "dc053aabb3844bd2b6ce894719e0997ef50c7d2392ca64b3a9a3fddf4119947c"
+    },
+    {
+      "upstream": "server/packages/store/src/interfaces/sandbox-lifecycle-store.ts",
+      "local": "src/contracts/sandbox-lifecycle-store.ts",
+      "sha256": "e353fc48a0c9a50aea83da0b10a7b721c142755d4f0aa7b097597370f8f3f64f"
+    },
+    {
+      "upstream": "server/patches/e2b@2.24.0.patch",
+      "local": "patches/e2b@2.24.0.patch",
+      "sha256": "f2029501b71518fe31d3f9ef87ec63fcb58338c18558f6d315b23cbfa1e7a52e"
+    }
+  ]
+}

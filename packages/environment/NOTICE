@@ -1,0 +1,14 @@
+This package incorporates the OMA sandbox implementation and its E2B patch.
+Upstream: https://github.com/BroZhong/open-managed-agents
+Revision: e04695152219a91c2ecdff41955dfc3fab73b438
+
+upstream.json maps every extracted file to its original path and SHA-256.
+patches/oma-extraction.patch records changes to those files. The SDK patch is
+copied without changes. Source attribution does not establish redistribution
+permission; see LICENSE. No public release of this derived package is claimed.
+
+Shared Workspace source provenance is additionally recorded in
+ docs/oma-workspace-source.json (the same pinned OMA revision). Path validation
+and descriptor-relative mount probes retain upstream behavior; OSS and TOS
+adapters implement the ArtifactStore contract. TOS SDK and E2B SDK licenses are
+included with the bundled runtime in dist. No upstream licensing claim changes.

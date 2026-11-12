@@ -1,0 +1,92 @@
+{
+  "name": "@olorinm/agent-environment",
+  "version": "0.2.0-alpha.3",
+  "description": "Cloud execution environments with Alibaba, Volcengine and Cloudflare adapters",
+  "type": "module",
+  "license": "UNLICENSED",
+  "engines": {
+    "node": ">=22"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "README.zh-CN.md",
+    "LICENSE",
+    "NOTICE",
+    "docs",
+    "examples",
+    "scripts/private-tcp-forward.mjs",
+    "upstream.json",
+    "LICENSE.original-components",
+    "patches",
+    "cloudflare/src",
+    "cloudflare/backup/src",
+    "cloudflare/backup/scripts/*.py",
+    "cloudflare/examples",
+    "cloudflare/README.md",
+    "cloudflare/package.json",
+    "cloudflare/package-lock.json",
+    "cloudflare/tsconfig.json",
+    "cloudflare/wrangler.example.jsonc",
+    "cloudflare/backup/wrangler.example.jsonc"
+  ],
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./sandbox": {
+      "types": "./dist/sandbox/index.d.ts",
+      "import": "./dist/sandbox/index.js"
+    },
+    "./contracts": {
+      "types": "./dist/contracts/index.d.ts",
+      "import": "./dist/contracts/index.js"
+    },
+    "./sdk": {
+      "types": "./dist/sdk.d.ts",
+      "import": "./dist/sdk.js"
+    },
+    "./workspace": {
+      "types": "./dist/workspace/index.d.ts",
+      "import": "./dist/workspace/index.js"
+    },
+    "./oma": {
+      "types": "./dist/oma.d.ts",
+      "import": "./dist/oma.js"
+    }
+  },
+  "bin": {
+    "agent-environment": "dist/cli.js"
+  },
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "test": "npm run build && vitest run && node --test test/*.test.mjs",
+    "test:package": "node scripts/test-package.mjs",
+    "test:oma": "vitest run",
+    "probe": "npm run build && node scripts/probe.mjs",
+    "prepack": "npm run build",
+    "check:upstream": "node scripts/check-upstream.mjs",
+    "test:workspace:oma": "node scripts/test-oma.mjs"
+  },
+  "dependencies": {
+    "@bufbuild/protobuf": "2.12.1",
+    "@connectrpc/connect": "2.0.0-rc.3",
+    "@kubernetes/client-node": "2.0.0",
+    "ali-oss": "6.23.0",
+    "openapi-fetch": "0.14.1"
+  },
+  "devDependencies": {
+    "@types/ali-oss": "6.23.3",
+    "@types/node": "24.10.1",
+    "@volcengine/tos-sdk": "2.9.1",
+    "e2b": "2.24.0",
+    "esbuild": "0.28.2",
+    "typescript": "5.9.3",
+    "vitest": "4.1.11"
+  },
+  "private": true,
+  "overrides": {
+    "axios": "0.34.0"
+  }
+}

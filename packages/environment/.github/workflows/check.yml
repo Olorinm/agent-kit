@@ -1,0 +1,26 @@
+name: Check
+on: [push, pull_request]
+permissions:
+  contents: read
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npm test
+      - run: npm run test:package
+      - run: npm ci --prefix cloudflare
+      - run: npm run check --prefix cloudflare
+      - run: npm test --prefix cloudflare
+      - run: node --test cloudflare/backup/test/*.test.mjs
+      - uses: actions/checkout@v4
+        with:
+          repository: BroZhong/open-managed-agents
+          ref: e04695152219a91c2ecdff41955dfc3fab73b438
+          path: state/oma-reference
+      - run: npm run check:upstream -- state/oma-reference
