@@ -284,8 +284,8 @@ store sign-ins for banking, payment or accounts where an unattended click is una
 is meant for the owner only, so a composer must deliver it to the owner directly, not to the model. The owner ends it
 with Done or Failed; `handoff_cancel` revokes it by closing that tab.
 
-agent-browser's npm package carries every platform's native binary (about 116 MB). Images keep only their own
-platform's binary (the Dockerfile deletes the others and marks it executable; about 18 MB for linux-x64).
+agent-browser's npm package carries every platform's native binary (about 116 MB). A deployment image can
+keep only its own platform's binary, marked executable (about 18 MB for linux-x64).
 
 ## HTTP
 

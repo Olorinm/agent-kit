@@ -71,9 +71,6 @@ node dist/cli.js destroy --config /secure/providers.json --provider cloudflare -
 ```sh
 npm test
 npm run test:package
-# 创建一个计费环境，验证执行、文件、暂停恢复，然后销毁：
-npm run probe -- --config /secure/providers.json --provider cloudflare --template node24 \
-  --workspace /home/user/workspace --report state/probe.json
 ```
 
-网关另有检查：在 `cloudflare/` 下 `npm ci && npm run check && npm test`，以及 `node --test cloudflare/backup/test/*.test.mjs`。真机测试会把环境 ID 和清理结果记录到私有报告。
+网关另有检查：在 `cloudflare/` 下 `npm ci && npm run check && npm test`，以及 `node --test cloudflare/backup/test/*.test.mjs`。这些测试只用本地夹具，不会创建云端环境。

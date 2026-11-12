@@ -5,6 +5,8 @@ on:
     paths: [packages/connectors/**, .github/workflows/ci-connectors.yml]
   pull_request:
     paths: [packages/connectors/**, .github/workflows/ci-connectors.yml]
+permissions:
+  contents: read
 concurrency:
   group: ci-connectors-${{ github.ref }}
   cancel-in-progress: true
@@ -13,22 +15,18 @@ defaults:
     working-directory: packages/connectors
 jobs:
   test:
+    runs-on: ubuntu-latest
     timeout-minutes: 10
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, macos-latest]
-    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
         with:
-          node-version: 24
+          node-version: 24.22.2
           cache: npm
           cache-dependency-path: packages/connectors/package-lock.json
       - run: npm ci
       - run: npm test
         timeout-minutes: 3
-      - run: npm run test:cloudflare
       - run: npm ci --prefix cloudflare
       - run: npm run check --prefix cloudflare
+      - run: npm test --prefix cloudflare

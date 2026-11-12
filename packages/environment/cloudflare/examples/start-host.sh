@@ -18,7 +18,7 @@ if [ ! -f "$base/host-installed" ]; then
     ca-certificates git tini util-linux
   sha256sum -c "$base/agent-host.sha256"
   npm install --prefix /opt/agent-host --omit=dev "$base/agent-host.tgz"
-  npm install --prefix /opt/codex @openai/codex@0.162.1
+  npm install --prefix /opt/codex @openai/codex@0.166.0
   id user >/dev/null 2>&1 || useradd --create-home --uid 1001 user
   mkdir -p /home/user/workspace "$host_dir"
   touch "$base/host-installed"

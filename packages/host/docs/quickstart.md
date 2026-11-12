@@ -58,7 +58,7 @@ For Hermes canonical Gateway, use this owner profile instead of the TUI template
 }
 ```
 
-Keep the native profile and Host state directory across restart. Install Hermes with its `acp` and `mcp` extras. The canonical viewer supports native sessions and tools but does not expose confirmed compact/delete/steer controls; its settings differ from TUI. See [native boundaries](upgrade-gateways-20261015.md).
+Keep the native profile and Host state directory across restart. Install Hermes with its `acp` and `mcp` extras. The canonical viewer supports native sessions and tools but does not expose confirmed compact/delete/steer controls; its settings differ from TUI. See [Hermes canonical Gateway](api.md#hermes-canonical-gateway).
 
 These are profile templates, not installers. `--command` and `--args` accommodate native installation paths. Owner-controlled `env`, Claude `native` settings and ACP `config` are available in `host.json`; trusted JavaScript hooks use the [programmatic runtime](common-api.md#settings-and-native-extensions). Keep credentials in native configuration or environment variables, not a committed profile.
 
@@ -69,5 +69,3 @@ npx agent-host serve --config host.json
 ```
 
 The service prints its URL and token-file location. Your product uses `AgentHostClient`, or embeds `createAgent()` in its backend. See the [common API](common-api.md), [HTTP guide](http-service.md) and [capabilities](capabilities.md). OpenClaw's current product-tool callback bridge requires a local Gateway. Remote workspace/sandbox provisioning belongs to your deployment environment.
-
-For cloud images that start before configuration is available, use the [configuration-gated entrypoint](../examples/cloud/README.md). It waits for a complete private bundle and then starts this same HTTP service.

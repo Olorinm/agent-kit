@@ -32,7 +32,7 @@ Channels (receiving and replying to Feishu or mail messages) stay in Router. Bus
 ## Usage
 
 ```sh
-npm install
+npm ci
 npm test
 agent-connectors init-key state/sealing.key
 agent-connectors keygen --kid caller-2026-10 --out keys/caller        # private key goes to Router
@@ -98,8 +98,8 @@ owner and conversation before invoking it. Agent environments receive tool
 results, never the credential files. Other credentials, including model access,
 are outside this guarantee.
 
-`0.1.0-alpha.2`: four connector kinds, OAuth lifecycle and approval-bound tools. Real accounts still require
-operator setup and owner consent. Mau/Router's connection UI, token delivery and approval presentation remain integration work.
+Real accounts require operator setup and owner consent. The connection UI, token delivery and approval
+presentation belong to the composing product.
 
 ## Cloudflare read broker
 

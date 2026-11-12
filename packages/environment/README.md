@@ -84,9 +84,6 @@ Keep credentials in private key files referenced by the configuration, never in 
 ```sh
 npm test
 npm run test:package
-# Provisions a billable environment, checks exec/files/pause/resume, and destroys it:
-npm run probe -- --config /secure/providers.json --provider cloudflare --template node24 \
-  --workspace /home/user/workspace --report state/probe.json
 ```
 
-The gateway has its own checks: `npm ci && npm run check && npm test` in `cloudflare/`, and `node --test cloudflare/backup/test/*.test.mjs`. Cloud probes write a private report recording the created ID and cleanup result.
+The gateway has its own checks: `npm ci && npm run check && npm test` in `cloudflare/`, and `node --test cloudflare/backup/test/*.test.mjs`. These tests use local fixtures and do not create cloud environments.
