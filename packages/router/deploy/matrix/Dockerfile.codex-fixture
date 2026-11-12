@@ -1,0 +1,7 @@
+# Optional standalone Codex session conformance fixture.
+FROM agent-router-matrix:lab
+USER root
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates && rm -rf /var/lib/apt/lists/*
+RUN npm install --prefix /opt/codex --omit=dev @openai/codex@0.152.1 && npm cache clean --force
+ENV CODEX_BIN=/opt/codex/node_modules/@openai/codex/bin/codex.js
+USER node

@@ -1,0 +1,658 @@
+import { Message, SendMessageRequest, TaskState } from "@a2a-js/sdk";
+import { z } from "zod";
+import { digest, key, terminal } from "../execution/protocol.js";
+import { CliWork } from "../execution/work.js";
+import { ChannelSendError, type ChannelAdapter, type ChannelContext, type ChannelMessage, type ReplyRoute, type ChannelContent, type MediaContent, type AttachmentReference, type RecordedAttachment,
+  type NotifyPolicy, type NotifyPurpose } from "./types.js";
+import { DurableStore } from "./store.js";
+import { AgentLedger } from "../ledger/ledger.js";
+import { shadowControl, shadowDelivery, shadowOutbox, shadowReceive, shadowStart, type ShadowContext } from "../ledger/shadow.js";
+
+const messageSchema = z.object({
+  externalId: z.string().min(1).max(512), sender: z.string().min(1).max(512), threadId: z.string().min(1).max(1024),
+  scope: z.enum(["direct", "group"]), text: z.string().max(1_000_000),
+  groupId: z.string().max(1024).optional(),
+  forkFromThreadId: z.string().min(1).max(1024).optional(),
+  reply: z.object({ target: z.string().min(1).max(1024), messageId: z.string().max(512), data: z.record(z.string(), z.string().max(8192)) }).strict(),
+  attachments: z.array(z.object({ id: z.string().max(1024), name: z.string().max(512), mediaType: z.string().max(100), kind: z.enum(["image", "audio", "video", "file", "sticker"]).optional(), data: z.record(z.string(), z.unknown()).optional() }).strict()).max(30).optional(),
+  quoted: z.object({ messageId: z.string().optional(), text: z.string().optional() }).strict().optional(),
+  action: z.object({ token: z.string().max(128) }).strict().optional(),
+  event: z.object({ type: z.string().max(100), data: z.record(z.string(), z.unknown()) }).strict().optional(),
+  native: z.record(z.string(), z.unknown()).optional(),
+  mentions: z.object({ self: z.boolean(), all: z.boolean() }).strict().optional(),
+  privateGroup: z.boolean().optional(),
+}).strict();
+export interface ConnectionDefinition {
+  id: string;
+  /** Explicitly linked owner identities share a main conversation only in private chats. */
+  ownerAddresses: string[];
+  /** Additional peers and groups have isolated conversations. */
+  peerAddresses?: string[];
+  groupIds?: string[];
+  /** The connection notifies the owner (a one-way push channel such as Bark). */
+  notify?: NotifyPolicy;
+}
+export interface InboxRecord {
+  id: string; connectionId: string; source: ChannelMessage; conversationId: string; replyRoute: ReplyRoute;
+  receivedAt: string; hash: string; state: "received" | "ignored" | "submitted" | "done";
+  taskId?: string;
+  reason?: string;
+  /** Server-derived, same-group parent context, pinned when the topic message arrives. */
+  forkFromContextId?: string;
+}
+export interface OutboxRecord {
+  id: string; taskId: string | null; route: ReplyRoute; text: string;
+  state: "queued" | "submitting" | "accepted" | "failed" | "uncertain";
+  content?: ChannelContent;
+  originTaskId?: string;
+  final?: boolean;
+  activity?: { key: string; active: boolean };
+  attempts: number; nextAt: number; externalId?: string; error?: string;
+}
+/**
+ * Person identity for a channel core (ADR 0005 phase 6, `features.identity`). Owner resolution looks the sender up
+ * by person; `/link` pairing runs at receipt, before the sender check, and writes nothing to any transcript.
+ */
+export interface CoreIdentity {
+  /** The sender's person, or undefined for an unknown identity. */
+  person(connectionId: string, source: ChannelMessage): string | undefined;
+  /**
+   * Pairing control path. Undefined: not a pairing command. Otherwise the reply to send on the message's own route
+   * (none for a command in a group, so a code is never confirmed in front of others).
+   */
+  pair(connectionId: string, source: ChannelMessage): { reply?: string | undefined } | undefined;
+  /** Called for each accepted owner message resolved by person (`last_seen_at`). */
+  seen?(connectionId: string, source: ChannelMessage): void;
+}
+interface Connection { definition: ConnectionDefinition; adapter: ChannelAdapter; reload?: () => ChannelAdapter; lastError: string; connected: boolean; failures: number; nextStart: number; }
+
+/** Channel-neutral receipt, conversation mapping and delivery over the existing work ledger. */
+export class CommunicationCore {
+  private readonly connections = new Map<string, Connection>();
+  private dispatching = false;
+  private flushing = false;
+  private lastError = "";
+  control?: (input: InboxRecord) => Promise<boolean>;
+  /** Shadow ledger (ADR 0005 phase 1). Present when the store's ledger was opened; never changes legacy behavior. */
+  ledger: AgentLedger | undefined;
+  ownerPersonId: string | undefined;
+  persons: ((connectionId: string, sender: string) => string | undefined) | undefined;
+  identity: CoreIdentity | undefined;
+  /** A browser has the session's chat open (owner presence); such a chat needs no push. */
+  watching: ((sessionKey: string) => boolean) | undefined;
+  constructor(readonly agentId: string, readonly store: DurableStore, readonly work: CliWork, private readonly validate: () => void = () => {}) {
+    this.ledger = AgentLedger.attached(store);
+  }
+  get shadowContext(): ShadowContext {
+    return { agentId: this.agentId, ownerPersonId: this.ownerPersonId, channel: (id) => this.kindOf(id),
+      account: (id) => this.store.get<string>("communication_checkpoints", key(id, "account")) ?? id,
+      ...(this.persons ? { person: this.persons } : {}) };
+  }
+  /** Phase 3: the ledger is the dispatch and delivery queue (see `AgentLedger.authoritative`). */
+  private get authoritative(): boolean { return Boolean(this.ledger?.authoritative); }
+  /**
+   * A ledger write beside its legacy record, in the caller's transaction when there is one. A ledger error rolls back
+   * only the ledger write (savepoint) and is recorded in `ledger.lastError`; the legacy record commits, and the
+   * authoritative dispatcher and flush pick it up through their legacy fallbacks (records without a pending input or
+   * delivery row, settled records reconciled). Failing the receipt instead would stop a channel cursor forever on a
+   * deterministic ledger error (a Matrix /sync batch or Feishu redelivery loop).
+   * `strict` (web receipts in authoritative mode) throws instead: the HTTP client sees the error and retries.
+   */
+  private shadow<T>(work: (ledger: AgentLedger) => T, strict = false): T | undefined {
+    const ledger = this.ledger; if (!ledger) return undefined;
+    if (!strict || !ledger.authoritative) return ledger.shadow(() => work(ledger));
+    return this.store.db.isTransaction ? work(ledger) : this.store.transaction(() => work(ledger));
+  }
+  /** One transaction for a legacy record and its ledger write. */
+  private atomic<T>(work: () => T): T { return this.store.db.isTransaction ? work() : this.store.transaction(work); }
+  private setOutbox(id: string, value: OutboxRecord, suppressed = false): void {
+    this.atomic(() => {
+      this.store.set("communication_outbox", id, value);
+      this.shadow((ledger) => shadowDelivery(ledger, value, suppressed));
+    });
+  }
+  /** Web replies are delivered by being recorded; the legacy outbox row is settled at once for compatibility. */
+  private settleWeb(outbox: OutboxRecord, eventId: string | undefined): void {
+    if (!this.connections.get(outbox.route.connectionId)?.adapter.ledgerDelivery) return;
+    this.store.set("communication_outbox", outbox.id, { ...outbox, state: "accepted", externalId: eventId ?? outbox.id } satisfies OutboxRecord);
+  }
+
+  register(definition: ConnectionDefinition, adapter: ChannelAdapter, reload?: () => ChannelAdapter): void {
+    if (this.connections.has(definition.id)) throw new Error("duplicate_connection_id");
+    const fingerprint = digest({ agentId: this.agentId, kind: adapter.kind, ...definition });
+    const existing = this.store.get<{ kind: string; agentId: string }>("communication_connections", definition.id);
+    if (existing && (existing.kind !== adapter.kind || existing.agentId !== this.agentId)) throw new Error("connection_identity_changed");
+    this.store.set("communication_connections", definition.id, { kind: adapter.kind, agentId: this.agentId, fingerprint });
+    this.connections.set(definition.id, { definition, adapter, ...(reload ? { reload } : {}), lastError: "", connected: false, failures: 0, nextStart: 0 });
+    for (const { id, value } of this.store.entries<OutboxRecord>("communication_outbox")) {
+      if (value.route.connectionId === definition.id && value.state === "submitting") {
+        this.setOutbox(id, { ...value, state: value.activity || adapter.retrySafe ? "queued" : "uncertain", error: "send_interrupted" });
+      }
+    }
+  }
+  context(connectionId: string): ChannelContext {
+    this.connection(connectionId);
+    return {
+      receive: (message) => { this.receive(connectionId, message); },
+      checkpoint: ((name: string, value?: unknown) => {
+        if (value === undefined) return this.store.get("communication_checkpoints", key(connectionId, name));
+        this.store.set("communication_checkpoints", key(connectionId, name), value);
+      }) as ChannelContext["checkpoint"],
+      error: (code) => { this.connection(connectionId).lastError = code; },
+      disconnected: (error) => {
+        const connection = this.connection(connectionId); connection.connected = false; connection.lastError = error;
+        connection.nextStart = Date.now() + Math.min(60_000, 1000 * 2 ** Math.min(++connection.failures, 6));
+      },
+    };
+  }
+  async start(): Promise<void> { await this.reconnect(); }
+  async reconnect(now = Date.now()): Promise<void> {
+    await Promise.all([...this.connections].map(async ([id, connection]) => {
+      if (connection.connected || connection.nextStart > now) return;
+      connection.nextStart = Number.MAX_SAFE_INTEGER;
+      try {
+        if (connection.failures) { await connection.adapter.stop(); if (connection.reload) connection.adapter = connection.reload(); }
+        await connection.adapter.start(this.context(id)); connection.connected = true;
+        connection.lastError = ""; connection.failures = 0;
+      } catch (error) {
+        connection.lastError = code(error); await connection.adapter.stop().catch(() => {});
+        connection.nextStart = now + Math.min(60_000, 1000 * 2 ** Math.min(++connection.failures, 6));
+      }
+    }));
+  }
+  async stop(): Promise<void> {
+    await Promise.allSettled([...this.connections.values()].map(async (connection) => {
+      await connection.adapter.stop(); connection.connected = false;
+      connection.nextStart = Number.MAX_SAFE_INTEGER;
+    }));
+  }
+  receive(connectionId: string, input: ChannelMessage): InboxRecord {
+    this.validate();
+    const source = messageSchema.parse(input);
+    const { definition, adapter } = this.connection(connectionId);
+    const id = digest(key(this.agentId, connectionId, source.externalId));
+    const hash = digest(source);
+    const existing = this.store.get<InboxRecord>("communication_inbox", id);
+    if (existing) {
+      if (existing.hash !== hash) throw new Error("channel_event_id_reused_with_different_payload");
+      return existing;
+    }
+    const pairing = !adapter.ledgerDelivery && !source.event && !source.action && !source.attachments?.length ? this.identity?.pair(connectionId, source) : undefined;
+    if (pairing) return this.receivePairing(connectionId, id, hash, source, pairing.reply);
+    const owner = this.isOwner(connectionId, source);
+    if (owner && !definition.ownerAddresses.includes(source.sender)) { try { this.identity?.seen?.(connectionId, source); } catch { /* Bookkeeping only. */ } }
+    // An owner addressing this agent (or everyone) in a group starts work without a group allowlist.
+    const addressed = source.scope === "group" && owner && Boolean(source.mentions?.self || source.mentions?.all);
+    const allowed = source.scope === "direct" ? owner || Boolean(definition.peerAddresses?.includes(source.sender)) :
+      addressed || adapter.groupPolicy?.(source) === "open" ||
+        Boolean(definition.groupIds?.includes(source.groupId ?? source.threadId)) && (owner || Boolean(definition.peerAddresses?.includes(source.sender)));
+    const oversized = Buffer.byteLength(source.text) > 24_000;
+    const conversationId = `c-${digest(key(this.agentId, source.scope === "direct" && owner ? "owner-main" :
+      key(connectionId, source.scope, source.threadId, source.scope === "direct" ? source.sender : "group"))).slice(0, 40)}`;
+    // A provider topic may inherit only its own group's main session, never an owner DM or another group.
+    const parentId = source.scope === "group" && source.forkFromThreadId && source.forkFromThreadId === source.groupId && source.threadId !== source.groupId
+      ? `c-${digest(key(this.agentId, key(connectionId, "group", source.groupId, "group"))).slice(0, 40)}` : undefined;
+    const forkFromContextId = parentId && this.authoritative && this.ledger!.session(parentId) ? this.ledger!.contextFor(parentId) : parentId;
+    const record: InboxRecord = { id, connectionId, source, conversationId, hash, receivedAt: new Date().toISOString(),
+      ...(forkFromContextId ? { forkFromContextId } : {}),
+      replyRoute: { connectionId, ...source.reply }, state: allowed && (source.text.trim() || source.attachments?.length || source.action || source.event) && !oversized ? "received" : "ignored",
+      ...(oversized ? { reason: "input_too_large" } : {}) };
+    const commit = () => {
+      this.store.set("communication_inbox", id, record);
+      this.store.set("communication_threads", key(connectionId, source.scope, source.threadId, source.sender), conversationId);
+      const noticeId = allowed && oversized ? digest(key(id, "input-too-large")) : undefined;
+      if (noticeId) {
+        this.store.insert("communication_outbox", noticeId, { id: noticeId, taskId: null, route: record.replyRoute,
+          text: "这条消息超过当前 24 KB 的文字输入上限，请缩短内容后再发送。", state: "queued", attempts: 0, nextAt: 0 } satisfies OutboxRecord);
+      }
+      this.shadow((ledger) => shadowReceive(ledger, this.shadowContext, record, { owner, allowed, oversized, noticeId }), adapter.ledgerDelivery === true);
+      if (noticeId) this.settleWeb(this.store.get<OutboxRecord>("communication_outbox", noticeId)!, undefined);
+    };
+    // Matrix invokes receipt inside its existing transaction; other channels create their own.
+    if (this.store.db.isTransaction) commit(); else this.store.transaction(commit);
+    return record;
+  }
+  /**
+   * A `/link` command (ADR 0005 18.4): the claim is `ignored` with reason `pairing`, no conversation, event or turn is
+   * created, and the code is not kept (the legacy record stores a placeholder; the hash still dedupes redelivery).
+   * The reply is a notice on the message's own route without a transcript event.
+   */
+  private receivePairing(connectionId: string, id: string, hash: string, source: z.infer<typeof messageSchema>, reply: string | undefined): InboxRecord {
+    const { native: _native, quoted: _quoted, ...rest } = source;
+    const record: InboxRecord = { id, connectionId, source: { ...rest, text: "/link ********" }, hash, receivedAt: new Date().toISOString(),
+      conversationId: `c-${digest(key(this.agentId, key(connectionId, source.scope, source.threadId, source.scope === "direct" ? source.sender : "group"))).slice(0, 40)}`,
+      replyRoute: { connectionId, ...source.reply }, state: "ignored", reason: "pairing" };
+    this.atomic(() => {
+      this.store.set("communication_inbox", id, record);
+      if (reply) {
+        const noticeId = digest(key(id, "pairing"));
+        this.store.insert("communication_outbox", noticeId, { id: noticeId, taskId: null, route: record.replyRoute, text: reply, state: "queued", attempts: 0, nextAt: 0 } satisfies OutboxRecord);
+      }
+      this.shadow((ledger) => {
+        if (!ledger.claim({ connectionId, externalId: source.externalId, inputId: id, hash }).duplicate)
+          ledger.settleClaim(connectionId, source.externalId, "ignored", { reason: "pairing" });
+      });
+    });
+    return record;
+  }
+  /**
+   * Owner check (ADR 0005 18.1): the sender resolves to the agent owner's person. Configured `ownerAddresses` are
+   * still honored directly for one release; they are also seeded as `config` identities.
+   */
+  isOwner(connectionId: string, source: ChannelMessage): boolean {
+    if (this.connections.get(connectionId)?.definition.ownerAddresses.includes(source.sender)) return true;
+    return Boolean(this.identity && this.ownerPersonId && this.identity.person(connectionId, source) === this.ownerPersonId);
+  }
+  async dispatch(): Promise<void> {
+    if (this.dispatching) return;
+    this.dispatching = true;
+    try {
+      for (const { id, value: listed } of this.dueInputs()) {
+        this.validate();
+        // Earlier items await; re-read so an input redacted or settled meanwhile is not dispatched from a stale list.
+        const value = this.authoritative ? this.store.get<InboxRecord>("communication_inbox", id) : listed;
+        if (!value || value.state !== "received") continue;
+        const pending = this.authoritative ? this.ledger!.input(id) : undefined;
+        if (pending && !["queued", "starting"].includes(String(pending.state))) continue;
+        // A message on a connection that is gone (Matrix off, ADR 0005 19.2) has no route. It must not stall the queue,
+        // and it is settled so that bringing the connection back does not run it late.
+        if (!this.connections.has(value.connectionId)) {
+          this.atomic(() => {
+            this.store.set("communication_inbox", id, { ...value, state: "ignored", reason: "connection_removed" });
+            this.shadow((ledger) => { if (ledger.input(id)) ledger.updateInput(id, "dropped", { reason: "connection_removed" }); });
+          });
+          continue;
+        }
+        const eventType = value.source.event?.type;
+        // Message state changes are durable context, not new requests or answers to pending interactions.
+        if (eventType && ["reaction", "message-edit", "message-redaction"].includes(eventType)) {
+          this.store.set("communication_inbox", id, { ...value, state: "done",
+            reason: eventType === "message-edit" ? "edit_recorded_without_reexecution" : `${eventType}_recorded_without_execution` });
+          continue;
+        }
+        // Taken by the dispatcher: a later redaction no longer drops it. After a crash `starting` is retried with the
+        // same message id, and CliWork returns the same task.
+        if (pending?.state === "queued") this.shadow((ledger) => ledger.updateInput(id, "starting"));
+        if (this.control && await this.control(value)) {
+          this.atomic(() => { this.store.set("communication_inbox", id, { ...value, state: "done" }); this.shadow((ledger) => shadowControl(ledger, value, "control")); }); continue;
+        }
+        if (value.source.action) { this.notice(value, "这个按钮已失效，请根据当前提问重新操作。", "stale-action");
+          this.atomic(() => { this.store.set("communication_inbox", id, { ...value, state: "done" }); this.shadow((ledger) => shadowControl(ledger, value, "stale_action")); }); continue; }
+        const resumable = (item: InboxRecord) => Boolean(item.taskId) && item.conversationId === value.conversationId &&
+          (item.connectionId === value.connectionId && item.source.sender === value.source.sender || this.isOwnerInput(item) && this.isOwnerInput(value));
+        // A reset (ADR 16.3) opens a new execution context: turns of earlier windows are never resumed.
+        const window = this.authoritative ? this.ledger!.session(value.conversationId)?.window : undefined;
+        const current = (item: InboxRecord) => window === undefined || window === 1 || this.ledger!.turn(item.taskId ?? "")?.window === window;
+        const prior = (this.authoritative ? this.ledger!.startedInputs(value.conversationId).map(({ inputId }) => this.store.get<InboxRecord>("communication_inbox", inputId))
+          .find((item): item is InboxRecord => Boolean(item && resumable(item))) : undefined) ??
+          this.store.entries<InboxRecord>("communication_inbox").map(({ value: item }) => item).reverse().find(resumable);
+        const resumeFrom = prior && current(prior) ? prior : undefined;
+        const previous = resumeFrom?.taskId ? await this.work.get(resumeFrom.taskId) : undefined;
+        const resume = previous && [TaskState.TASK_STATE_INPUT_REQUIRED, TaskState.TASK_STATE_AUTH_REQUIRED].includes(previous.status?.state ?? 0);
+        let quote = value.source.quoted?.text;
+        if (!quote && value.source.quoted?.messageId && this.authoritative) {
+          const ledger = this.ledger!, quotedId = value.source.quoted.messageId;
+          const target = ledger.event(ledger.platformEvent(value.connectionId, quotedId) ?? quotedId);
+          if (target && target.sessionKey === value.conversationId && typeof target.body.text === "string" && !target.body.redacted) quote = target.body.text;
+        }
+        if (!quote && value.source.quoted?.messageId) {
+          const original = this.store.entries<InboxRecord>("communication_inbox").map(({ value: item }) => item).find((item) => item.connectionId === value.connectionId && item.replyRoute.target === value.replyRoute.target && item.replyRoute.messageId === value.source.quoted!.messageId);
+          try { quote = original?.source.text ?? await this.connection(value.connectionId).adapter.readQuote?.(value.source); }
+          catch { this.connection(value.connectionId).lastError = "quoted_message_unavailable"; }
+        }
+        const prepared = this.connection(value.connectionId).adapter.turnContext?.(value.source);
+        let text = [prepared?.text ?? "", quote ? `引用消息：${quote}` : value.source.quoted?.messageId ? `引用消息 ID：${value.source.quoted.messageId}` : "", value.source.text,
+          value.source.event ? JSON.stringify(value.source.event) : "",
+          ...(value.source.attachments ?? []).map((item) => `附件：${item.name} (${item.mediaType})`)].filter(Boolean).join("\n");
+        if (Buffer.byteLength(text) > 24_000) text = Buffer.from(text).subarray(0, 23_500).toString("utf8") + "\n[消息上下文已截短；原始消息可通过 channel message 工具读取。]";
+        // Execution tools need provider IDs; the internal session ID cannot fetch channel history.
+        // Select routing facts explicitly: raw events and reply data may contain provider secrets.
+        const channelContext = { channel: this.connection(value.connectionId).adapter.kind, connectionId: value.connectionId,
+          scope: value.source.scope, conversationId: value.replyRoute.target, messageId: value.replyRoute.messageId,
+          senderId: value.source.sender, ...(value.source.quoted?.messageId ? { quotedMessageId: value.source.quoted.messageId } : {}) };
+        // The window's context id (window 1 is the session key), so a reset starts a new Host session.
+        const contextId = this.authoritative ? this.ledger!.contextFor(value.conversationId) : value.conversationId;
+        const request = SendMessageRequest.fromJSON({ message: { messageId: `channel-${id}`, contextId,
+          ...(resume ? { taskId: previous!.id } : {}), role: "ROLE_USER",
+          parts: [{ text }, { text: `Channel context (provider routing IDs): ${JSON.stringify(channelContext)}` }] }, configuration: { returnImmediately: true } });
+        // Both steps are independently durable. The stable message ID closes the restart window.
+        const task = await this.work.send(request, { sender: resume ? this.work.inspect(previous!.id).from : key("channel", value.connectionId, value.source.sender),
+          room: value.conversationId, approved: true });
+        this.atomic(() => {
+          this.store.set("communication_inbox", id, { ...value, state: "submitted", taskId: task.id });
+          this.shadow((ledger) => shadowStart(ledger, this.shadowContext, value, task.id, this.isOwnerInput(value)));
+        });
+        prepared?.commit();
+      }
+      this.publishResults();
+      this.lastError = "";
+    } catch (error) { this.lastError = code(error); throw error; }
+    finally { this.dispatching = false; }
+  }
+  private publishResults(): void {
+    for (const { id: eventId, value: task } of this.work.events()) {
+      const input = this.input(task.id);
+      if (!input) continue; // Matrix/A2A events belong to the existing connector.
+      this.store.transaction(() => {
+        // The connection may be gone (Matrix off): the result is still recorded, and flush settles its delivery as failed.
+        const adapter = this.connections.get(input.connectionId)?.adapter;
+        const capabilities = adapter?.capabilitiesFor?.(input.replyRoute) ?? adapter?.capabilities;
+        if (adapter?.activity && capabilities?.native.includes("reaction")) {
+          const active = task.status?.state === TaskState.TASK_STATE_WORKING;
+          const id = digest(key(input.id, "activity", String(active)));
+          const activity: OutboxRecord = { id, taskId: task.id, route: input.replyRoute, text: "",
+            activity: { key: input.id, active }, state: "queued", attempts: 0, nextAt: 0 };
+          if (this.store.insert("communication_outbox", id, activity)) this.shadow((ledger) => shadowOutbox(ledger, this.shadowContext, input, activity, "activity", null));
+        }
+        if (terminal(task) && input.state !== "done") {
+          const parts = task.artifacts.flatMap((artifact) => artifact.parts);
+          const answer = this.store.get<string>("communication_results", task.id) ??
+            parts.filter((part) => part.content?.$case === "text").map((part) => part.content!.value).join("\n");
+          const fallback = task.status?.state === TaskState.TASK_STATE_CANCELED ? "已取消。" :
+            task.status?.state === TaskState.TASK_STATE_COMPLETED ? "已完成。" :
+              task.status?.message?.parts.filter((part) => part.content?.$case === "text").map((part) => part.content!.value).join("\n") || "本轮执行失败，请查看运行状态。";
+          const outbox: OutboxRecord = { id: digest(key(task.id, "final")), taskId: task.id, route: input.replyRoute,
+            text: answer || fallback, final: true, state: "queued", attempts: 0, nextAt: 0 };
+          if (this.store.insert("communication_outbox", outbox.id, outbox)) this.settleWeb(outbox, this.shadow((ledger) => {
+            const finalEventId = shadowOutbox(ledger, this.shadowContext, input, outbox, "reply", { kind: "message", turnId: task.id,
+              idempotencyKey: `turn:${task.id}:final`, body: { text: outbox.text, final: true } });
+            const state = task.status?.state === TaskState.TASK_STATE_COMPLETED ? "completed" : task.status?.state === TaskState.TASK_STATE_CANCELED ? "canceled" : "failed";
+            ledger.turnState(task.id, state, { agentId: this.agentId, ...(finalEventId ? { finalEventId } : {}), ...(state === "failed" ? { error: (answer || fallback).slice(0, 500) } : {}) });
+            return finalEventId;
+          }));
+          if (task.status?.state !== TaskState.TASK_STATE_CANCELED) this.notifyOwner("reply", input, outbox.text, `turn:${task.id}`);
+          for (const { id, value } of this.store.entries<InboxRecord>("communication_inbox")) if (value.taskId === task.id)
+            this.store.set("communication_inbox", id, { ...value, state: "done" });
+        }
+        if (!terminal(task) && task.status?.message) {
+          const text = task.status.message.parts.filter((part) => part.content?.$case === "text").map((part) => part.content!.value).join("\n");
+          if (text) {
+            const id = digest(key(task.id, "notice", text));
+            const notice: OutboxRecord = { id, taskId: task.id, route: input.replyRoute, text, state: "queued", attempts: 0, nextAt: 0 };
+            if (this.store.insert("communication_outbox", id, notice)) this.settleWeb(notice, this.shadow((ledger) => shadowOutbox(ledger, this.shadowContext, input, notice, "notice",
+              { kind: "notice", idempotencyKey: `notice:${id}`, body: { text, level: "info" } })));
+          }
+        }
+        this.work.ack(eventId);
+      });
+    }
+  }
+  saveResult(taskId: string, answer: string): boolean {
+    if (!this.input(taskId)) return false;
+    const previous = this.store.get<string>("communication_results", taskId);
+    if (previous !== undefined && previous !== answer) throw new Error("execution_result_changed");
+    this.store.set("communication_results", taskId, answer);
+    return true;
+  }
+  /** A later window's execution context (`<key>.w<n>`) belongs to its session. */
+  private sessionOf(contextId: string): string { return this.ledger?.sessionForContext(contextId) ?? contextId; }
+  isOwnerTask(conversationId: string, taskId: string): boolean {
+    const input = this.input(taskId);
+    return Boolean(input && input.conversationId === this.sessionOf(conversationId) && this.isOwnerInput(input));
+  }
+  /** The owner's turn in a group of only the owner and the owner's agents, as reported at receipt. */
+  isPrivateGroupOwnerTask(conversationId: string, taskId: string): boolean {
+    const input = this.input(taskId);
+    return Boolean(input && input.conversationId === this.sessionOf(conversationId) && input.source.scope === "group" && input.source.privateGroup === true &&
+      this.isOwner(input.connectionId, input.source));
+  }
+  async flush(now = Date.now()): Promise<void> {
+    if (this.flushing) return;
+    this.flushing = true;
+    try {
+      for (const { id, value } of this.dueOutbox(now)) {
+        this.validate();
+        const connection = this.connections.get(value.route.connectionId);
+        if (!connection) { this.setOutbox(id, { ...value, state: "failed", error: "connection_removed" }); continue; }
+        if (!connection.connected) continue;
+        if (value.activity?.active && ((await this.work.get(value.taskId!)).status?.state !== TaskState.TASK_STATE_WORKING || this.input(value.taskId!)?.id !== value.activity.key)) {
+          this.setOutbox(id, { ...value, state: "accepted" }, true); continue;
+        }
+        const attempt = { ...value, state: "submitting" as const, attempts: value.attempts + 1 };
+        this.setOutbox(id, attempt);
+        try {
+          const streamed = value.taskId && (value.final || id === digest(key(value.taskId, "final"))) && this.store.get("communication_streams", value.taskId);
+          const receipt = value.activity && connection.adapter.activity
+            ? await connection.adapter.activity(value.route, value.activity.active, value.activity.key)
+            : streamed && !value.content && connection.adapter.progress
+            ? await connection.adapter.progress(value.route, value.text, value.taskId!, true)
+            : value.content && connection.adapter.sendContent ? await connection.adapter.sendContent(value.route, value.content, id)
+            : await connection.adapter.send(value.route, value.text, id);
+          const { error: _error, ...accepted } = attempt;
+          this.setOutbox(id, { ...accepted, state: "accepted", externalId: receipt.externalId });
+        } catch (error) {
+          const disposition = value.activity ? (attempt.attempts < 5 ? "retry" : "failed") :
+            error instanceof ChannelSendError ? error.disposition : connection.adapter.retrySafe ? "retry" : "uncertain";
+          const nextAt = now + Math.max(error instanceof ChannelSendError ? error.retryAfterMs : 0, Math.min(60_000, 1000 * 2 ** Math.min(attempt.attempts, 6)));
+          this.setOutbox(id, { ...attempt, state: disposition === "retry" ? "queued" : disposition, error: code(error), nextAt });
+        }
+      }
+    } catch (error) { this.lastError = code(error); throw error; }
+    finally { this.flushing = false; }
+  }
+  status() {
+    return { agentId: this.agentId, error: this.lastError || null, connections: [...this.connections].map(([id, connection]) => ({ id, kind: connection.adapter.kind,
+      started: connection.connected, capabilities: connection.adapter.capabilities ?? null, error: connection.lastError || null })),
+      inbox: this.store.entries<InboxRecord>("communication_inbox").slice(-100).map(({ value }) => ({ id: value.id, connectionId: value.connectionId,
+        sender: value.source.sender, threadId: value.source.threadId, conversationId: value.conversationId,
+        state: value.state, taskId: value.taskId ?? null, reason: value.reason ?? null })),
+      outbox: this.store.entries<OutboxRecord>("communication_outbox").slice(-100).map(({ value }) => ({ id: value.id, taskId: value.taskId,
+        connectionId: value.route.connectionId, state: value.state, attempts: value.attempts, error: value.error ?? null })) };
+  }
+  input(taskId: string): InboxRecord | undefined {
+    const indexed = this.authoritative ? this.ledger!.inputForTurn(taskId) : undefined;
+    const record = indexed ? this.store.get<InboxRecord>("communication_inbox", indexed) : undefined;
+    if (record?.taskId === taskId) return record;
+    return this.store.entries<InboxRecord>("communication_inbox").map(({ value }) => value).reverse().find((item) => item.taskId === taskId);
+  }
+  /**
+   * Dispatch candidates. Legacy: every `received` inbox record. Authoritative: `ledger_pending_inputs` in order, after
+   * `received` records that have no pending input (lifecycle events and receipts from before the cutover).
+   * A pending input whose legacy record has moved on is reconciled instead of dispatched again.
+   */
+  private dueInputs(): Array<{ id: string; value: InboxRecord }> {
+    if (!this.authoritative) return this.store.entries<InboxRecord>("communication_inbox").filter(({ value }) => value.state === "received");
+    const ledger = this.ledger!, due: Array<{ id: string; value: InboxRecord }> = [];
+    const orphans = this.store.db.prepare(`SELECT id, value FROM documents WHERE collection='communication_inbox' AND json_extract(value,'$.state')='received'
+      AND NOT EXISTS (SELECT 1 FROM ledger_pending_inputs p WHERE p.input_id=documents.id) ORDER BY rowid`).all();
+    for (const row of orphans) due.push({ id: String(row.id), value: JSON.parse(String(row.value)) as InboxRecord });
+    for (const id of ledger.dueInputs()) {
+      const value = this.store.get<InboxRecord>("communication_inbox", id);
+      if (value?.state === "received") { due.push({ id, value }); continue; }
+      this.shadow((target) => target.updateInput(id, value?.taskId ? "started" : value ? "control" : "dropped", value?.taskId ? { turnId: value.taskId } : { reason: value ? "legacy_input_settled" : "legacy_input_missing" }));
+    }
+    return due;
+  }
+  /** Flush candidates: `ledger_deliveries` due rows (authoritative), plus queued outbox rows that have no delivery row. */
+  private dueOutbox(now: number): Array<{ id: string; value: OutboxRecord }> {
+    const ready = ({ value }: { value: OutboxRecord }) => value.state === "queued" && value.nextAt <= now;
+    if (!this.authoritative) return this.store.entries<OutboxRecord>("communication_outbox").filter(ready);
+    const ledger = this.ledger!, due: Array<{ id: string; value: OutboxRecord }> = [];
+    for (const id of ledger.dueDeliveries(now)) {
+      const value = this.store.get<OutboxRecord>("communication_outbox", id);
+      if (value && ready({ value })) due.push({ id, value });
+      else if (value && value.state !== "queued") this.shadow((target) => shadowDelivery(target, value));
+    }
+    const orphans = this.store.db.prepare(`SELECT id, value FROM documents WHERE collection='communication_outbox' AND json_extract(value,'$.state')='queued'
+      AND NOT EXISTS (SELECT 1 FROM ledger_deliveries d WHERE d.delivery_id=documents.id) ORDER BY rowid`).all();
+    for (const row of orphans) { const item = { id: String(row.id), value: JSON.parse(String(row.value)) as OutboxRecord }; if (ready(item)) due.push(item); }
+    return due;
+  }
+  notice(input: InboxRecord, text: string, suffix: string, content?: ChannelContent): string {
+    const id = digest(key(input.id, suffix));
+    const notice: OutboxRecord = { id, taskId: null, route: input.replyRoute, text, ...(content ? { content } : {}), state: "queued", attempts: 0, nextAt: 0 };
+    // Question notices are recorded as `card` events by the Host worker, which owns the call.
+    this.atomic(() => {
+      if (!this.store.insert("communication_outbox", id, notice)) return;
+      this.settleWeb(notice, suffix.startsWith("question:") ? undefined : this.shadow((ledger) => shadowOutbox(ledger, this.shadowContext, input, notice, "notice",
+        { kind: "notice", role: "system", senderType: "system", senderId: "router", idempotencyKey: `notice:${id}`, body: { text, level: "info" } })));
+      if (suffix.startsWith("question:")) this.notifyOwner("question", input, text, `notice:${id}`);
+    });
+    return id;
+  }
+  async attachments(taskId: string): Promise<MediaContent[]> {
+    const input = this.input(taskId); if (!input) return [];
+    const cached = this.store.get<MediaContent[]>("communication_media", input.id); if (cached) return cached;
+    const adapter = this.connection(input.connectionId).adapter;
+    const items: MediaContent[] = []; let size = 0;
+    for (const attachment of input.source.attachments ?? []) {
+      if (attachment.kind === "sticker" && adapter.capabilities?.receive.includes("sticker-reference")) continue;
+      if (!adapter.readAttachment) throw new Error("channel_attachment_read_unsupported");
+      const item = await adapter.readAttachment(input.source, attachment);
+      size += Buffer.byteLength(item.data, "base64"); if (size > 30 * 1024 * 1024) throw new Error("attachments_too_large");
+      items.push(item);
+    }
+    if (items.length) this.store.set("communication_media", input.id, items);
+    return items;
+  }
+  async progress(taskId: string, text: string): Promise<void> {
+    const input = this.input(taskId); if (!input || !text) return;
+    const connection = this.connections.get(input.connectionId);
+    if (!connection?.connected || !connection.adapter.progress || !this.capabilities(taskId)?.stream) return;
+    const receipt = await connection.adapter.progress(input.replyRoute, text, taskId, false);
+    this.store.set("communication_progress_messages", taskId, receipt.externalId.split(","));
+    this.store.set("communication_streams", taskId, true);
+  }
+  capabilities(taskId: string) { const input = this.input(taskId); if (!input) return undefined;
+    const adapter = this.connections.get(input.connectionId)?.adapter; return adapter?.capabilitiesFor?.(input.replyRoute) ?? adapter?.capabilities; }
+  /** True while the connection is registered. Records of a removed connection (Matrix off) stay readable but have no route. */
+  connected(connectionId: string): boolean { return this.connections.has(connectionId); }
+  /** Registered connection ids. */
+  connectionIds(): string[] { return [...this.connections.keys()]; }
+  /**
+   * An owner's direct input. A sender that became the owner by pairing is the owner only in owner-main; its earlier
+   * peer conversations keep their peer rights (ADR 0005 18.1: a conversation never moves).
+   * On a connection that is gone (Matrix off) the record speaks for itself: only an owner's direct message is in owner-main.
+   */
+  isOwnerInput(input: InboxRecord) {
+    if (input.source.scope !== "direct") return false;
+    const ownerMain = input.conversationId === `c-${digest(key(this.agentId, "owner-main")).slice(0, 40)}`;
+    const connection = this.connections.get(input.connectionId);
+    if (!connection) return ownerMain;
+    if (connection.definition.ownerAddresses.includes(input.source.sender)) return true;
+    return ownerMain && this.isOwner(input.connectionId, input.source);
+  }
+  /**
+   * `queueContent` for the channel tool. On a transcript channel (web) the media is stored first (ADR 0005 16.5) and the
+   * content event carries it as attachments; a retry with the same send key stores nothing again.
+   */
+  async submitContent(taskId: string, content: ChannelContent, sendKey: string): Promise<string> {
+    const input = this.input(taskId); if (!input) throw new Error("channel_task_not_found");
+    const recorded = this.connection(input.connectionId).adapter.recordedMedia;
+    if (!content.media?.length || !recorded || this.store.get("communication_outbox", digest(key(taskId, "content", sendKey)))) return this.queueContent(taskId, content, sendKey);
+    const items = await recorded.store(content.media);
+    try { return this.queueContent(taskId, content, sendKey, { attachments: items }); }
+    catch (error) { recorded.release(items); throw error; }
+  }
+  /**
+   * `transcript`: the notice is recorded on the session and delivered to no channel (ADR 16.6 `web`). `push`: the
+   * notice is also sent to that notify connection, whether or not a browser has the chat open.
+   */
+  queueContent(taskId: string, content: ChannelContent, sendKey: string,
+    options: { notice?: string; attachments?: RecordedAttachment[]; transcript?: boolean; push?: string } = {}): string {
+    const input = this.input(taskId); if (!input) throw new Error("channel_task_not_found");
+    // A schedule notice whose session only has a removed connection (Matrix off): the transcript is its delivery.
+    const adapter = options.notice ? this.connections.get(input.connectionId)?.adapter : this.connection(input.connectionId).adapter;
+    if ((content.html || content.media?.length || content.card || content.buttons?.length) && !adapter?.sendContent) throw new Error("channel_content_unsupported");
+    const capabilities = this.capabilities(taskId);
+    if (content.html && !capabilities?.send.includes("html")) throw new Error("channel_html_unsupported");
+    if (content.media?.length && !capabilities?.send.some((kind) => ["file", "image", "audio", "video"].includes(kind))) throw new Error("channel_media_unsupported");
+    if (!content.text && !content.html && !content.media?.length && !content.card && !content.buttons?.length) throw new Error("channel_content_empty");
+    if (content.card && !capabilities?.send.includes("card")) throw new Error("channel_card_unsupported");
+    const id = digest(key(taskId, "content", sendKey)), recorded = options.attachments?.length ? options.attachments : undefined;
+    // Recorded media lives in the blob store; the outbox row keeps no copy of its bytes.
+    const { media: _media, ...rest } = content;
+    const outbox: OutboxRecord = { id, taskId: null, originTaskId: taskId, route: input.replyRoute, text: content.text,
+      content: recorded ? rest : content, attempts: 0, nextAt: 0,
+      ...(options.transcript || !adapter && this.authoritative ? { state: "accepted", externalId: id } : { state: "queued" }) };
+    let bound = false;
+    this.atomic(() => {
+      if (!this.store.insert("communication_outbox", id, outbox)) return;
+      this.settleWeb(outbox, this.shadow((ledger) => {
+        const eventId = shadowOutbox(ledger, this.shadowContext, input, outbox, "content",
+          options.notice ? { kind: "notice", turnId: null, idempotencyKey: options.notice, body: { text: content.text, level: "info", origin: "schedule" } }
+            : { kind: "message", turnId: taskId, idempotencyKey: `content:${id}`, body: { text: content.text, ...(content.html ? { html: content.html } : {}),
+              ...(recorded ? { attachments: recorded } : content.media?.length ? { media: content.media.map((item) => ({ name: item.name, contentType: item.mediaType })) } : {}) } },
+          undefined, Date.now(), !options.transcript);
+        if (recorded && eventId) { adapter!.recordedMedia!.bind(ledger, eventId, recorded); bound = true; }
+        return eventId;
+      }));
+      if (options.notice && options.push) this.queueNotification(options.push, "schedule", input, content.text, options.notice);
+      else if (options.notice) this.notifyOwner("schedule", input, content.text, options.notice, { webOnly: options.transcript });
+    });
+    // Not recorded (a concurrent duplicate, or a ledger error rolled back): its stored media has no event.
+    if (recorded && !bound) adapter?.recordedMedia?.release(recorded);
+    return id;
+  }
+  /**
+   * Owner notifications (one-way push channels). An answer, a question or a schedule notice that reaches the owner only
+   * through a transcript surface (web), or through no live connection at all, is queued as plain text to every
+   * connection whose notify policy covers its purpose. Other channels deliver to the owner's own app, which notifies
+   * by itself, and a chat open in a browser needs no push. The rows reuse the outbox (retries, `uncertain` sends) and
+   * have no transcript event: they repeat an event that is already recorded.
+   */
+  private notifyOwner(purpose: NotifyPurpose, input: InboxRecord, text: string, ref: string, options: { webOnly?: boolean | undefined } = {}, now = Date.now()): void {
+    if (!text.trim() || !this.isOwnerInput(input)) return;
+    const origin = this.connections.get(input.connectionId);
+    if (!options.webOnly && origin && !origin.adapter.ledgerDelivery) return;
+    const covers = (policy: NotifyPolicy) => purpose === "reply" ? policy.replies && now - Date.parse(input.receivedAt) >= policy.replyAfterSeconds * 1000
+      : purpose === "question" ? policy.questions : policy.schedules;
+    const targets = [...this.connections].filter(([, connection]) => connection.definition.notify && covers(connection.definition.notify));
+    if (!targets.length) return;
+    try { if (this.watching?.(input.conversationId)) return; } catch { /* Presence is a hint: an unknown state notifies. */ }
+    for (const [connectionId] of targets) this.queueNotification(connectionId, purpose, input, text, ref);
+  }
+  private queueNotification(connectionId: string, purpose: NotifyPurpose, input: InboxRecord, text: string, ref: string): string {
+    if (!this.notifies(connectionId)) throw new Error("notify_connection_not_found");
+    const id = digest(key(ref, connectionId, "notify"));
+    this.store.insert("communication_outbox", id, { id, taskId: null, text, state: "queued", attempts: 0, nextAt: 0,
+      route: { connectionId, target: "owner", messageId: "", data: { purpose, sessionKey: input.conversationId } } } satisfies OutboxRecord);
+    return id;
+  }
+  /** A registered connection that notifies the owner (a one-way push channel). */
+  notifies(connectionId: string): boolean { return Boolean(this.connections.get(connectionId)?.definition.notify); }
+  /** The state of an owner notification. */
+  notification(id: string) {
+    const row = this.store.get<OutboxRecord>("communication_outbox", id);
+    if (!row || row.route.target !== "owner" || row.taskId !== null || row.originTaskId) throw new Error("channel_delivery_not_found");
+    return { id, state: row.state, externalId: row.externalId ?? null, error: row.error ?? null };
+  }
+  delivery(taskId: string, id: string) {
+    const row = this.store.get<OutboxRecord>("communication_outbox", id);
+    if (!row || row.originTaskId !== taskId) throw new Error("channel_delivery_not_found");
+    return { id, state: row.state, externalId: row.externalId ?? null, error: row.error ?? null };
+  }
+  async native(taskId: string, operation: string, args: Record<string, unknown>) {
+    const input = this.input(taskId); if (!input) throw new Error("channel_task_not_found");
+    const adapter = this.connection(input.connectionId).adapter;
+    if (!adapter.native || !this.capabilities(taskId)?.native.includes(operation)) throw new Error("channel_native_operation_unsupported");
+    return adapter.native(input.replyRoute, operation, args);
+  }
+  /**
+   * One attachment of a stored inbound message, for lazy promotion into the blob store (ADR 0005 16.5). Reuses the
+   * model's media cache when the input was already read, so an expired platform resource can still be promoted.
+   */
+  async readStoredAttachment(inputId: string, reference: AttachmentReference): Promise<MediaContent> {
+    const input = this.store.get<InboxRecord>("communication_inbox", inputId); if (!input) throw new Error("channel_input_not_found");
+    const adapter = this.connection(input.connectionId).adapter;
+    const read = (input.source.attachments ?? []).filter((item) => !(item.kind === "sticker" && adapter.capabilities?.receive.includes("sticker-reference")));
+    const index = read.findIndex((item) => item.id === reference.id), cached = this.store.get<MediaContent[]>("communication_media", inputId);
+    if (index >= 0 && cached?.[index]) return cached[index]!;
+    const attachment = (input.source.attachments ?? []).find((item) => item.id === reference.id);
+    if (!attachment) throw new Error("channel_attachment_not_found");
+    if (!adapter.readAttachment) throw new Error("channel_attachment_read_unsupported");
+    return adapter.readAttachment(input.source, attachment);
+  }
+  /** The adapter kind, also of a connection that is no longer registered (its stored record stays). */
+  private kindOf(id: string): string {
+    return this.connections.get(id)?.adapter.kind ?? this.store.get<{ kind: string }>("communication_connections", id)?.kind ?? id;
+  }
+  private connection(id: string): Connection {
+    const connection = this.connections.get(id);
+    if (!connection) throw new Error("connection_not_found");
+    return connection;
+  }
+}
+function code(error: unknown): string {
+  return error instanceof Error && /^[a-z0-9_:-]+$/.test(error.message) ? error.message : "channel_operation_failed";
+}

@@ -1,0 +1,350 @@
+import { SendMessageRequest } from "@a2a-js/sdk";
+import { z } from "zod";
+import { setTimeout as sleep } from "node:timers/promises";
+import type { CommunicationCore, InboxRecord } from "../communication/core.js";
+import type { DurableStore } from "../communication/store.js";
+import { ChannelHttpError } from "../http.js";
+import type { HostAdmission, HostPort, HostRun, HostStartInput, NativeSessionInput } from "./host.js";
+import { runtimeWorkingDirectory } from "./host.js";
+import type { ExecutionSession, RunBinding } from "./host-worker.js";
+import { digest, key } from "./protocol.js";
+import { CliWork, WorkError } from "./work.js";
+import { AgentLedger } from "../ledger/ledger.js";
+import { personId } from "../ledger/registry.js";
+import { WEB_CONNECTION } from "../ledger/surfaces.js";
+
+const identifier = z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9_.:-]{0,159}$/);
+const admissionSchema = z.object({ kind: z.enum(["owner", "delegation", "schedule"]), owner: z.string().min(1), agentId: z.string().min(1), reference: z.string().min(1),
+  expiresAt: z.iso.datetime().optional(), maxToolCalls: z.number().int().min(0).max(1_000_000).optional(),
+  toolGrants: z.object({ business: z.boolean().optional(), feishu: z.boolean().optional(),
+    connectedApps: z.object({ connections: z.array(z.string().min(1)).max(100), operations: z.array(z.string().min(1)).max(1000).optional() }).strict().optional(),
+  }).strict().optional(),
+}).strict();
+export interface WorkSessionSubmission {
+  eventId: string; sessionId?: string | undefined; input: string; admission: HostAdmission;
+  context?: unknown | undefined; inputItems?: Record<string, unknown>[] | undefined; settings?: Record<string, unknown> | undefined; mode?: "turn" | "compact" | undefined;
+}
+interface SessionMetadata { createdAt: string; title?: string; parentSessionId?: string; archived?: boolean; }
+interface WorkEvent { eventId: string; sessionId: string; hash: string; taskId: string; }
+export interface WorkEventResult {
+  eventId: string; taskId: string; sessionId: string; status: string; answer: string;
+  runId?: string; error?: string; outcomeUnknown: boolean;
+}
+export interface WorkSessionWaitOptions {
+  after?: string | undefined; timeoutMs?: number | undefined; signal?: AbortSignal | undefined;
+  /** Trusted tool-execution context. Never accept these fields from model input. */
+  waitingRunId?: string | undefined; waitingReference?: string | undefined; waitingCallId?: string | undefined;
+}
+export interface WorkDependencyWait {
+  runId: string; reference: string; callId: string; taskIds: string[]; deadlineAt: number; reserve: boolean;
+}
+
+/** One agent's authenticated embedding boundary. Callers must authenticate the owner before
+ * obtaining this object. Model text and channel ingress never have access to this port. */
+export class WorkSessions {
+  private channelForks: Promise<void> = Promise.resolve();
+  constructor(readonly agentId: string, readonly owner: string, readonly runtimeId: string,
+    readonly instanceId: string, readonly store: DurableStore, readonly work: CliWork,
+    readonly host: HostPort, readonly communication: CommunicationCore,
+    private readonly validate: () => void = () => {},
+    private readonly dependencyWait?: (input: WorkDependencyWait) => () => void) {}
+
+  private async request<T>(operation: () => Promise<T>): Promise<T> {
+    try { return await operation(); }
+    catch (error) {
+      if (error instanceof ChannelHttpError) {
+        const native = error.nativeError as { code?: unknown } | undefined;
+        if (native?.code === -32601) throw new WorkError("native_method_unsupported", 409, error.nativeError);
+        if (native?.code === -32600 || native?.code === -32602) throw new WorkError("native_request_invalid", 400, error.nativeError);
+        if ([400, 401, 403, 404, 409, 413, 422].includes(error.status)) throw new WorkError(error.code, error.status, error.nativeError);
+        if (error.nativeError !== undefined) throw new WorkError("native_request_failed", 502, error.nativeError);
+      }
+      if (error instanceof WorkError) throw error;
+      throw new WorkError("host_request_failed", 502);
+    }
+  }
+
+  list() {
+    this.validate();
+    return this.store.entries<ExecutionSession>("execution_sessions").map(({ id }) => this.getSession(id));
+  }
+  getSession(sessionId: string) {
+    this.validate(); identifier.parse(sessionId);
+    const binding = this.store.get<ExecutionSession>("execution_sessions", sessionId);
+    if (!binding) throw new WorkError("session_not_found", 404);
+    const metadata = this.store.get<SessionMetadata>("work_sessions", sessionId);
+    return { sessionId, runtimeId: binding.runtimeId, ...metadata,
+      ownerConversation: Boolean(this.ownerInput(sessionId)),
+      runs: this.store.entries<RunBinding>("communication_runs").map(({ value }) => value)
+        .filter(run => run.contextId === sessionId).map(run => ({ taskId: run.taskId, runId: run.runId ?? null, phase: run.phase, error: run.error ?? null })) };
+  }
+  private ownerInput(sessionId: string): InboxRecord | undefined { return this.ownerInputs(sessionId)[0]; }
+  /** The session's owner inputs, newest first. */
+  private ownerInputs(sessionId: string): InboxRecord[] {
+    return this.store.entries<InboxRecord>("communication_inbox").map(({ value }) => value).reverse()
+      .filter(input => input.taskId && input.conversationId === sessionId && this.communication.isOwnerInput(input));
+  }
+  validateTarget(sessionId: string) {
+    this.getSession(sessionId);
+    if (!this.ownerInput(sessionId)) throw new WorkError("notification_requires_owner_conversation", 403);
+    return { sessionId, ownerConversation: true as const };
+  }
+  private binding(sessionId: string) {
+    this.getSession(sessionId);
+    return this.store.get<ExecutionSession>("execution_sessions", sessionId)!;
+  }
+  private reserve(sessionId: string) {
+    identifier.parse(sessionId);
+    if (!this.store.get<ExecutionSession>("execution_sessions", sessionId)) {
+      this.store.set("execution_sessions", sessionId, { sessionId: `h-${digest(key(this.agentId, this.instanceId, sessionId)).slice(0, 40)}`, runtimeId: this.runtimeId } satisfies ExecutionSession);
+      this.store.set("work_sessions", sessionId, { createdAt: new Date().toISOString() } satisfies SessionMetadata);
+    }
+    return this.binding(sessionId);
+  }
+  async submit(input: WorkSessionSubmission): Promise<WorkEventResult> {
+    this.validate(); identifier.parse(input.eventId);
+    admissionSchema.parse(input.admission);
+    if (input.admission.agentId !== this.agentId || input.admission.owner !== this.owner || !input.admission.reference)
+      throw new WorkError("work_admission_scope_mismatch", 403);
+    const hash = digest(input), existing = this.store.get<WorkEvent>("work_session_events", input.eventId);
+    if (existing) {
+      if (existing.hash !== hash) throw new WorkError("work_event_id_reused", 409);
+      return this.get(input.eventId);
+    }
+    if (input.admission.expiresAt && Date.parse(input.admission.expiresAt) <= Date.now()) throw new WorkError("work_admission_expired", 403);
+    if (input.admission.kind === "schedule" && !input.admission.toolGrants) throw new WorkError("scheduled_work_grants_required", 403);
+    if (Buffer.byteLength(input.input) > 24_000) throw new WorkError("work_input_too_large", 413);
+    const sessionId = input.sessionId ?? `w-${digest(key(this.agentId, input.eventId)).slice(0, 40)}`;
+    // A ledger session that was reset (ADR 0005 16.3) runs new work in its current window's execution context.
+    const ledger = AgentLedger.attached(this.store);
+    const contextId = ledger?.authoritative && ledger.session(sessionId) ? ledger.contextFor(sessionId) : sessionId;
+    // Existing owner chats retain their native catalog, but this work has no channel reply route.
+    // The execution handler denies channel tools without a separately admitted channel message.
+    const priorBinding = this.store.get<ExecutionSession>("execution_sessions", contextId);
+    if (priorBinding && priorBinding.channelTools === undefined && this.ownerInput(sessionId))
+      this.store.set("execution_sessions", contextId, { ...priorBinding, channelTools: priorBinding.tools !== false });
+    if (contextId !== sessionId && !this.store.get<ExecutionSession>("execution_sessions", contextId) && this.ownerInput(sessionId))
+      this.store.set("execution_sessions", contextId, { sessionId: `h-${digest(key(this.agentId, this.instanceId, contextId)).slice(0, 40)}`, runtimeId: this.runtimeId, channelTools: true } satisfies ExecutionSession);
+    const binding = this.reserve(contextId);
+    if (this.store.get<SessionMetadata>("work_sessions", sessionId)?.archived) throw new WorkError("session_archived", 409);
+    this.work.submit(SendMessageRequest.fromJSON({ message: {
+      messageId: `work-event-${digest(key(this.agentId, input.eventId))}`, contextId,
+      role: input.admission.kind === "owner" ? "ROLE_USER" : "ROLE_AGENT", parts: [{ text: input.input }],
+    }, configuration: { returnImmediately: true } }), {
+      sender: `product:${this.agentId}`, room: `work:${sessionId}`, approved: true,
+    }, task => {
+      this.store.set("work_session_inputs", task.id, { sessionId: binding.sessionId, runtimeId: binding.runtimeId,
+        instructions: "", input: input.input, admission: input.admission,
+        ...(input.context === undefined ? {} : { context: input.context }),
+        ...(input.inputItems ? { inputItems: input.inputItems } : {}),
+        ...(input.settings ? { settings: input.settings } : {}), ...(input.mode ? { mode: input.mode } : {}),
+      } satisfies HostStartInput);
+      this.store.set("work_session_events", input.eventId, { eventId: input.eventId, sessionId, taskId: task.id, hash } satisfies WorkEvent);
+      this.shadowSubmit(input, sessionId, task.id);
+    });
+    return this.get(input.eventId);
+  }
+  /** Shadow ledger (ADR 0005 6.7): the submitted input and its turn, in the target or a fresh work session. */
+  private shadowSubmit(input: WorkSessionSubmission, sessionId: string, taskId: string) {
+    const ledger = AgentLedger.attached(this.store); if (!ledger) return;
+    ledger.shadow(() => {
+      const kind = input.admission.kind === "owner" ? "work" : input.admission.kind;
+      ledger.ensureSession(sessionId, kind, `${kind}:${sessionId}`);
+      const owner = input.admission.kind === "owner";
+      const event = ledger.append(sessionId, { kind: "message", role: "user", senderType: owner ? "person" : "system",
+        senderId: owner ? personId(this.owner) : input.admission.kind, idempotencyKey: `work:${input.eventId}`, turnId: taskId,
+        body: { text: input.input, origin: owner ? "work" : input.admission.kind, reference: input.admission.reference } }).event;
+      ledger.queueInput(`work:${input.eventId}`, sessionId, event.eventId);
+      ledger.updateInput(`work:${input.eventId}`, "started", { turnId: taskId });
+      ledger.ensureTurn({ turnId: taskId, sessionKey: sessionId, admission: kind, originEventId: event.eventId, replyRoute: null });
+      ledger.turnState(taskId, "queued", { agentId: this.agentId });
+    });
+  }
+  lookup(eventId: string): WorkEventResult | null {
+    this.validate();
+    return this.store.get("work_session_events", eventId) ? this.get(eventId) : null;
+  }
+  get(eventId: string): WorkEventResult {
+    this.validate();
+    const event = this.store.get<WorkEvent>("work_session_events", eventId);
+    if (!event) throw new WorkError("work_event_not_found", 404);
+    const task = this.work.inspect(event.taskId), native = this.store.get<HostRun>("execution_results", event.taskId);
+    const run = this.store.entries<RunBinding>("communication_runs").map(({ value }) => value).reverse().find(value => value.taskId === event.taskId);
+    return { eventId, taskId: event.taskId, sessionId: event.sessionId,
+      status: run?.phase === "unknown" ? "unknown" : task.status === "canceled" ? "cancelled" : task.status,
+      answer: native?.answer ?? "", ...(run?.runId ? { runId: run.runId } : {}),
+      ...(run?.error ? { error: run.error } : native?.outcome?.error ? { error: native.outcome.error } : {}),
+      outcomeUnknown: run?.phase === "unknown" || native?.outcome?.outcomeUnknown === true };
+  }
+  async cancel(eventId: string) { const event = this.get(eventId); await this.work.cancel(event.taskId); return this.get(eventId); }
+  read(sessionId: string) { return this.native(sessionId, { action: "read" }); }
+  history(sessionId: string, options: { cursor?: string; limit?: number; itemsView?: "notLoaded" | "summary" | "full"; sortDirection?: "asc" | "desc" } = {}) {
+    return this.native(sessionId, { action: "history", ...options });
+  }
+  async steer(sessionId: string, input: string) {
+    const binding = this.binding(sessionId);
+    if (!this.host.steer) throw new WorkError("host_steer_unsupported", 409);
+    const run = this.store.entries<RunBinding>("communication_runs").map(({ value }) => value)
+      .find(run => run.sessionId === binding.sessionId && run.phase === "running" && run.runId);
+    if (!run?.runId) throw new WorkError("active_run_not_found", 404);
+    await this.request(() => this.host.steer!(run.runId!, input));
+  }
+  /** Wait on durable Router observations; it does not wake a Host or hold the worker's dispatch loop. */
+  async wait(eventIds: string[], options: WorkSessionWaitOptions = {}) {
+    if (!eventIds.length || eventIds.length > 8 || new Set(eventIds).size !== eventIds.length) throw new WorkError("invalid_wait_targets", 400);
+    const deadline = Date.now() + Math.max(0, Math.min(options.timeoutMs ?? 30_000, 60_000));
+    const first = eventIds.map(id => this.get(id));
+    const contextual = options.waitingRunId !== undefined || options.waitingReference !== undefined || options.waitingCallId !== undefined;
+    const after = options.after ?? (contextual ? digest(first) : undefined);
+    const finished = (data: WorkEventResult[]) => contextual && data.every(value => value.outcomeUnknown || ["completed", "failed", "cancelled", "rejected", "unknown"].includes(value.status));
+    let release: (() => void) | undefined;
+    if (contextual) {
+      if (!options.waitingRunId || !options.waitingReference || !options.waitingCallId) throw new WorkError("invalid_dependency_wait_context", 400);
+      if (!this.dependencyWait) throw new WorkError("work_dependency_wait_unsupported", 409);
+      release = this.dependencyWait({ runId: options.waitingRunId, reference: options.waitingReference, callId: options.waitingCallId,
+        taskIds: first.map(value => value.taskId), deadlineAt: deadline, reserve: digest(first) === after && Date.now() < deadline && !finished(first) });
+    }
+    try {
+      for (;;) {
+        const data = eventIds.map(id => this.get(id)), cursor = digest(data);
+        if (cursor !== after || Date.now() >= deadline || finished(data)) return { data, cursor };
+        await sleep(Math.min(250, deadline - Date.now()), undefined, options.signal ? { signal: options.signal } : {});
+      }
+    } finally { release?.(); }
+  }
+  async native(sessionId: string, options: Omit<NativeSessionInput, "runtimeId" | "sessionId" | "targetSessionId" | "nativeSessionId">) {
+    const binding = this.binding(sessionId);
+    if (["list", "bindings", "adopt", "fork"].includes(options.action)) throw new WorkError("use_scoped_session_operation", 400);
+    if (!this.host.nativeSessions) throw new WorkError("host_native_sessions_unsupported", 409);
+    const result = await this.request(() => this.host.nativeSessions!({ ...options, runtimeId: binding.runtimeId, sessionId: binding.sessionId }));
+    if (["rename", "archive", "unarchive"].includes(options.action)) {
+      const metadata = this.store.get<SessionMetadata>("work_sessions", sessionId) ?? { createdAt: new Date().toISOString() };
+      this.store.set("work_sessions", sessionId, { ...metadata,
+        ...(options.action === "rename" ? { title: options.name } : { archived: options.action === "archive" }) });
+    }
+    return result;
+  }
+  async fork(sessionId: string, targetSessionId: string, options: { entryId?: string | undefined; beforeEntryId?: string | undefined } = {}) {
+    const binding = this.binding(sessionId); identifier.parse(targetSessionId);
+    if (this.store.get("execution_sessions", targetSessionId)) throw new WorkError("target_session_exists", 409);
+    if (!this.host.nativeSessions) throw new WorkError("host_native_sessions_unsupported", 409);
+    const target = `h-${digest(key(this.agentId, this.instanceId, targetSessionId)).slice(0, 40)}`;
+    const result = await this.request(() => this.host.nativeSessions!({ action: "fork", runtimeId: binding.runtimeId, sessionId: binding.sessionId, targetSessionId: target, ...options }));
+    this.store.transaction(() => {
+      this.store.set("execution_sessions", targetSessionId, { ...binding, sessionId: target });
+      this.store.set("work_sessions", targetSessionId, { createdAt: new Date().toISOString(), parentSessionId: sessionId });
+    });
+    return { ...this.getSession(targetSessionId), native: result };
+  }
+  /** Internal channel dispatch only. Parent scope is derived by CommunicationCore, never supplied by model text. */
+  prepareChannelSession(contextId: string, taskId: string): Promise<void> {
+    if (!this.communication.input(taskId)?.forkFromContextId || this.store.get("execution_sessions", contextId)) return Promise.resolve();
+    // Host serializes management operations on the source. Do not race first messages from sibling topics.
+    const next = this.channelForks.then(() => this.prepareChannelFork(contextId, taskId));
+    this.channelForks = next.catch(() => {});
+    return next;
+  }
+  private async prepareChannelFork(contextId: string, taskId: string): Promise<void> {
+    this.validate();
+    const input = this.communication.input(taskId);
+    // Later reset windows deliberately start fresh. Existing topic bindings are always resumed.
+    if (!input?.forkFromContextId || input.source.scope !== "group" || contextId !== input.conversationId ||
+      this.store.get("execution_sessions", contextId)) return;
+    const parent = input.forkFromContextId;
+    const previous = this.store.get("channel_session_forks", contextId);
+    if (previous) throw new WorkError("channel_session_fork_unconfirmed", 409);
+    if (!this.store.get("execution_sessions", parent)) return; // No previous native group context exists to inherit.
+    // Host fork is not retry-idempotent. Persist intent before the request; an interrupted/uncertain fork must
+    // be reconciled explicitly, rather than silently starting empty or forking twice with a different target.
+    this.store.set("channel_session_forks", contextId, { parentSessionId: parent, state: "submitting" });
+    try {
+      await this.fork(parent, contextId);
+      this.store.set("channel_session_forks", contextId, { parentSessionId: parent, state: "completed" });
+    } catch (error) {
+      this.store.set("channel_session_forks", contextId, { parentSessionId: parent, state: "unconfirmed" });
+      throw error;
+    }
+  }
+  async discover() {
+    this.validate();
+    if (!this.host.discoverRuntime) throw new WorkError("host_discovery_unsupported", 409);
+    return this.request(() => this.host.discoverRuntime!(this.runtimeId));
+  }
+  private nativeRequest(method: string, params: Record<string, unknown> = {}, runtimeId = this.runtimeId) {
+    this.validate();
+    if (!this.host.nativeRequest) throw new WorkError("host_native_extension_unsupported", 409);
+    return this.request(() => this.host.nativeRequest!(runtimeId, method, params));
+  }
+  async skills(forceReload = false) {
+    this.validate();
+    const cwd = await this.request(() => runtimeWorkingDirectory(this.host, this.runtimeId));
+    return this.nativeRequest("skills/list", { forceReload, cwds: [cwd] });
+  }
+  async configureSkill(path: string, enabled: boolean) {
+    const inventory = await this.skills(true) as { data?: Array<{ skills?: Array<{ path?: string }> }> };
+    if (!inventory?.data?.some(entry => entry.skills?.some(skill => skill.path === path))) throw new WorkError("skill_not_in_runtime_catalog", 403);
+    return this.nativeRequest("skills/config/write", { path, enabled });
+  }
+  memoryStatus() { return this.nativeRequest("memory/status"); }
+  private async nativeBinding(sessionId: string) {
+    const binding = this.binding(sessionId);
+    if (!this.host.nativeSessions) throw new WorkError("host_native_sessions_unsupported", 409);
+    const response = await this.request(() => this.host.nativeSessions!({ runtimeId: binding.runtimeId, action: "bindings" })) as { bindings?: Array<{ sessionId: string; nativeSessionId: string }> };
+    const native = response.bindings?.find(row => row.sessionId === binding.sessionId);
+    if (!native) throw new WorkError("native_session_binding_not_found", 404);
+    return { runtimeId: binding.runtimeId, nativeSessionId: native.nativeSessionId };
+  }
+  async memoryMode(sessionId: string, mode: "enabled" | "disabled") {
+    const binding = await this.nativeBinding(sessionId);
+    return this.nativeRequest("thread/memoryMode/set", { threadId: binding.nativeSessionId, mode: z.enum(["enabled", "disabled"]).parse(mode) }, binding.runtimeId);
+  }
+  async readMemory(sessionId: string) {
+    const binding = await this.nativeBinding(sessionId);
+    return this.nativeRequest("thread/memory/read", { threadId: binding.nativeSessionId }, binding.runtimeId);
+  }
+  /**
+   * A schedule notice (ADR 16.6). It is always recorded on the target session, which is its web delivery. `connectionId`:
+   * - omitted: delivered on the newest owner conversation whose connection still exists (follows the owner);
+   * - `web`: recorded only (channels that notify the owner may still push it, as for every web-only notice);
+   * - a notify connection (push): recorded and pushed there, whether or not a browser has the chat open;
+   * - another connection: delivered on its newest owner conversation, or recorded only with the receipt
+   *   `suppressed` / `no_conversation_on_connection` when the owner has none there.
+   */
+  deliver(input: { eventId: string; targetSessionId: string; text: string; connectionId?: string | undefined }) {
+    this.validate(); identifier.parse(input.eventId); this.validateTarget(input.targetSessionId);
+    const target = input.connectionId;
+    if (target !== undefined && target !== WEB_CONNECTION && !this.communication.connected(target)) throw new WorkError("delivery_connection_not_found", 404);
+    const hash = digest(input), prior = this.store.get<{ hash: string }>("work_session_deliveries", input.eventId);
+    if (prior && prior.hash !== hash) throw new WorkError("delivery_event_id_reused", 409);
+    if (!prior) this.store.transaction(() => {
+      // The newest route that still exists: an owner-main session outlives the channels it came through (Matrix off).
+      const inputs = this.ownerInputs(input.targetSessionId);
+      const push = target !== undefined && this.communication.notifies(target);
+      const chosen = target === undefined ? inputs.find(item => this.communication.connected(item.connectionId)) ?? inputs[0]!
+        : inputs.find(item => item.connectionId === (push ? WEB_CONNECTION : target));
+      const record = chosen ?? inputs[0]!, transcript = target !== undefined && (!chosen || target === WEB_CONNECTION);
+      const options = { notice: `schedule:${input.eventId}`, ...(transcript ? { transcript: true } : {}), ...(push ? { push: target } : {}) };
+      const deliveryId = this.communication.queueContent(record.taskId!, { text: input.text }, `work-event:${input.eventId}`, options);
+      const receipt = push ? { push: digest(key(`schedule:${input.eventId}`, target, "notify")) }
+        : target === WEB_CONNECTION ? { state: "web" } : transcript ? { state: "suppressed", error: "no_conversation_on_connection" } : {};
+      this.store.set("work_session_deliveries", input.eventId, { hash, taskId: record.taskId!, deliveryId, ...receipt });
+    });
+    return this.lookupDelivery(input.eventId)!;
+  }
+  /** Connections a schedule notice can name (`deliver` `connectionId`): `web` and every registered connection. */
+  deliveryConnections(): string[] { return [...new Set([WEB_CONNECTION, ...this.communication.connectionIds()])]; }
+  /** The connection `deliver` without `connectionId` would use now (`web` when the session has no live route). */
+  deliveryConnection(sessionId: string): string {
+    this.validate(); this.validateTarget(sessionId);
+    return this.ownerInputs(sessionId).find(item => this.communication.connected(item.connectionId))?.connectionId ?? WEB_CONNECTION;
+  }
+  lookupDelivery(eventId: string) {
+    this.validate();
+    const prior = this.store.get<{ taskId: string; deliveryId: string; push?: string; state?: string; error?: string }>("work_session_deliveries", eventId);
+    if (!prior) return null;
+    if (prior.push) return this.communication.notification(prior.push);
+    if (prior.state) return { id: prior.deliveryId, state: prior.state, externalId: null, error: prior.error ?? null };
+    return this.communication.delivery(prior.taskId, prior.deliveryId);
+  }
+
+}
