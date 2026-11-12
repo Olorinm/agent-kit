@@ -5,7 +5,7 @@ tag publishes a GitHub Release whose notes are this file's section for that vers
 section in the version-bump commit before tagging. Changes up to the versions listed under
 0.8.0-alpha.1 are in each package's own `CHANGELOG.md`.
 
-## [Unreleased]
+## [0.9.0-alpha.1] - 2026-11-12
 
 - **Router:** the service (`ManagedService`, `createManagedApp`) lives in `src/service/managed.ts`,
   the standalone entry in `src/service/main.ts` (`npm run agent:service` starts
