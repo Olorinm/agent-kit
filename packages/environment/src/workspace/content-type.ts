@@ -25,7 +25,7 @@ const contentTypes: Record<string, string> = {
   ".pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
 };
 
-/** ossfs does not always set useful object MIME metadata. Keep meaningful
+/** Stored files do not always carry useful MIME metadata. Keep meaningful
  * metadata, otherwise infer common preview/download formats from the filename. */
 export function resolveArtifactContentType(path: string, stored?: string): string {
   const mime = stored?.split(";")[0]?.trim().toLowerCase();
