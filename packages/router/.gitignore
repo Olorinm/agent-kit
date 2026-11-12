@@ -1,13 +1,9 @@
 node_modules/
 dist/
-bin/
 .env
 .env.*
-!.env.matrix.example
 coverage/
 *.log
-secrets/*
-!secrets/.gitkeep
 state/
 .codex/
 auth.json

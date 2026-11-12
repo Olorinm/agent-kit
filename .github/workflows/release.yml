@@ -31,8 +31,6 @@ jobs:
         with:
           node-version: ${{ env.NODE_VERSION }}
       - run: npm install --global "npm@$NPM_VERSION" --no-audit --no-fund
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
-        with: { go-version-file: packages/router/go.mod, cache: false }
 
       - name: Check versions and release notes
         id: meta
@@ -58,9 +56,8 @@ jobs:
           (cd packages/host && npm ci --ignore-scripts && npm pack --pack-destination "$out")
           (cd packages/connectors && npm ci && npm pack --pack-destination "$out")
           (cd packages/environment && npm ci && npm pack --pack-destination "$out")
-          (cd packages/router && npm ci && npm pack --pack-destination "$out" \
-            && AGENT_ROUTER_RELEASE_DIR="$out" sh scripts/package-cli.sh && rm -rf "$out"/agent-router_*/)
-          (cd "$out" && sha256sum ./*.tgz ./*.tar.gz > SHA256SUMS && cat SHA256SUMS >> "$GITHUB_STEP_SUMMARY")
+          (cd packages/router && npm ci && npm pack --pack-destination "$out")
+          (cd "$out" && sha256sum ./*.tgz > SHA256SUMS && cat SHA256SUMS >> "$GITHUB_STEP_SUMMARY")
 
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
