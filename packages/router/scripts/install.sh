@@ -2,7 +2,7 @@
 # Install a released Go CLI and its matching connector into a user-owned prefix.
 set -eu
 
-install_version=${AGENT_ROUTER_VERSION:-0.8.0-alpha.1}
+install_version=${AGENT_ROUTER_VERSION:-0.8.0-alpha.2}
 install_prefix=${AGENT_ROUTER_INSTALL_PREFIX:-"$HOME/.local"}
 install_connector=true
 usage() {
@@ -10,7 +10,7 @@ usage() {
 Usage: sh scripts/install.sh [--version VERSION] [--prefix DIRECTORY] [--cli-only]
 
 Downloads the native Go CLI and installs the matching connector release.
-Default: version 0.8.0-alpha.1, prefix $HOME/.local. No sudo or source compilation.
+Default: version 0.8.0-alpha.2, prefix $HOME/.local. No sudo or source compilation.
 The connector requires Node.js 24+ and npm. --cli-only needs neither.
 Profiles, accounts and shell configuration are not changed.
 EOF
@@ -27,7 +27,7 @@ while [ "$#" -gt 0 ]; do
     *) fail "Unknown option: $1 (use --help)" ;;
   esac
 done
-case "$install_version" in ''|*[!0-9A-Za-z.-]*) fail 'Invalid release version; use a version such as 0.8.0-alpha.1 without the v prefix.' ;; esac
+case "$install_version" in ''|*[!0-9A-Za-z.-]*) fail 'Invalid release version; use a version such as 0.8.0-alpha.2 without the v prefix.' ;; esac
 case "$install_prefix" in /*) ;; *) fail 'Installation prefix must be an absolute path.' ;; esac
 case "$(uname -s)" in Darwin) install_os=darwin ;; Linux) install_os=linux ;; *) fail 'Supported platforms: macOS and Linux.' ;; esac
 case "$(uname -m)" in arm64|aarch64) install_arch=arm64 ;; x86_64|amd64) install_arch=amd64 ;; *) fail 'Supported architectures: amd64 and arm64.' ;; esac

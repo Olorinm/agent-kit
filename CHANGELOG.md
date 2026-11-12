@@ -5,7 +5,7 @@ tag publishes a GitHub Release whose notes are this file's section for that vers
 section in the version-bump commit before tagging. Changes up to the versions listed under
 0.8.0-alpha.1 are in each package's own `CHANGELOG.md`.
 
-## [Unreleased]
+## [0.8.0-alpha.2] - 2026-11-12
 
 - **Router:** removed the one-time migration tools that moved a deployment from Matrix to the
   owner ledger (`ledger:backfill`, `ledger:promote-media`, `matrix:export`, `matrix:forget`) and
