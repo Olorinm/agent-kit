@@ -1,0 +1,11 @@
+{
+  "name": "agent-host-http-editor-example",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "node server.mjs"
+  },
+  "dependencies": {
+    "@olorinm/agent-host": "file:../../olorinm-agent-host-0.1.0-alpha.8.tgz"
+  }
+}

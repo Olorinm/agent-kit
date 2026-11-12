@@ -1,0 +1,805 @@
+import assert from "node:assert/strict";
+import { test } from "node:test";
+import { mkdtemp, rm } from "node:fs/promises";
+import { writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join, resolve } from "node:path";
+import {
+  createNativeRuntime,
+  startAgentHostServer,
+} from "../dist/service/index.js";
+import { AgentHostClient } from "../dist/service/client.js";
+import { model, fixture as piStream } from "./fixtures/pi-stream.mjs";
+import { startOpenClawFixture } from "./fixtures/openclaw-gateway.mjs";
+import { createClaudeQueryFixture } from "./fixtures/claude-query.mjs";
+
+const token = "service-test-owner-token";
+const tool = {
+  name: "edit_document",
+  description: "Edit",
+  inputSchema: { type: "object" },
+};
+async function fixture(t, options = {}) {
+  const { configure, ...serverOptions } = options;
+  const root = await mkdtemp(join(tmpdir(), "agent-host-http-"));
+  let host;
+  const launch = async () =>
+    (host = await startAgentHostServer({
+      runtimes: configure
+        ? await configure(root)
+        : [
+            createNativeRuntime(
+              {
+                id: "codex",
+                kernel: "codex",
+                cwd: root,
+                options: {
+                  command: resolve("test/fixtures/codex-server.mjs"),
+                  args: [],
+                  cancellationGraceMs: 1_000,
+                  requestTimeoutMs: 5_000,
+                },
+              },
+              root,
+            ),
+          ],
+      stateDirectory: root,
+      token,
+      ...serverOptions,
+    }));
+  await launch();
+  t.after(async () => {
+    await host.close();
+    await rm(root, {
+      recursive: true,
+      force: true,
+      maxRetries: 10,
+      retryDelay: 100,
+    });
+  });
+  const api = async (path, body, expected = 200, extra = {}) => {
+    const response = await fetch(`${host.url}/v1${path}`, {
+      method: body === undefined ? "GET" : "POST",
+      headers: {
+        authorization: `Bearer ${token}`,
+        "content-type": "application/json",
+        ...extra,
+      },
+      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+    });
+    const result = await response.json();
+    assert.equal(response.status, expected, JSON.stringify(result));
+    return result;
+  };
+  return {
+    root,
+    api,
+    host,
+    client: () => new AgentHostClient({ baseUrl: host.url, token }),
+    restart: async () => {
+      await host.close();
+      await launch();
+    },
+  };
+}
+async function until(read, predicate) {
+  const end = Date.now() + 5_000;
+  for (;;) {
+    const value = await read();
+    if (predicate(value)) return value;
+    assert.ok(Date.now() < end, "condition timed out");
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+}
+test("streaming deltas are live-only: completed items survive, deltas never evict them and are dropped at finish", async (t) => {
+  // A live window of one transient event: every new delta evicts the previous one.
+  const { api } = await fixture(t, { eventLimit: 1 });
+  const run = await api("/runs", { sessionId: "durable", runtimeId: "codex", input: "hello" }, 202);
+  await until(() => api(`/runs/${run.id}`), (value) => value.status !== "running");
+  const page = await api(`/runs/${run.id}/events`);
+  assert.equal(page.historyTruncated, false);
+  assert.equal(page.liveGap, true);
+  const kinds = page.events.map(({ event }) => event.type === "native.notification" ? event.notification.method : event.type);
+  assert.ok(!kinds.some((kind) => kind === "assistant.delta" || kind.endsWith("/delta")), kinds.join());
+  assert.ok(kinds.includes("item/started") && kinds.includes("item/completed"), kinds.join());
+  const completed = page.events.find(({ event }) => event.notification?.params?.item?.id === "answer" && event.notification.method === "item/completed");
+  assert.equal(completed.event.notification.params.item.text.includes("hello"), true);
+  assert.equal(page.events.at(-1).event.type, "turn.finished");
+  // Reading after the last dropped fragment reports no gap.
+  assert.equal((await api(`/runs/${run.id}/events?after=${page.cursor}`)).liveGap, false);
+});
+
+test("only a running shell command can relay a product tool call, through its own run and broker", async (t) => {
+  const { api, host, root } = await fixture(t);
+  const appsTool = { name: "connected_apps", description: "Apps", inputSchema: { type: "object" }, timeoutMs: 30_000 };
+  const run = await api("/runs", { sessionId: "relay", runtimeId: "codex", input: "relay-command", tools: [appsTool] }, 202);
+  const started = await until(() => api(`/runs/${run.id}/events`), (page) => page.events.some(({ event }) =>
+    event.notification?.method === "item/started" && event.notification.params.item.type === "commandExecution"));
+  const threadId = started.events.find(({ event }) => event.notification?.method === "item/started").event.notification.params.threadId;
+  const relay = (body) => fetch(`${host.url}/v1/relay`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+  // No owner token is needed, but the thread and call must be a command running now.
+  assert.equal((await relay({ threadId, callId: "exec-other", tool: "connected_apps", input: {} })).status, 403);
+  assert.equal((await relay({ threadId: "other-thread", callId: "exec-relay", tool: "connected_apps", input: {} })).status, 403);
+  assert.equal((await relay({ threadId, callId: "exec-relay", tool: "not_offered", input: {} })).status, 404);
+  const pending = relay({ threadId, callId: "exec-relay", tool: "connected_apps", input: { action: "tools" } });
+  const { calls } = await until(() => api(`/runs/${run.id}/calls`), (value) => value.calls.length === 1);
+  assert.equal(calls[0].name, "connected_apps");
+  assert.deepEqual(calls[0].input, { action: "tools" });
+  assert.equal(calls[0].nativeCallId, "relay:exec-relay:1");
+  const result = { success: true, contentItems: [{ type: "inputText", text: "{\"status\":\"completed\",\"tools\":[]}" }] };
+  await api(`/runs/${run.id}/calls/${calls[0].id}/result`, { result });
+  const response = await pending;
+  assert.equal(response.status, 200);
+  assert.deepEqual((await response.json()).result, result);
+  const events = (await api(`/runs/${run.id}/events`)).events.map(({ event }) => event);
+  assert.ok(events.some((event) => event.type === "tool.started" && event.callId === "relay:exec-relay:1"));
+  assert.ok(events.some((event) => event.type === "tool.finished" && event.callId === "relay:exec-relay:1"));
+  writeFileSync(join(root, "relay-done"), "");
+  await until(() => api(`/runs/${run.id}`), (value) => value.status !== "running");
+  // Once the command finished, the same identity no longer relays.
+  assert.equal((await relay({ threadId, callId: "exec-relay", tool: "connected_apps", input: {} })).status, 403);
+});
+
+test("a relay sent before Codex reports its command waits for the report instead of being refused", async (t) => {
+  const { api, host, root } = await fixture(t);
+  const appsTool = { name: "connected_apps", description: "Apps", inputSchema: { type: "object" }, timeoutMs: 30_000 };
+  const run = await api("/runs", { sessionId: "relay-late", runtimeId: "codex", input: "relay-command-late", tools: [appsTool] }, 202);
+  // The thread id is known from the run's session once the turn started; the command is not reported yet.
+  const { thread } = await until(async () => ({ thread: (await api(`/runs/${run.id}/events`)).events.find(({ event }) => event.threadId)?.event.threadId }), (value) => value.thread);
+  const response = fetch(`${host.url}/v1/relay`, { method: "POST", headers: { "content-type": "application/json" },
+    body: JSON.stringify({ threadId: thread, callId: "exec-relay", tool: "connected_apps", input: { action: "tools" } }) });
+  const { calls } = await until(() => api(`/runs/${run.id}/calls`), (value) => value.calls.length === 1);
+  await api(`/runs/${run.id}/calls/${calls[0].id}/result`, { result: { success: true, contentItems: [{ type: "inputText", text: "ok" }] } });
+  assert.equal((await response).status, 200);
+  writeFileSync(join(root, "relay-done"), "");
+  await until(() => api(`/runs/${run.id}`), (value) => value.status !== "running");
+});
+
+test("HTTP product tools remain scoped, duplicate results are idempotent, results survive restart", async (t) => {
+  const { api, restart } = await fixture(t, { durableEventLimit: 3 });
+  const input = {
+    sessionId: "document",
+    runtimeId: "codex",
+    instructions: "Use product tools",
+    tools: [tool],
+    input: "duplicate-tool",
+  };
+  const run = await api("/runs", input, 202);
+  await api("/runs", input, 409);
+  const { calls } = await until(
+    () => api(`/runs/${run.id}/calls`),
+    (value) => value.calls.length,
+  );
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].name, "edit_document");
+  const result = {
+    success: true,
+    contentItems: [{ type: "inputText", text: "Saved" }],
+  };
+  await api(`/runs/${run.id}/calls/${calls[0].id}/result`, { result });
+  const done = await until(
+    () => api(`/runs/${run.id}`),
+    (value) => value.status !== "running",
+  );
+  assert.equal(done.status, "completed");
+  assert.ok(done.answer);
+  await api(`/runs/${run.id}/calls/${calls[0].id}/result`, { result });
+  await api(
+    `/runs/${run.id}/calls/${calls[0].id}/result`,
+    { result: { success: false, contentItems: [] } },
+    409,
+  );
+  assert.equal((await api(`/runs/${run.id}/events`)).historyTruncated, true);
+  await restart();
+  assert.deepEqual(await api(`/runs/${run.id}`), done);
+  await api(`/runs/${run.id}/calls/${calls[0].id}/result`, { result });
+  const next = await api("/runs", { ...input, input: "hello" }, 202);
+  await until(
+    () => api(`/runs/${next.id}`),
+    (value) => value.status !== "running",
+  );
+  await api("/runs", { ...input, instructions: "Changed" }, 409);
+});
+test("HTTP cancellation closes pending calls and does not accept late tool results", async (t) => {
+  const { api } = await fixture(t);
+  const run = await api(
+    "/runs",
+    { sessionId: "cancel", runtimeId: "codex", input: "tool", tools: [tool] },
+    202,
+  );
+  const { calls } = await until(
+    () => api(`/runs/${run.id}/calls`),
+    (value) => value.calls.length,
+  );
+  await api(`/runs/${run.id}/cancel`, {});
+  const done = await until(
+    () => api(`/runs/${run.id}`),
+    (value) => value.status !== "running",
+  );
+  assert.equal(done.status, "cancelled", JSON.stringify(done.outcome));
+  await api(
+    `/runs/${run.id}/calls/${calls[0].id}/result`,
+    { result: { success: true, contentItems: [] } },
+    409,
+  );
+  assert.equal(
+    (await api(`/runs/${run.id}/calls`)).calls[0].status,
+    "cancelled",
+  );
+});
+
+test("native approval and structured questions cross HTTP without losing native response shapes", async (t) => {
+  const { client } = await fixture(t);
+  const remote = await client().connect();
+  const session = remote.session({
+    sessionId: "interactions",
+    runtimeId: "codex",
+  });
+  for (const input of ["approval", "question"]) {
+    const task = await session.run(input);
+    const result = await task.wait({
+      pollMs: 20,
+      signal: AbortSignal.timeout(5_000),
+      onRequest: async (request, context) => {
+        assert.ok(context.threadId);
+        assert.ok(context.turnId);
+        if (input === "approval") {
+          assert.equal(request.method, "item/commandExecution/requestApproval");
+          return { decision: "decline" };
+        }
+        assert.equal(request.method, "item/tool/requestUserInput");
+        assert.equal(request.params.questions[0].id, "color");
+        return { answers: { color: { answers: ["Blue"] } } };
+      },
+    });
+    assert.equal(result.status, "completed");
+    assert.match(result.answer, input === "approval" ? /decline/ : /Blue/);
+  }
+  const compact = await session.compact();
+  assert.equal((await compact.wait({ pollMs: 20 })).status, "completed");
+});
+
+test("stopping observation keeps the run alive and re-observing the same task never repeats a pending handler", async (t) => {
+  const { client } = await fixture(t);
+  let finish,
+    count = 0,
+    started;
+  const didStart = new Promise((resolve) => {
+    started = resolve;
+  });
+  const pending = new Promise((resolve) => {
+    finish = resolve;
+  });
+  const task = await client()
+    .session({
+      sessionId: "observe",
+      runtimeId: "codex",
+      tools: [
+        {
+          ...tool,
+          execute: async () => {
+            count++;
+            started();
+            await pending;
+            return { success: true, contentItems: [] };
+          },
+        },
+      ],
+    })
+    .run("tool");
+  const control = new AbortController();
+  const first = task.wait({ signal: control.signal, pollMs: 20 });
+  await didStart;
+  control.abort(new Error("stop_observation"));
+  await assert.rejects(first, /stop_observation/);
+  assert.equal((await task.result()).status, "running");
+  const second = task.wait({ signal: AbortSignal.timeout(5_000), pollMs: 20 });
+  await new Promise((resolve) => setTimeout(resolve, 60));
+  assert.equal(count, 1);
+  finish();
+  assert.equal((await second).status, "completed");
+  assert.equal(count, 1);
+});
+
+test("expired product calls propagate deadlines and reject late success", async (t) => {
+  const { client } = await fixture(t);
+  let aborted = false;
+  const task = await client()
+    .session({
+      sessionId: "deadline",
+      runtimeId: "codex",
+      tools: [
+        {
+          ...tool,
+          // Leave room for HTTP polling on loaded Windows runners. The test
+          // checks expiry/late-result rejection, not sub-100ms dispatch latency.
+          timeoutMs: 1_000,
+          execute: async (_input, { signal }) => {
+            await new Promise((resolve) => {
+              if (signal.aborted) resolve();
+              else signal.addEventListener("abort", resolve, { once: true });
+            });
+            aborted = true;
+            return { success: true, contentItems: [] };
+          },
+        },
+      ],
+    })
+    .run("tool");
+  await task.wait({ pollMs: 20, signal: AbortSignal.timeout(10_000) });
+  assert.equal(aborted, true);
+  const [call] = await task.client.calls(task.runId);
+  assert.equal(call.status, "timed_out");
+  await assert.rejects(
+    task.client.resolveCall(task.runId, call.id, {
+      success: true,
+      contentItems: [],
+    }),
+    /call_not_pending/,
+  );
+});
+
+test("HTTP authentication, origins, profile binding and file revision boundaries", async (t) => {
+  const { api, host, client } = await fixture(t, { workspaceFiles: true });
+  assert.equal((await fetch(`${host.url}/v1/health`)).status, 401);
+  await api("/health", undefined, 403, { origin: "https://untrusted.example" });
+  await api(
+    "/runs",
+    { sessionId: "s", runtimeId: "codex", input: "hello", command: "/bin/sh" },
+    400,
+  );
+  const task = await client()
+    .session({ sessionId: "files", runtimeId: "codex" })
+    .run("hello");
+  await task.wait({ pollMs: 20 });
+  const written = await client().writeFile(
+    "files",
+    "notes/result.txt",
+    "First",
+    null,
+  );
+  assert.equal(
+    (await client().readFile("files", "notes/result.txt")).content,
+    "First",
+  );
+  await client().writeFile(
+    "files",
+    "notes/result.txt",
+    "Second",
+    written.revision,
+  );
+  await assert.rejects(
+    client().writeFile("files", "notes/result.txt", "Stale", written.revision),
+    /revision_conflict/,
+  );
+  await assert.rejects(
+    client().readFile("files", "../outside"),
+    /outside_root/,
+  );
+  assert.deepEqual(await client().listFiles("files", "notes"), [
+    { path: "notes/result.txt", directory: false },
+  ]);
+  assert.equal((await client().inspect("codex")).available, true);
+});
+
+for (const kernel of [
+  "codex",
+  "claude",
+  "pi",
+  "opencode",
+  "kimi",
+  "hermes",
+  "openclaw",
+]) {
+  test(`${kernel} HTTP consumer approves, rejects and resumes the native binding after Host restart (fixture)`, async (t) => {
+    const gateway =
+      kernel === "openclaw" ? await startOpenClawFixture() : undefined;
+    t.after(() => gateway?.close());
+    const config = (root) => {
+      const base = { id: kernel, kernel, cwd: root };
+      if (kernel === "codex")
+        return {
+          ...base,
+          options: {
+            command: resolve("test/fixtures/codex-server.mjs"),
+            args: [],
+          },
+        };
+      if (["kimi", "opencode"].includes(kernel))
+        return {
+          ...base,
+          options: {
+            command: resolve("test/fixtures/acp-server.mjs"),
+            args: [],
+          },
+        };
+      if (kernel === "claude")
+        return { ...base, options: { query: createClaudeQueryFixture() } };
+      if (kernel === "pi")
+        return {
+          ...base,
+          options: { model, streamFn: piStream([], "edit_document") },
+        };
+      if (kernel === "hermes")
+        return {
+          ...base,
+          options: {
+            command: process.execPath,
+            args: [resolve("test/fixtures/hermes-gateway.mjs")],
+          },
+        };
+      return { ...base, options: { url: gateway.url, token: gateway.token } };
+    };
+    const { client, restart } = await fixture(t, {
+      configure: (root) => [createNativeRuntime(config(root), root)],
+    });
+    const prompt = {
+      codex: "tool",
+      claude: "fixture tool",
+      pi: "call edit",
+      opencode: "tool",
+      kimi: "tool",
+      hermes: "CALL_TOOL",
+      openclaw: "TOOL",
+    }[kernel];
+    let allows = true,
+      edits = 0;
+    const tools = [
+      {
+        ...tool,
+        execute: async () => {
+          if (allows) edits++;
+          return {
+            success: allows,
+            contentItems: [
+              { type: "inputText", text: allows ? "Saved" : "Rejected" },
+            ],
+          };
+        },
+      },
+    ];
+    const run = async () => {
+      const task = await client()
+        .session({ sessionId: "product", runtimeId: kernel, tools })
+        .run(prompt);
+      const events = [];
+      const result = await task.wait({
+        pollMs: 20,
+        signal: AbortSignal.timeout(15_000),
+        onEvent: ({ event }) => events.push(event),
+      });
+      assert.equal(result.status, "completed", JSON.stringify(result));
+      return events;
+    };
+    const first = await run();
+    assert.equal(edits, 1);
+    const threadId = first.find(
+      (event) => event.type === "session.bound",
+    ).threadId;
+    allows = false;
+    await restart();
+    const second = await run();
+    assert.equal(edits, 1);
+    const binding = second.find((event) => event.type === "session.bound");
+    assert.equal(binding.resumed, true);
+    assert.equal(binding.threadId, threadId);
+    assert.equal(
+      second.find((event) => event.type === "tool.finished").result.success,
+      false,
+    );
+  });
+}
+
+test("HTTP attachments preserve binary bytes, reject oversized input and stay within the runtime workspace", async (t) => {
+  let received;
+  const { api, root } = await fixture(t, {
+    workspaceFiles: true,
+    configure: (cwd) => [
+      {
+        id: "media",
+        kernel: "fixture",
+        cwd,
+        configurationKey: "media-test",
+        close() {},
+        inputs: { attachments: true, images: "workspace" },
+        async *run(input) {
+          received = input;
+          yield {
+            type: "turn.finished",
+            runId: input.runId,
+            outcome: { status: "completed" },
+          };
+        },
+      },
+    ],
+  });
+  const data = Buffer.from([0, 255, 1, 128]).toString("base64");
+  const run = await api(
+    "/runs",
+    {
+      sessionId: "media",
+      runtimeId: "media",
+      input: "",
+      attachments: [
+        { name: "../../音频.bin", mediaType: "audio/octet-stream", data },
+      ],
+    },
+    202,
+  );
+  await until(
+    () => api(`/runs/${run.id}`),
+    (value) => value.status === "completed",
+  );
+  const { relative, sep } = await import("node:path");
+  const { realpath } = await import("node:fs/promises");
+  const path = relative(
+    await realpath(root),
+    await realpath(received.attachments[0].path),
+  );
+  assert.ok(path.startsWith(join(".agent-host", "attachments", "media") + sep));
+  const output = await api(
+    `/sessions/media/files?encoding=base64&path=${encodeURIComponent(path)}`,
+  );
+  assert.equal(output.encoding, "base64");
+  assert.equal(output.content, data);
+  const { readFile, stat } = await import("node:fs/promises");
+  assert.equal(
+    await readFile(join(root, ".agent-host/.gitignore"), "utf8"),
+    "*\n",
+  );
+  if (process.platform !== "win32")
+    assert.equal(
+      (await stat(received.attachments[0].path)).mode & 0o777,
+      0o600,
+    );
+  await api(
+    "/runs",
+    {
+      sessionId: "bad",
+      runtimeId: "media",
+      input: "",
+      attachments: [
+        { name: "bad", mediaType: "image/png", data: "not valid base64!" },
+      ],
+    },
+    400,
+  );
+  await api(
+    "/runs",
+    {
+      sessionId: "huge",
+      runtimeId: "media",
+      input: "",
+      attachments: [
+        {
+          name: "big",
+          mediaType: "application/octet-stream",
+          data: Buffer.alloc(30 * 1024 * 1024 + 1).toString("base64"),
+        },
+      ],
+    },
+    400,
+  );
+});
+
+test("HTTP image input reaches Claude's native multimodal prompt", async (t) => {
+  const data = Buffer.from("image fixture").toString("base64");
+  const { api } = await fixture(t, {
+    configure: (root) => [
+      createNativeRuntime(
+        {
+          id: "claude-image",
+          kernel: "claude",
+          cwd: root,
+          options: { query: createClaudeQueryFixture() },
+        },
+        root,
+      ),
+    ],
+  });
+  const run = await api(
+    "/runs",
+    {
+      sessionId: "image",
+      runtimeId: "claude-image",
+      input: "Describe",
+      attachments: [{ name: "image.png", mediaType: "image/png", data }],
+    },
+    202,
+  );
+  const done = await until(
+    () => api(`/runs/${run.id}`),
+    (value) => value.status !== "running",
+  );
+  assert.equal(done.status, "completed");
+  const blocks = JSON.parse(done.answer);
+  assert.equal(blocks[1].type, "image");
+  assert.equal(blocks[1].source.data, data);
+  assert.equal(blocks[1].source.media_type, "image/png");
+  const runtime = await api("/runtimes/inspect", { runtimeId: "claude-image" });
+  assert.deepEqual(runtime.inputs, { attachments: true, images: "native" });
+});
+for (const kernel of ["codex", "opencode", "kimi", "pi", "openclaw"]) {
+  test(`HTTP image input reaches ${kernel}'s native interface (fixture)`, async (t) => {
+    const observed = [],
+      data = Buffer.from([137, 80, 78, 71, 0, 255]).toString("base64");
+    const gateway =
+      kernel === "openclaw" ? await startOpenClawFixture() : undefined;
+    t.after(() => gateway?.close());
+    const { api } = await fixture(t, {
+      configure: (cwd) => [
+        createNativeRuntime(
+          {
+            id: kernel,
+            kernel,
+            cwd,
+            options:
+              kernel === "pi"
+                ? {
+                    model: { ...model, input: ["text", "image"] },
+                    streamFn: piStream(observed),
+                  }
+                : kernel === "openclaw"
+                  ? { url: gateway.url, token: "fixture" }
+                  : {
+                      command: process.execPath,
+                      args: [
+                        resolve(
+                          `test/fixtures/${kernel === "codex" ? "codex" : "acp"}-server.mjs`,
+                        ),
+                      ],
+                    },
+          },
+          cwd,
+        ),
+      ],
+    });
+    const run = await api(
+      "/runs",
+      {
+        sessionId: "image",
+        runtimeId: kernel,
+        input: "Describe",
+        attachments: [{ name: "image.png", mediaType: "image/png", data }],
+      },
+      202,
+    );
+    const done = await until(
+      () => api(`/runs/${run.id}`),
+      (value) => value.status !== "running",
+    );
+    assert.equal(done.status, "completed", JSON.stringify(done.outcome));
+    if (kernel === "pi") {
+      const input = observed
+        .flatMap((entry) => entry.messages)
+        .find(
+          (message) =>
+            message.role === "user" &&
+            message.content.some((item) => item.type === "image"),
+        );
+      assert.equal(
+        input.content.find((item) => item.type === "image").data,
+        data,
+      );
+    } else if (kernel === "openclaw") {
+      const input = gateway.calls.find((call) => call.method === "chat.send")
+        .params.attachments[0];
+      assert.equal(input.content, data);
+      assert.equal(input.mimeType, "image/png");
+    } else {
+      const input = JSON.parse(done.answer).find(
+        (item) => item.type === "image",
+      );
+      if (kernel === "codex")
+        assert.equal(input.url, `data:image/png;base64,${data}`);
+      else {
+        assert.equal(input.data, data);
+        assert.equal(input.mimeType, "image/png");
+      }
+    }
+  });
+}
+test("HTTP binary writes preserve bytes and reject invalid data", async (t) => {
+  const { client, api } = await fixture(t, { workspaceFiles: true });
+  const session = client().session({ sessionId: "binary", runtimeId: "codex" });
+  await (await session.run("hello")).wait({ pollMs: 20 });
+  const data = Buffer.from([0, 255, 128]).toString("base64");
+  const file = await client().writeBinaryFile(
+    "binary",
+    "results/image.png",
+    data,
+  );
+  assert.equal(
+    (await client().readBinaryFile("binary", file.path)).content,
+    data,
+  );
+  await api(
+    "/sessions/binary/files",
+    { path: "bad.bin", encoding: "base64", content: "invalid!" },
+    400,
+  );
+});
+for (const kernel of ["claude", "pi", "opencode"]) {
+  test(`HTTP tool image stays native through ${kernel}'s tool bridge (fixture)`, async (t) => {
+    const observed = [],
+      data = Buffer.from("tool-image").toString("base64");
+    const { client } = await fixture(t, {
+      configure: (cwd) => [
+        createNativeRuntime(
+          {
+            id: kernel,
+            kernel,
+            cwd,
+            options:
+              kernel === "claude"
+                ? { query: createClaudeQueryFixture() }
+                : kernel === "pi"
+                  ? {
+                      model: { ...model, input: ["text", "image"] },
+                      streamFn: piStream(observed, "edit_document"),
+                    }
+                  : {
+                      command: process.execPath,
+                      args: [resolve("test/fixtures/acp-server.mjs")],
+                    },
+          },
+          cwd,
+        ),
+      ],
+    });
+    const session = client().session({
+      sessionId: "tool-image",
+      runtimeId: kernel,
+      tools: [
+        {
+          ...tool,
+          execute: async () => ({
+            success: true,
+            contentItems: [
+              { type: "inputImage", imageUrl: `data:image/png;base64,${data}` },
+            ],
+          }),
+        },
+      ],
+    });
+    const events = [];
+    const result = await (
+      await session.run(
+        { claude: "fixture tool", pi: "call edit", opencode: "tool" }[kernel],
+      )
+    ).wait({ pollMs: 20, onEvent: ({ event }) => events.push(event) });
+    assert.equal(result.status, "completed", JSON.stringify(result.outcome));
+    const content =
+      kernel === "pi"
+        ? observed.at(-1).messages.at(-1).content
+        : JSON.parse(result.answer).content;
+    assert.equal(content[0].type, "image");
+    assert.equal(content[0].data, data);
+    assert.equal(content[0].mimeType, "image/png");
+    assert.equal(
+      events.find((event) => event.type === "tool.finished").result
+        .contentItems[0].imageUrl,
+      `data:image/png;base64,${data}`,
+    );
+  });
+}
+
+test("compaction rejects attachments before creating a task or saving media", async (t) => {
+  const { api, client, root } = await fixture(t);
+  await api(
+    "/runs",
+    {
+      sessionId: "compact-media",
+      runtimeId: "codex",
+      mode: "compact",
+      input: "",
+      attachments: [
+        { name: "file", mediaType: "application/octet-stream", data: "AA==" },
+      ],
+    },
+    400,
+  );
+  assert.deepEqual(await client().sessions(), []);
+  const { access } = await import("node:fs/promises");
+  await assert.rejects(access(join(root, ".agent-host/attachments")));
+});

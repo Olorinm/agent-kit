@@ -1,0 +1,21 @@
+# Agent Host
+
+Read `README.md`, `docs/scope.md` and `docs/kernel-support.md` before changing public boundaries.
+
+- This repository is a product-independent native Agent integration layer. Preserve source attribution and license notices when reusing code.
+- Keep consumer-specific business objects out of public contracts and runtime dependencies.
+- Preserve native model loops, tools, sessions and permission semantics. Do not rebuild those behaviors in the Host.
+- Reuse existing adapters and tests where appropriate. Review referenced unmerged work before depending on it; do not silently treat it as merged.
+- Track substantive implementation in public issues before changing code.
+- Declare capabilities only with an implementation path and evidence. Keep protocol/mock tests distinct from native probes.
+- Test distributable archives from an independent consumer, not only repository-relative imports.
+- Separate integration regressions from upstream upgrade regressions in commits and validation.
+- Do not commit credentials, private conversations, machine-local state or raw diagnostic recordings.
+- For documentation-only changes, check local links and `git diff --check`. Runtime validation commands must be documented when executable packages are introduced.
+
+Runtime changes: run `npm test` and `npm run test:package`. Native probes are opt-in and must stay distinct from protocol fixture tests.
+
+CI keeps native package checks on Linux, macOS and Windows. Browser package acceptance runs
+in the official Playwright image pinned by version and digest. Update that pin together with
+`@playwright/test` and the lockfile; keep the image-version/browser check before acceptance.
+Do not reinstall browser system dependencies during each CI run.

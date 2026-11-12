@@ -1,0 +1,57 @@
+name: Package contracts
+on:
+  push:
+    branches: [main]
+  pull_request:
+concurrency:
+  group: package-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  package:
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci --ignore-scripts
+      - run: npm test
+        timeout-minutes: 3
+      - run: npm run test:package
+        # Fresh Windows consumers can spend several minutes installing native SDK dependencies.
+        timeout-minutes: ${{ runner.os == 'Windows' && 10 || 5 }}
+  ui-package:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    # Keep this image in sync with @playwright/test in package-lock.json.
+    container:
+      image: mcr.microsoft.com/playwright:v1.63.0-noble@sha256:eff16c30e6f3f4af0a03fa4b706120d5e9b0891c344a27d64559aff5900a4a27
+      options: --ipc=host
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci --ignore-scripts
+      - name: Check preinstalled Playwright browser
+        run: |
+          node --input-type=commonjs <<'JS'
+          const assert = require('node:assert/strict');
+          const { readFileSync, accessSync, constants } = require('node:fs');
+          const { driverVersion } = JSON.parse(readFileSync('/ms-playwright/.docker-info', 'utf8'));
+          assert.equal(driverVersion, require('@playwright/test/package.json').version,
+            'Update the Playwright image and npm package together');
+          accessSync(require('@playwright/test').chromium.executablePath(), constants.X_OK);
+          JS
+      - run: npm run test:ui:package
+        timeout-minutes: 5
