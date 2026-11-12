@@ -6,10 +6,6 @@ import { FeishuChannel } from "../src/channels/feishu/index.js";
 import { GroveMailChannel } from "../src/channels/grove-mail/index.js";
 import { WeixinChannel } from "../src/channels/weixin/index.js";
 import { getUpdates } from "../src/channels/weixin/vendor/api.js";
-import { MatrixChannel } from "../src/channels/matrix/index.js";
-import { MatrixConnector } from "../src/agents/connector.js";
-import type { MatrixTransport } from "../src/matrix/transport.js";
-import type { RoomEvent } from "../src/matrix/protocol.js";
 import { CommunicationCore } from "../src/communication/core.js";
 import { DurableStore } from "../src/communication/store.js";
 import { CliWork } from "../src/execution/work.js";
@@ -254,30 +250,11 @@ describe("official channel contracts", () => {
   });
 });
 
-it("receives Matrix plain chat in its existing transaction and leaves its cursor untouched on receipt failure", async () => {
-  const agent = "@bot:example.test", owner = "@owner:example.test", store = new DurableStore(":memory:", agent);
-  try {
-    const sent: Array<{ txn: string; content: object }> = [];
-    const transport: MatrixTransport = { identity: async () => agent, sync: async () => ({ next_batch: "idle" }), history: async () => ({ events: [] }),
-      createRoom: async () => "!room:example.test", join: async () => {}, stop: () => {},
-      state: async () => [agent, owner].map((id) => ({ type: "m.room.member", state_key: id, content: { membership: "join" } } as RoomEvent)),
-      send: async (_room, _type, content, txn) => { sent.push({ txn, content }); return "$reply"; } };
-    const connector = new MatrixConnector(agent, store, transport, undefined), channel = new MatrixChannel(connector);
-    const core = new CommunicationCore("agent", store, connector.cli!); core.register({ id: "matrix", ownerAddresses: [owner] }, channel); await core.start();
-    const receipt = core.context("matrix"), receive = receipt.receive; let fail = true;
-    receipt.receive = (message) => { if (fail) throw new Error("disk_full"); receive(message); }; await channel.start(receipt);
-    const event = { event_id: "$input", sender: owner, type: "m.room.message", origin_server_ts: Date.now() + 1000, content: { msgtype: "m.text", body: "hello" } };
-    const batch = { next_batch: "next", rooms: { join: { "!room:example.test": { timeline: { events: [event] } } } } };
-    await expect(connector.acceptSync(batch)).rejects.toThrow("disk_full"); expect(store.get("meta", "sync")).toBeUndefined(); expect(core.status().inbox).toHaveLength(0);
-    fail = false; await connector.acceptSync(batch); expect(store.get("meta", "sync")).toBe("next"); expect(core.status().inbox).toHaveLength(1);
-    await channel.send({ connectionId: "matrix", target: "!room:example.test", messageId: "$input", data: { sender: owner } }, "reply", "stable");
-    expect(sent[0]).toMatchObject({ txn: "stable-0", content: { "m.relates_to": { "m.in_reply_to": { event_id: "$input" } } } });
-  } finally { store.close(); }
-});
-
 it("validates duplicate connections and keeps channel secrets out of config values", () => {
-  const matrix = { id: "matrix", kind: "matrix" };
-  expect(() => channelConfigSchema.parse({ agents: [{ agentId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", connections: [matrix, matrix] }] })).toThrow("duplicate_connection_id");
+  const weixin = { id: "weixin", kind: "weixin", credentialsFile: "weixin.json" };
+  expect(() => channelConfigSchema.parse({ agents: [{ agentId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", connections: [weixin, weixin] }] })).toThrow("duplicate_connection_id");
+  // A connection kind Router does not have is refused, including the removed Matrix kind.
+  expect(() => channelConfigSchema.parse({ agents: [{ agentId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", connections: [{ id: "matrix", kind: "matrix" }] }] })).toThrow();
   expect(() => channelConfigSchema.parse({ agents: [{ agentId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", connections: [{ id: "telegram", kind: "telegram", token: "inline" }] }] })).toThrow();
 });
 

@@ -9,9 +9,6 @@ import { GroveMailChannel } from "../src/channels/grove-mail/index.js";
 import { ServiceHttp } from "../src/http.js";
 import { encryptAesEcb } from "../src/channels/weixin/vendor/aes-ecb.js";
 import { channelConfigSchema } from "../src/service/channels.js";
-import { MatrixChannel } from "../src/channels/matrix/index.js";
-import { SdkMatrixTransport } from "../src/matrix/transport.js";
-import type { MatrixConnector } from "../src/agents/connector.js";
 import { uploadWeixinMedia } from "../src/channels/weixin/media.js";
 import { decryptAesEcb } from "../src/channels/weixin/vendor/aes-ecb.js";
 import type { ChannelContext, ChannelMessage, ReplyRoute } from "../src/communication/types.js";
@@ -79,40 +76,6 @@ it("Feishu document comments stay in a shared thread and reply to that document"
   await channel.send(reply, "可以", "comment");
   expect(create.mock.calls[0]![0].path).toEqual({ file_token: "document", comment_id: "comment" });
   await expect(channel.sendContent(reply, { text: "", card: {} }, "invalid-card")).rejects.toThrow("feishu_comment_content_unsupported");
-});
-it("Matrix transfers actual media, preserves thread replies and updates every stream segment", async () => {
-  const c = context(), send = vi.fn(async (_room, _type, _body, txn) => `$${txn}`);
-  const upload = vi.fn(async () => "mxc://media.example/file");
-  let encrypted = false;
-  const connector = { userId: "@bot:example", store: { get: () => undefined }, transport: {
-    state: async () => [{ type: "m.room.member", state_key: "owner", content: { membership: "join" } }, ...(encrypted ? [{ type: "m.room.encryption", content: {} }] : [])],
-    media: { read: async () => png, upload }, send,
-  } } as unknown as MatrixConnector;
-  const channel = new MatrixChannel(connector); await channel.start(c.value);
-  const reply = { ...route, data: { sender: "owner", thread: "$thread" } };
-  await channel.sendContent(reply, { text: "", media: [{ name: "image.png", mediaType: "image/png", data: png.toString("base64") }] }, "media");
-  expect(upload).toHaveBeenCalledWith(png, "image.png", "image/png");
-  expect(send.mock.calls[0]![2]["m.relates_to"].event_id).toBe("$thread");
-  const media = await channel.readAttachment({} as ChannelMessage, { id: "mxc://media.example/file", name: "image.png", mediaType: "image/png" });
-  expect(Buffer.from(media.data, "base64")).toEqual(png);
-  await channel.progress(reply, "a".repeat(5000), "stream", false);
-  await channel.progress(reply, "b".repeat(5000), "stream", true);
-  const edits = send.mock.calls.filter((call) => call[2]["m.new_content"]);
-  expect(edits).toHaveLength(3); expect(edits.map((call) => call[2]["m.new_content"].body).join("")).toBe("b".repeat(5000));
-  await channel.sendContent(reply, { text: "hello", html: "<b>hello</b>" }, "html");
-  expect(send.mock.calls.at(-1)![2].formatted_body).toBe("<b>hello</b>");
-  encrypted = true; const count = upload.mock.calls.length;
-  await expect(channel.sendContent(reply, { text: "", media: [{ name: "image.png", mediaType: "image/png", data: png.toString("base64") }] }, "encrypted")).rejects.toThrow("matrix_encrypted_room_not_supported");
-  expect(upload).toHaveBeenCalledTimes(count);
-});
-it("Matrix authenticates media downloads only to its own homeserver", async () => {
-  const fetchMock = vi.fn(async () => new Response(new Uint8Array(png)));
-  vi.stubGlobal("fetch", fetchMock);
-  const transport = new SdkMatrixTransport("https://matrix.example.test", "fixture-token", "@bot:example", { uploadContent: async () => ({ content_uri: "mxc://example/upload" }) } as any);
-  expect(await transport.media.read("mxc://remote.example/opaque")).toEqual(png);
-  expect(fetchMock.mock.calls[0]![0]).toBe("https://matrix.example.test/_matrix/client/v1/media/download/remote.example/opaque");
-  expect((fetchMock.mock.calls[0]![1] as any).headers.authorization).toBe("Bearer fixture-token");
-  await expect(transport.media.read("https://elsewhere.example/file")).rejects.toThrow("matrix_media_uri_invalid");
 });
 it("Weixin uploads AES ciphertext and sends the matching native media reference", async () => {
   let requested: any, encrypted: Buffer | undefined;

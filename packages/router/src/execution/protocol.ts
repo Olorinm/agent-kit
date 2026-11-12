@@ -5,10 +5,6 @@ export const terminal = (task: Task): boolean => [TaskState.TASK_STATE_COMPLETED
   TaskState.TASK_STATE_CANCELED, TaskState.TASK_STATE_REJECTED].includes(task.status?.state ?? 0);
 export const key = (...parts: string[]): string => JSON.stringify(parts);
 export const digest = (value: unknown): string => createHash("sha256").update(JSON.stringify(value) ?? "undefined").digest("hex");
-export function sized<T>(value: T): T {
-  if (Buffer.byteLength(JSON.stringify(value)) > 48_000) throw new Error("matrix_event_too_large_use_file_reference");
-  return value;
-}
 export function encodeResult(result: SendMessageResult): Record<string, unknown> {
   return SendMessageResponse.toJSON({ payload: "messageId" in result
     ? { $case: "message", value: result } : { $case: "task", value: result } }) as Record<string, unknown>;

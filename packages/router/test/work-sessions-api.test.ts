@@ -2,9 +2,7 @@ import { afterEach, expect, it } from "vitest";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { ManagedService, createManagedApp, type ManagedAgent, type ServiceExtension } from "../src/service/managed.js";
-import { ApplicationInbox } from "../src/matrix/application-service.js";
-import type { MatrixTransport } from "../src/matrix/transport.js";
+import { ManagedService, createManagedApp, type ServiceExtension } from "../src/service/managed.js";
 import type { WorkSessions, WorkSessionSubmission } from "../src/execution/sessions.js";
 
 const cleanup: Array<() => void | Promise<void>> = [];
@@ -13,15 +11,7 @@ const owner = "@alice:example.test", other = "@bob:example.test";
 function config() {
   const stateDir = mkdtempSync(join(tmpdir(), "managed-router-"));
   cleanup.push(() => rmSync(stateDir, { recursive: true, force: true }));
-  return { serverName: "example.test", homeserver: "https://example.test", publicUrl: "https://example.test/_agent-router/v1",
-    stateDir, asToken: "a".repeat(48), hsToken: "h".repeat(48) };
-}
-function transport(agent: ManagedAgent, inbox: ApplicationInbox): MatrixTransport {
-  return { identity: async () => agent.matrixId,
-    sync: async (since) => { await new Promise((r) => setTimeout(r, 20)); return inbox.next(agent.id, since) ?? { next_batch: since ?? "0" }; },
-    state: async () => [], history: async () => ({ events: [] }), createRoom: async () => "!room:example.test",
-    join: async () => {}, send: async () => "$sent", stop: () => {},
-  };
+  return { serverName: "example.test", publicUrl: "https://example.test/_agent-router/v1", stateDir };
 }
 async function setup(extension?: ServiceExtension) {
   const cfg = config();
@@ -29,7 +19,7 @@ async function setup(extension?: ServiceExtension) {
     if (token === "alice") return owner;
     if (token === "bob") return other;
     throw new Error("bad_credentials");
-  }, provision: async () => {}, transport, ...(extension ? { configure: async () => extension } : {}) });
+  }, ...(extension ? { configure: async () => extension } : {}) });
   cleanup.push(() => service.close());
   const server = createManagedApp(service).listen(0, "127.0.0.1");
   await new Promise<void>((r) => server.once("listening", r));

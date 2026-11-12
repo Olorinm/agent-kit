@@ -1,5 +1,12 @@
 # ADR 0005: Router-owned conversation ledger and web channel
 
+> **Status note.** Matrix has since been removed from Router: there is no Matrix transport, Application Service,
+> homeserver or Matrix connection kind. The ledger described here is the only conversation store, and the edge identity
+> (section 18.2) is the owner login. The sections that describe the migration from Matrix, the Matrix switch
+> (section 19) and Matrix-side behaviour, and the references to ADR 0002, ADR 0004 and `src/matrix/*` files, are kept
+> unchanged as the historical record; they do not describe the current code. The service lives in
+> `src/service/managed.ts`.
+
 - Status: accepted; phases 1–3 implemented behind flags (see "Implementation notes"); phases 4–7 decided and
   specified (sections 15–19); phase 8 (Durable Objects) later
 - Date: 2026-11-05; phases 3–7 decisions 2026-11-06

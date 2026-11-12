@@ -41,7 +41,7 @@ it("a channel written only against the public API runs through the core: config,
 
   const store = new DurableStore(":memory:", "agent"); cleanup.push(() => store.close());
   const work = new CliWork(store, () => "allow"), core = new CommunicationCore("agent", store, work);
-  const channel = await echoChannel.create(config, { agentId: "agent", owner: "@owner:example.test", files, services: {} });
+  const channel = await echoChannel.create(config, { agentId: "agent", owner: "@owner:example.test", files });
   const adapter = channel.adapter as EchoChannel;
   core.register({ id: config.id, ownerAddresses: channel.ownerAddresses ?? config.ownerAddresses, peerAddresses: config.peerAddresses,
     groupIds: config.groupIds }, adapter, channel.reload);

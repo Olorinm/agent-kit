@@ -95,7 +95,7 @@ export class CommunicationCore {
    * only the ledger write (savepoint) and is recorded in `ledger.lastError`; the legacy record commits, and the
    * authoritative dispatcher and flush pick it up through their legacy fallbacks (records without a pending input or
    * delivery row, settled records reconciled). Failing the receipt instead would stop a channel cursor forever on a
-   * deterministic ledger error (a Matrix /sync batch or Feishu redelivery loop).
+   * deterministic ledger error (for example a Feishu redelivery loop).
    * `strict` (web receipts in authoritative mode) throws instead: the HTTP client sees the error and retries.
    */
   private shadow<T>(work: (ledger: AgentLedger) => T, strict = false): T | undefined {
@@ -208,7 +208,7 @@ export class CommunicationCore {
       this.shadow((ledger) => shadowReceive(ledger, this.shadowContext, record, { owner, allowed, oversized, noticeId }), adapter.ledgerDelivery === true);
       if (noticeId) this.settleWeb(this.store.get<OutboxRecord>("communication_outbox", noticeId)!, undefined);
     };
-    // Matrix invokes receipt inside its existing transaction; other channels create their own.
+    // A channel may call receipt inside its own transaction; otherwise one is created here.
     if (this.store.db.isTransaction) commit(); else this.store.transaction(commit);
     return record;
   }
@@ -254,7 +254,7 @@ export class CommunicationCore {
         if (!value || value.state !== "received") continue;
         const pending = this.authoritative ? this.ledger!.input(id) : undefined;
         if (pending && !["queued", "starting"].includes(String(pending.state))) continue;
-        // A message on a connection that is gone (Matrix off, ADR 0005 19.2) has no route. It must not stall the queue,
+        // A message on a connection that is gone (a removed channel kind or a deleted connection) has no route. It must not stall the queue,
         // and it is settled so that bringing the connection back does not run it late.
         if (!this.connections.has(value.connectionId)) {
           this.atomic(() => {
@@ -332,9 +332,9 @@ export class CommunicationCore {
   private publishResults(): void {
     for (const { id: eventId, value: task } of this.work.events()) {
       const input = this.input(task.id);
-      if (!input) continue; // Matrix/A2A events belong to the existing connector.
+      if (!input) continue; // Not channel work (for example a work session event).
       this.store.transaction(() => {
-        // The connection may be gone (Matrix off): the result is still recorded, and flush settles its delivery as failed.
+        // The connection may be gone: the result is still recorded, and flush settles its delivery as failed.
         const adapter = this.connections.get(input.connectionId)?.adapter;
         const capabilities = adapter?.capabilitiesFor?.(input.replyRoute) ?? adapter?.capabilities;
         if (adapter?.activity && capabilities?.native.includes("reaction")) {
@@ -515,14 +515,14 @@ export class CommunicationCore {
   }
   capabilities(taskId: string) { const input = this.input(taskId); if (!input) return undefined;
     const adapter = this.connections.get(input.connectionId)?.adapter; return adapter?.capabilitiesFor?.(input.replyRoute) ?? adapter?.capabilities; }
-  /** True while the connection is registered. Records of a removed connection (Matrix off) stay readable but have no route. */
+  /** True while the connection is registered. Records of a removed connection stay readable but have no route. */
   connected(connectionId: string): boolean { return this.connections.has(connectionId); }
   /** Registered connection ids. */
   connectionIds(): string[] { return [...this.connections.keys()]; }
   /**
    * An owner's direct input. A sender that became the owner by pairing is the owner only in owner-main; its earlier
    * peer conversations keep their peer rights (ADR 0005 18.1: a conversation never moves).
-   * On a connection that is gone (Matrix off) the record speaks for itself: only an owner's direct message is in owner-main.
+   * On a connection that is gone the record speaks for itself: only an owner's direct message is in owner-main.
    */
   isOwnerInput(input: InboxRecord) {
     if (input.source.scope !== "direct") return false;
@@ -551,7 +551,7 @@ export class CommunicationCore {
   queueContent(taskId: string, content: ChannelContent, sendKey: string,
     options: { notice?: string; attachments?: RecordedAttachment[]; transcript?: boolean; push?: string } = {}): string {
     const input = this.input(taskId); if (!input) throw new Error("channel_task_not_found");
-    // A schedule notice whose session only has a removed connection (Matrix off): the transcript is its delivery.
+    // A schedule notice whose session only has a removed connection: the transcript is its delivery.
     const adapter = options.notice ? this.connections.get(input.connectionId)?.adapter : this.connection(input.connectionId).adapter;
     if ((content.html || content.media?.length || content.card || content.buttons?.length) && !adapter?.sendContent) throw new Error("channel_content_unsupported");
     const capabilities = this.capabilities(taskId);

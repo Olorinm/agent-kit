@@ -56,7 +56,7 @@ export class WebChannel implements ChannelAdapter, WebIngress {
   private receive(message: ChannelMessage): InboxRecord {
     try { return this.core.receive(WEB_CONNECTION, message); }
     catch (error) {
-      // Matrix txnId semantics: the same key with a different body is a conflict, never a second message.
+      // The same key with a different body is a conflict, never a second message.
       if (error instanceof Error && error.message === "channel_event_id_reused_with_different_payload") throw new WorkError("idempotency_key_reused", 409);
       throw error;
     }

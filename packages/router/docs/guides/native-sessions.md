@@ -62,8 +62,8 @@ Other typed items on an internal delivery are rejected before submitting a run.
 `HostAdmission` is trusted embedding metadata, never a model-visible authorization token.
 The product's Host decorator consumes and strips it; the default `HttpAgentHost` also
 strips it before the Host HTTP request. Owner channel admission is issued for a
-verified owner private chat, and for the owner's turn in a Matrix group whose members are
-only the owner and the owner's own agents. Mixed groups, peer messages and forged context
+verified owner private chat, and for the owner's turn in a hub room, whose members are
+only the owner and the owner's own agents. Other group chats, peer messages and forged context
 IDs do not receive it. Each group keeps its own session; it never joins the private main session.
 The product must enforce expiry, operation grants and call budgets at tool execution.
 

@@ -7,8 +7,6 @@ import { SignJWT, exportJWK, generateKeyPair, type JWK } from "jose";
 import { WebSocket as NodeSocket } from "ws";
 import { CloudflareAccessAuthenticator, edgeIdentityConfigSchema, loadEdgeIdentityConfig, type EdgeIdentityConfig } from "../src/auth/edge-identity.js";
 import { ManagedService, createManagedApp, type ManagedAgent, type ServiceConfig } from "../src/service/managed.js";
-import type { ApplicationInbox } from "../src/matrix/application-service.js";
-import type { MatrixTransport } from "../src/matrix/transport.js";
 import { personId } from "../src/ledger/registry.js";
 
 const team = "https://example-team.cloudflareaccess.com", aud = "a".repeat(64), root = "/_agent-router/v1";
@@ -134,20 +132,14 @@ describe("CloudflareAccessAuthenticator", () => {
   });
 });
 
-function transport(agent: ManagedAgent, inbox: ApplicationInbox): MatrixTransport {
-  return { identity: async () => agent.matrixId,
-    sync: async (since) => { await new Promise((r) => setTimeout(r, 20)); return inbox.next(agent.id, since) ?? { next_batch: since ?? "0" }; },
-    state: async () => [], history: async () => ({ events: [] }), createRoom: async () => "!room:example.test",
-    join: async () => {}, send: async () => "$sent", stop: () => {} };
-}
 async function service(edge: Partial<EdgeIdentityConfig> | undefined, overrides: Partial<ServiceConfig> = {}) {
   const signer = await key("k1"), jwks = await jwksServer([signer]);
   const stateDir = mkdtempSync(join(tmpdir(), "edge-service-"));
   cleanup.push(() => rmSync(stateDir, { recursive: true, force: true }));
-  const managed = new ManagedService({ serverName: "example.test", homeserver: "https://example.test", publicUrl: "https://example.test/_agent-router/v1",
-    stateDir, asToken: "a".repeat(48), hsToken: "h".repeat(48), ledgerRead: true, ...(edge ? { edgeIdentity: config(edge) } : {}), ...overrides }, {
+  const managed = new ManagedService({ serverName: "example.test", publicUrl: "https://example.test/_agent-router/v1",
+    stateDir, ledgerRead: true, ledgerSend: true, ...(edge ? { edgeIdentity: config(edge) } : {}), ...overrides }, {
     authenticate: async (token) => { if (token === "owner") return owner; if (token === "second") return second; throw new Error("bad_credentials"); },
-    provision: async () => {}, transport, edgeIdentityCerts: jwks.url });
+    edgeIdentityCerts: jwks.url });
   cleanup.push(() => managed.close());
   const server = createManagedApp(managed).listen(0, "127.0.0.1");
   server.on("upgrade", (req, socket, head) => { if (!managed.web?.upgrade(req, socket, head)) socket.destroy(); });
@@ -282,7 +274,7 @@ describe("owner API with edge identity", () => {
   });
 
   it("lets an edge principal upload a file of a simple type (X-File-Name forces a preflight) and keeps the guard otherwise", async () => {
-    const t = await service({}, { ledgerSend: true, ledgerAttachments: true });
+    const t = await service({}, { ledgerAttachments: true });
     const jwt = { "cf-access-jwt-assertion": await t.sign(), Origin: "https://example.test" };
     const upload = async (headers: Record<string, string>) => {
       const response = await fetch(`http://127.0.0.1:${t.port}${root}/web/attachments`, { method: "POST", body: "plain notes", headers });

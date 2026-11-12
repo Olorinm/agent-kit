@@ -3,10 +3,9 @@ import { createHash } from "node:crypto";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { ManagedService, createManagedApp, type ManagedAgent, type ServiceConfig, type ServiceExtension } from "../src/service/managed.js";
-import type { ApplicationInbox } from "../src/matrix/application-service.js";
-import type { MatrixTransport } from "../src/matrix/transport.js";
+import { ManagedService, createManagedApp, type ServiceConfig, type ServiceExtension } from "../src/service/managed.js";
 import { channelConfigSchema, createChannelRuntime } from "../src/service/channels.js";
+import { withChat } from "./fixtures/chat-channel.js";
 import type { HostPort, HostRun } from "../src/execution/host.js";
 import { ChannelTools } from "../src/communication/tools.js";
 import { AgentLedger } from "../src/ledger/ledger.js";
@@ -36,12 +35,6 @@ class Host implements HostPort {
     return { content: bytes.toString("base64"), encoding: "base64" as const };
   }
 }
-function transport(agent: ManagedAgent, inbox: ApplicationInbox): MatrixTransport {
-  return { identity: async () => agent.matrixId,
-    sync: async (since) => { await new Promise((r) => setTimeout(r, 20)); return inbox.next(agent.id, since) ?? { next_batch: since ?? "0" }; },
-    state: async () => [], history: async () => ({ events: [] }), createRoom: async () => "!room:example.test",
-    join: async () => {}, send: async () => "$sent", stop: () => {} };
-}
 async function until<T>(read: () => T | Promise<T>, predicate: (value: T) => boolean, ms = 10_000): Promise<T> {
   const deadline = Date.now() + ms;
   for (;;) { const value = await read(); if (predicate(value)) return value; if (Date.now() > deadline) throw new Error(`timed out: ${JSON.stringify(value)}`); await new Promise((r) => setTimeout(r, 25)); }
@@ -50,17 +43,16 @@ async function setup(overrides: Partial<ServiceConfig> = {}) {
   const stateDir = mkdtempSync(join(tmpdir(), "ledger-web-att-"));
   cleanup.push(() => rmSync(stateDir, { recursive: true, force: true }));
   const host = new Host(), extensions = new Map<string, ServiceExtension>();
-  const service: ManagedService = new ManagedService({ serverName: "example.test", homeserver: "https://example.test", publicUrl: "https://example.test/_agent-router/v1",
-    stateDir, asToken: "a".repeat(48), hsToken: "h".repeat(48), ledgerRead: true, ledgerSend: true, ledgerAttachments: true, ...overrides }, {
+  const service: ManagedService = new ManagedService({ serverName: "example.test", publicUrl: "https://example.test/_agent-router/v1",
+    stateDir, ledgerRead: true, ledgerSend: true, ledgerAttachments: true, ...overrides }, {
     authenticate: async (token) => { if (token === "alice") return owner; if (token === "bob") return other; throw new Error("bad_credentials"); },
-    provision: async () => {}, transport,
-    configure: async (agent, connector) => {
-      const config = channelConfigSchema.parse({ agents: [{ agentId: agent.id, connections: [{ id: "matrix", kind: "matrix" }],
+    configure: async (agent, runtime) => {
+      const config = channelConfigSchema.parse({ agents: [{ agentId: agent.id, connections: [],
         host: { binding: "fixture", runtimeId: "fixture" } }] }).agents[0]!;
-      const extension = await createChannelRuntime(agent, connector, config, stateDir, (name) => {
+      const extension = withChat(await createChannelRuntime(agent, runtime, config, stateDir, (name) => {
         const issued = service.issue(agent.id, name);
         return { id: issued.instance.id, validate: () => { service.instance(issued.token, agent.id); } };
-      }, host, { persons: service.persons, attachments: service.attachments });
+      }, host, { persons: service.persons, attachments: service.attachments }), [owner]);
       extensions.set(agent.id, extension);
       return extension;
     } });
@@ -84,7 +76,7 @@ async function setup(overrides: Partial<ServiceConfig> = {}) {
     return { status: response.status, body: Buffer.from(await response.arrayBuffer()), type: response.headers.get("content-type") };
   }
   const agent = await service.create(owner, "helper");
-  const ledger = AgentLedger.attached((await service.runtime(agent.id)).connector.store)!;
+  const ledger = AgentLedger.attached((await service.runtime(agent.id)).store)!;
   const chatId = `dm:${agent.id}`;
   await api(`${root}/web/chats/dm`, "alice", "POST", { agentId: agent.id });
   const send = (body: Record<string, unknown>, token = "alice") => api(`${root}/web/chats/${enc(chatId)}/messages`, token, "POST", body);
@@ -215,8 +207,6 @@ describe("web send with attachments", () => {
     expect((await off.api(`${root}/web/me`)).data.limits.features).toMatchObject({ send: true, attachments: false });
     expect(await off.send({ idempotencyKey: key, text: "图", attachments: ["at_1"] })).toEqual({ status: 422, data: { error: "attachments_unsupported" } });
     expect(off.extension().communication!.capabilities("missing")).toBeUndefined();
-    const noSend = await setup({ ledgerSend: false });
-    expect(noSend.service.attachments).toBeUndefined();
-    expect((await noSend.api(`${root}/web/me`)).data.limits.features).toMatchObject({ send: false, attachments: false });
+    await expect(setup({ ledgerSend: false })).rejects.toThrow("ledger_read_requires_ledger_send");
   }, 20_000);
 });

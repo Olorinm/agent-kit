@@ -1,9 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import express from "express";
-import { execFile } from "node:child_process";
-import { promisify } from "node:util";
-import { fileURLToPath } from "node:url";
-import { mkdtempSync, rmSync, readFileSync, statSync, existsSync, mkdirSync } from "node:fs";
+import { mkdtempSync, rmSync, readFileSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
@@ -12,15 +9,11 @@ import {
   createManagedApp,
   type ManagedAgent,
 } from "../src/service/managed.js";
-import type { ApplicationInbox } from "../src/matrix/application-service.js";
-import type { MatrixTransport } from "../src/matrix/transport.js";
-import type { RoomEvent } from "../src/matrix/protocol.js";
 import { WorkError } from "../src/execution/work.js";
 import { ConnectionSetup } from "../src/connections/connections.js";
 import { ConnectionConfiguration } from "../src/connections/configuration.js";
 import { createConnections } from "../src/connections/routes.js";
 import { privateFile } from "../src/services/feishu/cli.js";
-import { AgentRouterClient } from "../packages/sdk/src/index.js";
 
 const cleanup: Array<() => void | Promise<void>> = [];
 afterEach(async () => {
@@ -30,17 +23,15 @@ afterEach(async () => {
 });
 const alice = "@alice:example.test",
   bob = "@bob:example.test",
-  root = "/_agent-router/v1";
+  root = "/_agent-router/v1",
+  inbox = "agent@example.test";
 async function fixture() {
   const directory = mkdtempSync(join(tmpdir(), "router-onboarding-"));
   cleanup.push(() => rmSync(directory, { recursive: true, force: true }));
   const config = {
     serverName: "example.test",
-    homeserver: "https://matrix.fixture",
     publicUrl: "http://127.0.0.1/_agent-router/v1",
     stateDir: directory,
-    asToken: "a".repeat(48),
-    hsToken: "h".repeat(48),
   };
   const tokens = new Map<string, string>([["fixture-alice", alice], ["fixture-bob", bob]]),
     requests: Array<{ url: string; body: any }> = [],
@@ -95,60 +86,28 @@ async function fixture() {
           return Response.json(hostRuns.get(url.split("/").at(-1)!));
         throw new Error("unexpected_host_fixture_request");
       }
+      if (new URL(url).origin === "https://mail.fixture") {
+        // The mail service of `connect`: the inbox exists and has no events.
+        expect(new Headers(init?.headers).get("authorization")).toBe(
+          "Bearer fixture-mail-key",
+        );
+        const { pathname, searchParams } = new URL(url);
+        if (pathname === "/v0/inboxes/" + encodeURIComponent(inbox))
+          return Response.json({ inbox_id: inbox });
+        if (pathname.endsWith("/events/lifecycle"))
+          return Response.json({ events: [], next_cursor: Number(searchParams.get("after")) });
+        throw new Error("unexpected_mail_fixture_request");
+      }
       if (new URL(url).hostname !== "127.0.0.1")
         throw new Error("unexpected_external_request");
       return actualFetch(input, init);
     },
   );
-  const history = new Map<string, RoomEvent[]>();
-  let inbox: ApplicationInbox;
-  const deliver = (room: string, event: RoomEvent) => {
-    const events = history.get(room) ?? [];
-    events.push(event);
-    history.set(room, events);
-    inbox.receive(randomUUID(), { events: [{ ...event, room_id: room }] });
-  };
-  function transport(
-    agent: ManagedAgent,
-    box: ApplicationInbox,
-  ): MatrixTransport {
-    inbox = box;
-    return {
-      identity: async () => agent.matrixId,
-      sync: async (since) => {
-        await new Promise((r) => setTimeout(r, 10));
-        return box.next(agent.id, since) ?? { next_batch: since ?? "0" };
-      },
-      state: async (room) => history.get(room) ?? [],
-      history: async () => ({ events: [] }),
-      createRoom: async (target) => {
-        const room = "!" + randomUUID() + ":example.test";
-        for (const user of [agent.matrixId, target])
-          deliver(room, {
-            event_id: "$" + randomUUID(),
-            type: "m.room.member",
-            sender: user,
-            state_key: user,
-            content: { membership: "join" },
-          });
-        return room;
-      },
-      join: async () => {},
-      send: async (room, type, content) => {
-        const id = "$" + randomUUID();
-        deliver(room, { event_id: id, type, sender: agent.matrixId, content });
-        return id;
-      },
-      stop: () => {},
-    };
-  }
   const optionsFile = join(directory, "options.json");
   privateFile(join(directory, "host-token"), "fixture-host-token");
-  privateFile(optionsFile, {});
+  privateFile(optionsFile, { mailServices: [{ id: "mail", label: "Mail", url: "https://mail.fixture" }] });
   const settings = new ConnectionConfiguration(directory, optionsFile);
   const service = new ManagedService(config, {
-    transport,
-    provision: async () => {},
     authenticate: async (token) => {
       const owner = tokens.get(token);
       if (!owner) throw new WorkError("account_session_invalid", 401);
@@ -172,11 +131,6 @@ async function fixture() {
     "http://127.0.0.1:" + (server.address() as { port: number }).port;
   config.publicUrl = base + "/_agent-router/v1";
   const setup = createConnections(service, settings);
-  app.get("/_matrix/client/v3/account/whoami", (req, res) => {
-    const owner = tokens.get(req.get("authorization")?.slice(7) ?? "");
-    if (!owner) {res.status(401).json({errcode: "M_UNKNOWN_TOKEN"}); return;}
-    res.json({user_id: owner});
-  });
   app.use(createManagedApp(service, setup.router));
   cleanup.push(() => setup.close());
   function client(name: string) {
@@ -201,6 +155,9 @@ async function fixture() {
     hostRuns,
     tokens,
     client,
+    /** Connect the agent's mailbox: a real connection kind whose provider is the fixture above. */
+    connect: (agent: ManagedAgent, name = "alice") => client(name).api("/agents/" + agent.id + "/connections",
+      { kind: "grove-mail", serviceId: "mail", inboxId: inbox, apiKey: "fixture-mail-key", ownerEmail: "alice@example.test" }),
     host: (agent: ManagedAgent, runtimeId = "personal") => settings.edit(agent.owner, agent.id, config => {
       config.host = { url: "https://host.fixture", tokenFile: join(directory, "host-token"), runtimeId, instanceName: "channel-host", instructions: "" };
     }),
@@ -250,7 +207,7 @@ describe("managed CLI setup", () => {
     expect(() => f.settings.assertFeishuAvailable("cli_new", agent.id)).not.toThrow();
     expect(() => f.settings.assertFeishuAvailable("cli_existing", other.id)).not.toThrow();
   });
-  it("configures an optional Host and Matrix channel, persists private files and protects active work", async () => {
+  it("configures an optional Host and a mail channel, persists private files and protects active work", async () => {
     const f = await fixture(), a = f.client("alice"), b = f.client("bob");
     const agent = (await a.api("/agents", {name: "helper"})).data;
     const path = "/agents/" + agent.id;
@@ -259,22 +216,26 @@ describe("managed CLI setup", () => {
     expect((await a.api(path + "/host", {hostId: "personal"})).status).toBe(404);
     await f.host(agent);
     expect(f.settings.configuration(agent)?.connections).toEqual([]);
-    expect((await a.api(path + "/connections", {kind: "matrix"})).status).toBe(200);
-    expect((await a.api(path + "/connections", {kind: "matrix"})).status).toBe(409);
+    expect(await a.api(path + "/connections", {kind: "matrix"})).toEqual({status: 400, data: {error: "invalid_request"}});
+    expect((await f.connect(other)).status).toBe(404);
+    expect((await f.connect(agent)).status).toBe(200);
+    expect(await f.connect(agent)).toEqual({status: 409, data: {error: "platform_already_connected"}});
     const file = join(f.settings.agentDirectory(agent.id), "channels.json");
     expect(statSync(file).mode & 0o777).toBe(0o600);
+    expect(statSync(join(f.settings.agentDirectory(agent.id), "mail-key")).mode & 0o777).toBe(0o600);
     const restored = new ConnectionConfiguration(f.directory, join(f.directory, "options.json"));
     expect(restored.configuration(agent)?.host?.runtimeId).toBe("personal");
-    expect(restored.configuration(agent)?.connections[0]?.kind).toBe("matrix");
+    expect(restored.configuration(agent)?.connections[0]).toMatchObject({id: "mail", kind: "grove-mail", ownerAddresses: ["alice@example.test"]});
     expect((await a.api(path + "/configuration")).data.communication.connections[0].started).toBe(true);
     const checks = (await a.api(path + "/check", {})).data.checks;
-    expect(checks.find((c: any) => c.kind === "matrix").detail).toContain("real message");
+    expect(checks.find((c: any) => c.kind === "host").status).toBe("verified");
+    expect(checks.find((c: any) => c.kind === "grove-mail")).toMatchObject({connectionId: "mail", status: "verified", detail: expect.stringContaining("inbox access verified")});
     expect(f.hostRuns.size).toBe(0);
     const runtime = await f.service.runtime(agent.id), before = readFileSync(file, "utf8");
-    runtime.connector.store.set("communication_runs", "uncertain", {phase: "unknown"});
+    runtime.store.set("communication_runs", "uncertain", {phase: "unknown"});
     await expect(f.host(agent, "other")).rejects.toThrow("agent_has_active_or_unknown_run");
     expect(readFileSync(file, "utf8")).toBe(before);
-    runtime.connector.store.delete("communication_runs", "uncertain");
+    runtime.store.delete("communication_runs", "uncertain");
     const original = f.settings.factory;
     await expect(f.service.configureRuntime(agent.id, async () => ({
       start: async () => {throw new Error("fixture_start_failure");}, stop: async () => {},
@@ -282,74 +243,31 @@ describe("managed CLI setup", () => {
     }), original)).rejects.toThrow("fixture_start_failure");
     expect((await a.api(path + "/configuration")).data.communication.connections[0].started).toBe(true);
   });
-  it("executes an authorized friend's existing A2A conversation on the selected Host without personal tools", async () => {
+  it("executes owner work on the selected Host, continues its session and refuses another runtime afterwards", async () => {
     const f = await fixture(), a = f.client("alice"), b = f.client("bob");
     const agent = (await a.api("/agents", {name: "helper"})).data;
-    const caller = (await b.api("/agents", {name: "client"})).data;
     await f.host(agent);
-    const gateway = "/agents/" + agent.id + "/gateway";
-    expect((await b.api(gateway + "/api/contacts", {address: caller.matrixId, receive: "allow", execution: "allow"})).status).toBe(404);
-    expect((await a.api(gateway + "/api/contacts", {address: caller.matrixId, note: "Friend", tags: [], receive: "allow", execution: "allow"})).status).toBe(201);
-    const sdk = new AgentRouterClient({baseUrl: f.config.publicUrl, accessToken: "fixture-bob", allowLocalHTTP: true});
-    const input = {agentId: caller.id, address: agent.address, resolvedTarget: agent, text: "remember 42", messageId: randomUUID()};
-    const task = await sdk.send(input);
-    expect((await sdk.send(input)).id).toBe(task.id);
-    let result: any;
-    await vi.waitFor(async () => {
-      result = await sdk.get({agentId: caller.id, address: agent.address, resolvedTarget: agent, taskId: task.id});
-      expect(result.status.state).toBe("TASK_STATE_COMPLETED");
-    }, {timeout: 7000});
-    expect(result.artifacts.flatMap((a: any) => a.parts).map((p: any) => p.text).join("")).toBe("Fixture reply: remember 42");
-    expect([...f.hostRuns.values()][0].tools).toBeUndefined();
-    const second = await sdk.send({...input, text: "continue", contextId: task.contextId, messageId: randomUUID()});
-    await vi.waitFor(async () => expect((await sdk.get({agentId: caller.id, address: agent.address, resolvedTarget: agent, taskId: second.id})).status.state).toBe("TASK_STATE_COMPLETED"), {timeout: 7000});
+    const work = "/agents/" + agent.id + "/communication/work-events", input = {eventId: "first", input: "remember 42"};
+    expect((await b.api(work, input)).status).toBe(404);
+    const first = await a.api(work, input);
+    expect(first.status).toBe(202);
+    expect((await a.api(work, input)).data.taskId).toBe(first.data.taskId);
+    await vi.waitFor(async () => expect((await a.api(work + "/first")).data).toMatchObject({status: "completed", answer: "Fixture reply: remember 42"}), {timeout: 7000});
+    expect((await a.api(work, {eventId: "second", input: "continue", sessionId: first.data.sessionId})).status).toBe(202);
+    await vi.waitFor(async () => expect((await a.api(work + "/second")).data).toMatchObject({status: "completed", answer: "Fixture reply: continue"}), {timeout: 7000});
     expect([...f.hostRuns.values()][1].sessionId).toBe([...f.hostRuns.values()][0].sessionId);
     await expect(f.host(agent, "other")).rejects.toThrow("host_binding_configuration_changed");
     expect(f.hostRuns.size).toBe(2);
   }, 20000);
 });
 
-const cliBinary = fileURLToPath(new URL("../bin/agent-router", import.meta.url));
-it.skipIf(!existsSync(cliBinary))("runs the standalone Go CLI against Router setup, contacts and the A2A Host reply path", async () => {
-  const f = await fixture(), configDir = join(f.directory, "cli-profiles");
-  for (const name of ["alice", "bob"]) {
-    const directory = join(configDir, name);
-    mkdirSync(directory, {recursive: true, mode: 0o700});
-    privateFile(join(directory, "session.json"), {version: 1, homeserver: f.base,
-      userId: "@" + name + ":example.test", deviceId: "fixture-device", accessToken: "fixture-" + name,
-      gatewayToken: "g".repeat(64), connectorUrl: "http://127.0.0.1:8787"});
-  }
-  const cli = async (name: string, ...args: string[]) => {
-    const result = await promisify(execFile)(cliBinary, ["--profile", name, "--allow-http", ...args],
-      {env: {...process.env, MATRIX_CONFIG_DIR: configDir}, timeout: 15_000});
-    expect(result.stdout + result.stderr).not.toContain("fixture-host-token");
-    expect(result.stdout + result.stderr).not.toContain("fixture-alice");
-    expect(result.stdout + result.stderr).not.toContain("fixture-bob");
-    return result.stdout ? JSON.parse(result.stdout) : null;
-  };
-  const options = await cli("alice", "connection-options");
-  expect(options).not.toHaveProperty("environments");
-  const created = await cli("alice", "agent-create", "helper");
-  await f.host(f.service.agent(created.id));
-  const target = await cli("alice", "agent-create", "helper");
-  expect((await cli("alice", "channels")).connections).toEqual([]);
-  expect((await cli("alice", "connection-check")).checks[0].status).toBe("verified");
-  const caller = await cli("bob", "agent-create", "client");
-  await cli("alice", "contact-add", caller.matrixId, "--allow-receive", "--allow-execution");
-  const task = await cli("bob", "send", target.matrixId, "Hello from the Go CLI", "--wait", "10");
-  expect(String(task.status.state).toLowerCase()).toContain("completed");
-  expect(task.artifacts.flatMap((a: any) => a.parts).map((p: any) => p.text).join("")).toBe("Fixture reply: Hello from the Go CLI");
-  const next = await cli("bob", "send", target.matrixId, "continue", "--context-id", task.contextId, "--wait", "10");
-  expect(next.contextId).toBe(task.contextId);
-  expect([...f.hostRuns.values()][1].sessionId).toBe([...f.hostRuns.values()][0].sessionId);
-}, 25000);
-
 it("explicit Host replacement resets native execution only and refuses another owner or an unresolved run", async () => {
   const f = await fixture(), agent = await f.service.create(alice, "replace-test");
   await f.host(agent);
-  await f.client("alice").api(`/agents/${agent.id}/connections`, { kind: "matrix" });
+  expect((await f.connect(agent)).status).toBe(200);
   const old = structuredClone(f.settings.configuration(agent)!);
-  const store = (await f.service.runtime(agent.id)).connector.store;
+  expect(old.connections.map((connection) => connection.kind)).toEqual(["grove-mail"]);
+  const store = (await f.service.runtime(agent.id)).store;
   const next = { ...old.host!, runtimeId: "other", instructions: "fresh environment" };
   store.set("execution_sessions", "context", { sessionId: "old-native-session", runtimeId: "personal" });
   store.set("communication_runs", "old", { phase: "unknown" });
@@ -371,7 +289,7 @@ it("failed replacement restores execution sessions and the original channel conf
   const f = await fixture(), agent = await f.service.create(alice, "replace-failure");
   await f.host(agent);
   const prior = structuredClone(f.settings.configuration(agent)!);
-  const store = (await f.service.runtime(agent.id)).connector.store;
+  const store = (await f.service.runtime(agent.id)).store;
   store.set("execution_sessions", "context", { sessionId: "keep-native", runtimeId: "personal" });
   store.set("communication_runs", "finished", { phase: "finished" });
   const original = (f.settings as any).runtime.bind(f.settings);

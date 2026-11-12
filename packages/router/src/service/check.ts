@@ -15,7 +15,7 @@ export async function checkChannels(configuration: ChannelConfiguration, node?: 
         if (health.protocolVersion !== 1 || !runtimes.runtimes?.some((item: { id: string }) => item.id === agent.host!.runtimeId)) throw new Error("host_runtime_not_found");
         checks.push({ agentId: agent.agentId, kind: "host", status: "verified", detail: "HTTP service and runtime exist; model execution has not been tested" });
       } catch { checks.push({ agentId: agent.agentId, kind: "host", status: "needs_action", detail: "Host address/token/runtime check failed" }); }
-    } else checks.push({ agentId: agent.agentId, kind: "host", status: "not_verified", detail: "No direct Host configured; an external worker is required" });
+    } else checks.push({ agentId: agent.agentId, kind: "host", status: "not_verified", detail: "No Host configured; messages are received but nothing answers them" });
     let live: any;
     if (node) try { live = await node.request(`/_agent-router/v1/agents/${encodeURIComponent(agent.agentId)}/communication`); } catch { /* Each channel will report unverified service state. */ }
     if (!agent.connections.length) checks.push({ agentId: agent.agentId, kind: "connections", status: "not_verified", detail: "No messaging connection configured; Host health does not verify channel access" });

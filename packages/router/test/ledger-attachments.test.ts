@@ -4,9 +4,7 @@ import { mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { createServer, request, type IncomingMessage, type Server } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { ManagedService, createManagedApp, type ManagedAgent, type ServiceConfig } from "../src/service/managed.js";
-import type { ApplicationInbox } from "../src/matrix/application-service.js";
-import type { MatrixTransport } from "../src/matrix/transport.js";
+import { ManagedService, createManagedApp, type ServiceConfig } from "../src/service/managed.js";
 import { CommunicationCore } from "../src/communication/core.js";
 import type { AttachmentReference, ChannelAdapter, ChannelContext, ChannelMessage, ReplyRoute } from "../src/communication/types.js";
 import { AgentLedger } from "../src/ledger/ledger.js";
@@ -32,12 +30,6 @@ class Adapter implements ChannelAdapter {
     if (!bytes) throw new Error("gone");
     return { name: attachment.name, mediaType: attachment.mediaType, data: bytes.toString("base64") };
   }
-}
-function transport(agent: ManagedAgent, inbox: ApplicationInbox): MatrixTransport {
-  return { identity: async () => agent.matrixId,
-    sync: async (since) => { await new Promise((r) => setTimeout(r, 20)); return inbox.next(agent.id, since) ?? { next_batch: since ?? "0" }; },
-    state: async () => [], history: async () => ({ events: [] }), createRoom: async () => "!room:example.test",
-    join: async () => {}, send: async () => "$sent", stop: () => {} };
 }
 const tick = () => new Promise((resolve) => setImmediate(resolve));
 
@@ -88,12 +80,11 @@ async function setup(store: "local" | "r2", overrides: Partial<ServiceConfig> = 
     blobStore = { kind: "r2", endpoint: s3.endpoint, bucket: "agent-router-blobs", accessKeyIdFile: join(keys, "id"), secretAccessKeyFile: join(keys, "secret") };
   }
   const files: Record<string, Buffer> = {}, adapters = new Map<string, Adapter>(), cores = new Map<string, CommunicationCore>();
-  const service = new ManagedService({ serverName: "example.test", homeserver: "https://example.test", publicUrl: "https://example.test/_agent-router/v1",
-    stateDir, asToken: "a".repeat(48), hsToken: "h".repeat(48), ledgerRead: true, ledgerSend: true, ledgerAttachments: true, ...(blobStore ? { blobStore } : {}), ...overrides }, {
+  const service = new ManagedService({ serverName: "example.test", publicUrl: "https://example.test/_agent-router/v1",
+    stateDir, ledgerRead: true, ledgerSend: true, ledgerAttachments: true, ...(blobStore ? { blobStore } : {}), ...overrides }, {
     authenticate: async (token) => { if (token === "alice") return owner; if (token === "bob") return other; throw new Error("bad_credentials"); },
-    provision: async () => {}, transport,
-    configure: async (agent, connector) => {
-      const core = new CommunicationCore(agent.id, connector.store, connector.cli!), adapter = new Adapter(files);
+    configure: async (agent, runtime) => {
+      const core = new CommunicationCore(agent.id, runtime.store, runtime.work), adapter = new Adapter(files);
       core.ownerPersonId = personId(agent.owner);
       core.register({ id: "feishu", ownerAddresses: ["ou_owner"] }, adapter);
       cores.set(agent.id, core); adapters.set(agent.id, adapter);
@@ -124,7 +115,7 @@ async function setup(store: "local" | "r2", overrides: Partial<ServiceConfig> = 
   const upload = (bytes: Buffer, headers: Record<string, string> = {}, token = "alice") => http("/web/attachments", { method: "POST", token,
     headers: { "Content-Type": "image/png", "Content-Length": String(bytes.length), ...headers }, body: bytes });
   const agent = await service.create(owner, "helper");
-  const ledger = AgentLedger.attached((await service.runtime(agent.id)).connector.store)!;
+  const ledger = AgentLedger.attached((await service.runtime(agent.id)).store)!;
   return { service, http, upload, agent, ledger, core: cores.get(agent.id)!, adapter: adapters.get(agent.id)!, files, s3, stateDir };
 }
 const objectCount = (t: Awaited<ReturnType<typeof setup>>) => t.s3 ? t.s3.objects.size

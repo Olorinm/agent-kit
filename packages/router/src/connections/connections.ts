@@ -379,7 +379,7 @@ export class ConnectionSetup {
         );
         privateFile(file, token);
         const runtime = await this.service.runtime(job.agentId);
-        runtime.connector.store.set(
+        runtime.store.set(
           "communication_checkpoints",
           key("telegram", "update"),
           offset - 1,

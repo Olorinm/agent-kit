@@ -2,9 +2,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { ManagedService, createManagedApp, type ManagedAgent, type ServiceConfig } from "../src/service/managed.js";
-import type { ApplicationInbox } from "../src/matrix/application-service.js";
-import type { MatrixTransport } from "../src/matrix/transport.js";
+import { ManagedService, createManagedApp, type ServiceConfig } from "../src/service/managed.js";
 import { CommunicationCore } from "../src/communication/core.js";
 import type { ChannelAdapter, ChannelContext, ChannelMessage, ReplyRoute } from "../src/communication/types.js";
 import { AgentLedger, legacySession } from "../src/ledger/ledger.js";
@@ -19,24 +17,16 @@ class Adapter implements ChannelAdapter {
   async stop() {}
   async send(_route: ReplyRoute, _text: string, key: string) { return { externalId: `sent-${key}` }; }
 }
-function transport(agent: ManagedAgent, inbox: ApplicationInbox): MatrixTransport {
-  return { identity: async () => agent.matrixId,
-    sync: async (since) => { await new Promise((r) => setTimeout(r, 20)); return inbox.next(agent.id, since) ?? { next_batch: since ?? "0" }; },
-    state: async () => [], history: async () => ({ events: [] }), createRoom: async () => "!room:example.test",
-    join: async () => {}, send: async () => "$sent", stop: () => {} };
-}
 const tick = () => new Promise((resolve) => setImmediate(resolve));
 async function setup(overrides: Partial<ServiceConfig> = {}) {
   const stateDir = mkdtempSync(join(tmpdir(), "ledger-web-"));
   cleanup.push(() => rmSync(stateDir, { recursive: true, force: true }));
   const cores = new Map<string, CommunicationCore>();
-  let whoami = 0;
-  const service = new ManagedService({ serverName: "example.test", homeserver: "https://example.test", publicUrl: "https://example.test/_agent-router/v1",
-    stateDir, asToken: "a".repeat(48), hsToken: "h".repeat(48), ledgerRead: true, ...overrides }, {
-    authenticate: async (token) => { whoami++; if (token === "alice") return owner; if (token === "bob") return other; throw new Error("bad_credentials"); },
-    provision: async () => {}, transport,
-    configure: async (agent, connector) => {
-      const core = new CommunicationCore(agent.id, connector.store, connector.cli!);
+  const service = new ManagedService({ serverName: "example.test", publicUrl: "https://example.test/_agent-router/v1",
+    stateDir, ledgerRead: true, ledgerSend: true, ...overrides }, {
+    authenticate: async (token) => { if (token === "alice") return owner; if (token === "bob") return other; throw new Error("bad_credentials"); },
+    configure: async (agent, runtime) => {
+      const core = new CommunicationCore(agent.id, runtime.store, runtime.work);
       core.ownerPersonId = personId(agent.owner);
       core.register({ id: "feishu", ownerAddresses: ["ou_owner"] }, new Adapter());
       cores.set(agent.id, core);
@@ -54,10 +44,10 @@ async function setup(overrides: Partial<ServiceConfig> = {}) {
     return { status: response.status, data: response.status === 204 ? null : await response.json() as any };
   }
   const agent = await service.create(owner, "helper");
-  const core = cores.get(agent.id)!, ledger = AgentLedger.attached((await service.runtime(agent.id)).connector.store)!;
+  const core = cores.get(agent.id)!, ledger = AgentLedger.attached((await service.runtime(agent.id)).store)!;
   const message = (id: string, text = `text-${id}`): ChannelMessage => ({ externalId: id, sender: "ou_owner", scope: "direct", threadId: "oc_chat", text,
     reply: { target: "oc_chat", messageId: id, data: {} } });
-  return { service, api, agent, core, ledger, message, port, whoami: () => whoami };
+  return { service, api, agent, core, ledger, message, port };
 }
 const enc = encodeURIComponent;
 
@@ -68,7 +58,7 @@ describe("owner history API", () => {
     t.ledger.shadow(() => t.ledger.append(session, { kind: "message", role: "assistant", senderType: "agent", senderId: t.agent.id, body: { text: "回复", final: true, channel: "feishu" } }));
     await tick();
     const me = await t.api(`${root}/web/me`);
-    expect(me.data).toMatchObject({ person: { id: personId(owner), name: "alice" }, ownerId: owner, limits: { features: { history: true, send: false } } });
+    expect(me.data).toMatchObject({ person: { id: personId(owner), name: "alice" }, ownerId: owner, limits: { features: { history: true, send: true } } });
     expect(me.data.identities.map((item: any) => [item.provider, item.subject])).toContainEqual(["matrix", owner]);
     const chats = await t.api(`${root}/web/chats`);
     expect(chats.data.data).toMatchObject([{ chatId, kind: "dm", title: "helper", agentIds: [t.agent.id], readOnly: false, lastSeq: 4, generation: 1,
@@ -92,7 +82,6 @@ describe("owner history API", () => {
     expect(read.data).toEqual({ readSeq: 4, unread: 0 });
     expect((await t.api(`${root}/web/chats/${enc(chatId)}/read`, "alice", "POST", { seq: 1 })).data).toEqual({ readSeq: 4, unread: 0 });
     expect((await t.api(`${root}/web/chats/${enc(chatId)}`)).data).toMatchObject({ chatId, readSeq: 4, members: [{ type: "person", id: personId(owner) }, { type: "agent", id: t.agent.id, name: "helper" }] });
-    const before = t.whoami(); await t.api(`${root}/web/chats`); expect(t.whoami()).toBe(before);
   });
   it("is owner scoped, reports turn detail, observed chats and an oversized gap as reset", async () => {
     const t = await setup(), chatId = `dm:${t.agent.id}`, session = legacySession(t.agent.id, "owner-main");
@@ -128,7 +117,7 @@ describe("owner history API", () => {
       expect((await t.api(`${root}/web${path}`, "", method, method === "POST" ? {} : undefined)).status).toBe(401);
   });
   it("stays off unless ledger_read is enabled", async () => {
-    const t = await setup({ ledgerRead: false });
+    const t = await setup({ ledgerRead: false, ledgerSend: false });
     expect(t.service.web).toBeUndefined();
     expect((await t.api(`${root}/web/me`)).status).toBe(404);
   });

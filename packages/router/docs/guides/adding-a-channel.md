@@ -20,8 +20,8 @@ src/channels/<kind>/…        the adapter and its provider code (vendor SDK wra
   own directory). It never imports another adapter or the registry.
 - Router code reaches adapters only through `src/channels/registry.ts`, and only the composition root
   (`src/service/`) uses the registry.
-- The built-in surfaces `matrix`, `web` and `room` are tied to Router internals (the Matrix connector, the
-  ledger) and ship with Router; they may import those internals but still not another adapter.
+- The built-in surfaces `web` and `room` are tied to Router internals (the ledger) and ship with Router; they
+  may import those internals but still not another adapter.
 
 ## Minimal adapter
 

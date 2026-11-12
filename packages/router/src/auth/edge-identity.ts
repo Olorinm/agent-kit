@@ -10,7 +10,7 @@ import { personId, type PersonRegistry } from "../ledger/registry.js";
 export interface OwnerPrincipal {
   personId: string; ownerId: string;
   via: "edge" | "edge-service" | "bearer";
-  email?: string; matrixUserId?: string;
+  email?: string;
   /** Epoch milliseconds; set for edge principals (the JWT `exp`). */
   expiresAt?: number;
 }

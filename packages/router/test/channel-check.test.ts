@@ -15,7 +15,7 @@ function fixture() {
   writeFileSync(join(directory, "weixin.json"), JSON.stringify({ accountId: "bot", userId: "owner", token: "private-weixin-token", baseUrl: "https://ilinkai.weixin.qq.com" }));
   const configuration = { ...channelConfigSchema.parse({ agents: [{ agentId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
     host: { url: "https://host.example.test", tokenFile: "token", runtimeId: "personal" }, connections: [
-      { id: "matrix", kind: "matrix" }, { id: "weixin", kind: "weixin", credentialsFile: "weixin.json" },
+      { id: "weixin", kind: "weixin", credentialsFile: "weixin.json" },
       { id: "mail", kind: "grove-mail", url: "https://mail.example.test", inboxId: "agent@example.test", apiKeyFile: "token", ownerAddresses: ["owner@example.test"] },
     ] }] }), directory };
   const urls: string[] = []; let runtime = "personal", inbox = "agent@example.test";
@@ -25,21 +25,20 @@ function fixture() {
   }));
   return { directory, configuration, urls, wrongRuntime: () => { runtime = "other"; }, wrongInbox: () => { inbox = "other@example.test"; } };
 }
-it("checks credentials without consuming messages, sending replies or claiming live Weixin/Matrix verification", async () => {
+it("checks credentials without consuming messages, sending replies or claiming live Weixin verification", async () => {
   const f = fixture(), checks = await checkChannels(f.configuration);
   expect(checks.find((c) => c.kind === "host")!.status).toBe("verified");
   expect(checks.find((c) => c.kind === "grove-mail")!.status).toBe("verified");
-  expect(checks.filter((c) => ["matrix", "weixin"].includes(c.kind)).every((c) => c.status === "not_verified")).toBe(true);
+  expect(checks.find((c) => c.kind === "weixin")!.status).toBe("not_verified");
   expect(f.urls).toHaveLength(3); expect(f.urls.every((url) => !/events|getUpdates|runs|reply/.test(url))).toBe(true);
   expect(JSON.stringify(checks)).not.toContain("private-");
 });
 it("uses Router status to verify startup while preserving the need for a real message", async () => {
   const f = fixture(), node = new ServiceHttp("https://router.example.test", "private-owner-token", async () => new Response(JSON.stringify({ connections: [
-    { id: "matrix", started: true, error: null }, { id: "weixin", started: true, error: null }, { id: "mail", started: true, error: "mail_cursor_expired" },
+    { id: "weixin", started: true, error: null }, { id: "mail", started: true, error: "mail_cursor_expired" },
   ] })));
   const checks = await checkChannels(f.configuration, node);
-  expect(checks.find((c) => c.kind === "matrix")).toMatchObject({ status: "verified", detail: expect.stringContaining("real message") });
-  expect(checks.find((c) => c.kind === "weixin")!.status).toBe("verified");
+  expect(checks.find((c) => c.kind === "weixin")).toMatchObject({ status: "verified", detail: expect.stringContaining("real message") });
   expect(checks.find((c) => c.kind === "grove-mail")!.status).toBe("needs_action");
 });
 it("rejects a valid Host service whose configured runtime does not exist", async () => {

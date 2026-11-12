@@ -14,7 +14,7 @@ import {
 import type { ManagedService } from "../src/service/managed.js";
 import type { ConnectionConfiguration } from "../src/connections/configuration.js";
 import { agentChannelConfigSchema } from "../src/service/channels.js";
-import { key } from "../src/matrix/protocol.js";
+import { key } from "../src/execution/protocol.js";
 
 vi.mock("@larksuiteoapi/node-sdk", async (original) => ({
   ...(await original<typeof import("@larksuiteoapi/node-sdk")>()),
@@ -75,11 +75,9 @@ function fixture() {
     guardDelete: (guard: (agentId: string) => void) => deleteGuards.push(guard),
     agents: () => [agent],
     runtime: async () => ({
-      connector: {
-        store: {
-          set: (_collection: string, id: string, value: unknown) =>
-            checkpoints.set(id, value),
-        },
+      store: {
+        set: (_collection: string, id: string, value: unknown) =>
+          checkpoints.set(id, value),
       },
     }),
   } as unknown as ManagedService;
@@ -390,10 +388,10 @@ it("reuses confirmed Weixin consent after an interrupted configuration without a
 
 it("rejects a reserved connection ID before creating an app and preserves the existing channel", () => {
   const f = fixture();
-  f.current.connections.push({id: "feishu", kind: "matrix", ownerAddresses: [], peerAddresses: [], groupIds: []});
+  f.current.connections.push({id: "feishu", kind: "weixin", credentialsFile: "weixin.json", ownerAddresses: [], peerAddresses: [], groupIds: []});
   expect(() => f.setup.begin(f.agent.owner, f.agent.id, "feishu", {})).toThrow("connection_id_already_used");
   expect(registerApp).not.toHaveBeenCalled();
-  expect(f.current.connections[0].kind).toBe("matrix");
+  expect(f.current.connections[0].kind).toBe("weixin");
 });
 
 it("reconciles a binding committed immediately before the process was interrupted", async () => {

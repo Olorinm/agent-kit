@@ -126,8 +126,8 @@ describe("card answers through the web (ADR 0005 16.1)", () => {
     await until(() => t.extension().status() as any, (status) => status.host.calls.some((call: any) => call.id === "c3"));
     expect((await t.api(`${root}/agents/${t.agent.id}/communication/calls/c3/result`, "alice", "POST", { result: { decision: "accept" } })).data).toEqual({ status: "accepted" });
     expect(t.ledger.cardRecord(c3.cardId)).toMatchObject({ status: "approved", surface: "run-api" });
-    // A chat answer (Matrix owner DM) to the last open card.
-    t.extension().communication!.receive("matrix", { externalId: "$answer", sender: owner, scope: "direct", threadId: "!dm:example.test", text: "同意",
+    // A chat answer (an owner DM on a channel) to the last open card.
+    t.extension().communication!.receive("chat", { externalId: "$answer", sender: owner, scope: "direct", threadId: "!dm:example.test", text: "同意",
       reply: { target: "!dm:example.test", messageId: "$answer", data: { sender: owner, thread: "" } } });
     await until(() => t.ledger.cardRecord(c4.cardId)!, (card) => card.status !== "pending");
     expect(t.ledger.cardRecord(c4.cardId)).toMatchObject({ status: "approved", surface: "channel", answeredBy: personId(owner), summary: "同意" });
@@ -199,7 +199,7 @@ describe("card answers through the web (ADR 0005 16.1)", () => {
     expect((await off.api(`${root}/web/me`)).data.limits.features).toMatchObject({ send: true, cards: false, reset: false });
     expect((await off.answer("cd_x", { idempotencyKey: ik(), choiceId: "0" })).status).toBe(404);
     expect((await off.api(`${off.chat}/reset`, "alice", "POST", { idempotencyKey: ik() })).status).toBe(404);
-    const noSend = await setup(cleanup, { ledgerSend: false });
-    expect((await noSend.api(`${root}/web/me`)).data.limits.features).toMatchObject({ send: false, cards: false, reset: false });
+    // The web history is never served read-only: there is nothing else to send through.
+    await expect(setup(cleanup, { ledgerSend: false })).rejects.toThrow("ledger_read_requires_ledger_send");
   }, 20_000);
 });

@@ -5,7 +5,7 @@ labels: [bug]
 body:
   - type: markdown
     attributes:
-      value: Do not submit secrets or security vulnerabilities here. Follow [SECURITY.md](https://github.com/Olorinm/agent-kit/blob/main/packages/router/SECURITY.md) for private reporting.
+      value: Do not submit secrets or security vulnerabilities here. Follow [SECURITY.md](https://github.com/Olorinm/agent-kit/blob/main/SECURITY.md) for private reporting.
   - type: dropdown
     id: package
     attributes:

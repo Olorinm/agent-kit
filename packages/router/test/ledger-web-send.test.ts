@@ -2,10 +2,9 @@ import { afterEach, describe, expect, it } from "vitest";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { ManagedService, createManagedApp, type ManagedAgent, type ServiceConfig, type ServiceExtension } from "../src/service/managed.js";
-import type { ApplicationInbox } from "../src/matrix/application-service.js";
-import type { MatrixTransport } from "../src/matrix/transport.js";
+import { ManagedService, createManagedApp, type ServiceConfig, type ServiceExtension } from "../src/service/managed.js";
 import { channelConfigSchema, createChannelRuntime } from "../src/service/channels.js";
+import { CHAT, withChat } from "./fixtures/chat-channel.js";
 import type { HostPort, HostRun } from "../src/execution/host.js";
 import { AgentLedger, legacySession } from "../src/ledger/ledger.js";
 import { personId } from "../src/ledger/registry.js";
@@ -28,12 +27,6 @@ class Host implements HostPort {
   async calls() { return []; }
   async resolve() {}
 }
-function transport(agent: ManagedAgent, inbox: ApplicationInbox): MatrixTransport {
-  return { identity: async () => agent.matrixId,
-    sync: async (since) => { await new Promise((r) => setTimeout(r, 20)); return inbox.next(agent.id, since) ?? { next_batch: since ?? "0" }; },
-    state: async () => [], history: async () => ({ events: [] }), createRoom: async () => "!room:example.test",
-    join: async () => {}, send: async () => "$sent", stop: () => {} };
-}
 async function until<T>(read: () => T | Promise<T>, predicate: (value: T) => boolean, ms = 10_000): Promise<T> {
   const deadline = Date.now() + ms;
   for (;;) { const value = await read(); if (predicate(value)) return value; if (Date.now() > deadline) throw new Error(`timed out: ${JSON.stringify(value)}`); await new Promise((r) => setTimeout(r, 25)); }
@@ -42,17 +35,16 @@ async function setup(overrides: Partial<ServiceConfig> = {}) {
   const stateDir = mkdtempSync(join(tmpdir(), "ledger-send-"));
   cleanup.push(() => rmSync(stateDir, { recursive: true, force: true }));
   const host = new Host(), extensions = new Map<string, ServiceExtension>();
-  const service: ManagedService = new ManagedService({ serverName: "example.test", homeserver: "https://example.test", publicUrl: "https://example.test/_agent-router/v1",
-    stateDir, asToken: "a".repeat(48), hsToken: "h".repeat(48), ledgerRead: true, ledgerSend: true, ...overrides }, {
+  const service: ManagedService = new ManagedService({ serverName: "example.test", publicUrl: "https://example.test/_agent-router/v1",
+    stateDir, ledgerRead: true, ledgerSend: true, ...overrides }, {
     authenticate: async (token) => { if (token === "alice") return owner; if (token === "bob") return other; throw new Error("bad_credentials"); },
-    provision: async () => {}, transport,
-    configure: async (agent, connector) => {
-      const config = channelConfigSchema.parse({ agents: [{ agentId: agent.id, connections: [{ id: "matrix", kind: "matrix" }],
+    configure: async (agent, runtime) => {
+      const config = channelConfigSchema.parse({ agents: [{ agentId: agent.id, connections: [],
         host: { binding: "fixture", runtimeId: "fixture" } }] }).agents[0]!;
-      const extension = await createChannelRuntime(agent, connector, config, stateDir, (name) => {
+      const extension = withChat(await createChannelRuntime(agent, runtime, config, stateDir, (name) => {
         const issued = service.issue(agent.id, name);
         return { id: issued.instance.id, validate: () => { service.instance(issued.token, agent.id); } };
-      }, host, { persons: service.persons });
+      }, host, { persons: service.persons }), [owner]);
       extensions.set(agent.id, extension);
       return extension;
     } });
@@ -68,7 +60,7 @@ async function setup(overrides: Partial<ServiceConfig> = {}) {
     return { status: response.status, data: response.status === 204 ? null : await response.json() as any };
   }
   const agent = await service.create(owner, "helper");
-  const ledger = AgentLedger.attached((await service.runtime(agent.id)).connector.store)!;
+  const ledger = AgentLedger.attached((await service.runtime(agent.id)).store)!;
   const chatId = `dm:${agent.id}`;
   const send = (body: Record<string, unknown>, token = "alice") => api(`${root}/web/chats/${enc(chatId)}/messages`, token, "POST", body);
   const events = async () => (await api(`${root}/web/chats/${enc(chatId)}/events?limit=200`)).data.events as any[];
@@ -138,23 +130,23 @@ describe("owner send via Router (web channel)", () => {
     expect(await t.api(`${root}/web/chats/${enc(t.chatId)}/events/${sent.data.event.eventId}/redact`, "bob", "POST", { idempotencyKey: key })).toEqual({ status: 404, data: { error: "chat_not_found" } });
     expect(await t.api(`${root}/web/chats/dm`, "bob", "POST", { agentId: t.agent.id })).toEqual({ status: 404, data: { error: "chat_not_found" } });
     // Observed chats (other sessions of the agent) are read-only.
-    t.extension().communication!.receive("matrix", { externalId: "$g1", sender: owner, scope: "group", groupId: "!group:example.test", mentions: { self: true, all: false },
-      threadId: "!group:example.test", text: "群消息", reply: { target: "!group:example.test", messageId: "$g1", data: {} } });
+    t.extension().communication!.receive(CHAT, { externalId: "g1", sender: owner, scope: "group", groupId: "group-1", mentions: { self: true, all: false },
+      threadId: "group-1", text: "群消息", reply: { target: "group-1", messageId: "g1", data: {} } });
     const observed = (await until(async () => (await t.api(`${root}/web/chats`)).data.data as any[], (chats) => chats.some((chat) => chat.kind === "observed")))
       .find((chat) => chat.kind === "observed").chatId;
     expect(await t.api(`${root}/web/chats/${enc(observed)}/messages`, "alice", "POST", { idempotencyKey: key, text: "x" })).toEqual({ status: 403, data: { error: "chat_read_only" } });
   });
-  it("merges a Matrix owner DM into the same chat and session, with channel badges and unchanged Matrix delivery", async () => {
+  it("merges an owner DM from an external chat channel into the same chat and session, with channel badges and unchanged delivery on that channel", async () => {
     const t = await setup();
     await t.send({ idempotencyKey: key, text: "从网页" });
     await until(t.events, (events) => events.some((event) => event.text === "回答-1"));
-    t.extension().communication!.receive("matrix", { externalId: "$m1", sender: owner, scope: "direct", threadId: "!dm:example.test", text: "从 Matrix",
-      reply: { target: "!dm:example.test", messageId: "$m1", data: { sender: owner, thread: "" } } });
+    t.extension().communication!.receive(CHAT, { externalId: "m1", sender: owner, scope: "direct", threadId: "dm-1", text: "从 Matrix",
+      reply: { target: "dm-1", messageId: "m1", data: {} } });
     const events = await until(t.events, (items) => items.some((event) => event.text === "回答-2"));
     expect(events.filter((event) => event.kind === "message").map((event) => [event.role, event.text, event.channel.kind]))
-      .toEqual([["user", "从网页", "web"], ["assistant", "回答-1", "web"], ["user", "从 Matrix", "matrix"], ["assistant", "回答-2", "matrix"]]);
-    const matrixReply = events.find((event) => event.text === "回答-2");
-    expect(t.ledger.deliveriesFor(matrixReply.eventId)).toMatchObject([{ purpose: "reply", connectionId: "matrix" }]);
+      .toEqual([["user", "从网页", "web"], ["assistant", "回答-1", "web"], ["user", "从 Matrix", "chat"], ["assistant", "回答-2", "chat"]]);
+    const chatReply = events.find((event) => event.text === "回答-2");
+    expect(t.ledger.deliveriesFor(chatReply.eventId)).toMatchObject([{ purpose: "reply", connectionId: CHAT }]);
     expect(t.ledger.deliveriesFor(events.find((event) => event.text === "回答-1").eventId)).toEqual([]);
     // Both turns ran in the one owner-main execution context.
     expect(new Set(t.host.starts.map((start) => start.sessionId)).size).toBe(1);
@@ -174,15 +166,16 @@ describe("owner send via Router (web channel)", () => {
     expect(await redact("ev_missing", `${key}t`)).toEqual({ status: 404, data: { error: "event_not_found" } });
     expect(t.host.starts).toHaveLength(1);
   }, 20_000);
-  it("stays off without the send flag: feature false, routes not found, dispatch on the legacy path", async () => {
-    const t = await setup({ ledgerSend: false });
-    expect((await t.api(`${root}/web/me`)).data.limits.features.send).toBe(false);
+  it("refuses history without the send flag, and stays off with both flags off: routes not found, dispatch on the legacy path", async () => {
+    await expect(setup({ ledgerSend: false })).rejects.toThrow("ledger_read_requires_ledger_send");
+    const t = await setup({ ledgerRead: false, ledgerSend: false });
+    expect(t.service.web).toBeUndefined();
+    expect((await t.api(`${root}/web/me`)).status).toBe(404);
     expect((await t.send({ idempotencyKey: key, text: "x" })).status).toBe(404);
     expect((await t.api(`${root}/web/chats/${enc(t.chatId)}/events/ev_x/redact`, "alice", "POST", { idempotencyKey: key })).status).toBe(404);
     expect(t.ledger.authoritative).toBe(false);
-    // No web connection without the flag: channel status and dispatch are exactly the phase 2 ones.
+    // No web connection without the flags: channel status and dispatch are exactly the phase 2 ones.
     expect(t.extension().web).toBeUndefined();
-    expect((t.extension().status() as { connections: Array<{ id: string }> }).connections.map((item) => item.id)).toEqual(["matrix"]);
-    expect((await t.api(`${root}/web/chats/dm`, "alice", "POST", { agentId: t.agent.id })).data).toMatchObject({ chatId: t.chatId });
+    expect((t.extension().status() as { connections: Array<{ id: string }> }).connections.map((item) => item.id)).toEqual([CHAT]);
   });
 });

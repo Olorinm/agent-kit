@@ -9,7 +9,7 @@ if (!/^\d+\.\d+\.\d+(-[0-9A-Za-z.]+)?$/.test(version ?? "")) {
 }
 const previous = JSON.parse(readFileSync(new URL("../packages/host/package.json", import.meta.url), "utf8")).version;
 // Install instructions name the current release.
-for (const file of ["README.md", "packages/host/docs/quickstart.md", "packages/router/docs/guides/install.md", "packages/router/scripts/install.sh"]) {
+for (const file of ["README.md", "packages/host/docs/quickstart.md"]) {
   const path = new URL("../" + file, import.meta.url);
   writeFileSync(path, readFileSync(path, "utf8").replaceAll(previous, version));
 }

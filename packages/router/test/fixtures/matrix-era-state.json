@@ -1,0 +1,829 @@
+{
+ "owner": "@owner:example.test",
+ "agent": {
+  "id": "0b96ec77-e925-48ff-9a38-9431ec0b834b",
+  "owner": "@owner:example.test",
+  "name": "coco",
+  "address": "owner/coco@example.test",
+  "matrixId": "@_ar_0b96ec77e92548ff9a389431ec0b834b:example.test",
+  "createdAt": "2026-11-12T12:29:29.432Z",
+  "status": "active"
+ },
+ "scope": "ebad673f737099dda5054e3de7736a02949b586839717390b2714fd6094489f5",
+ "session": "c-7dd92097e38248ad8624dad0b813d1e3ea876847",
+ "binding": {
+  "sessionId": "h-6e852a0ca16250124f918fda4c53bf55b3d772cd",
+  "runtimeId": "fixture",
+  "channelTools": true
+ },
+ "instanceId": "1bd91a22-2c71-4b05-b98a-2db65e99f110",
+ "files": {
+  "connections/agents/0b96ec77-e925-48ff-9a38-9431ec0b834b/channels.json": {
+   "agents": [
+    {
+     "agentId": "0b96ec77-e925-48ff-9a38-9431ec0b834b",
+     "connections": [
+      {
+       "id": "matrix",
+       "kind": "matrix",
+       "ownerAddresses": [
+        "@owner:example.test"
+       ],
+       "peerAddresses": [],
+       "groupIds": []
+      }
+     ],
+     "host": {
+      "binding": "fixture",
+      "runtimeId": "fixture",
+      "instanceName": "channel-host",
+      "instructions": "prior instructions"
+     }
+    }
+   ]
+  }
+ },
+ "databases": {
+  "agents/0b96ec77-e925-48ff-9a38-9431ec0b834b.sqlite": {
+   "userVersion": 0,
+   "tables": [
+    "CREATE TABLE documents(collection TEXT NOT NULL, id TEXT NOT NULL, value TEXT NOT NULL,\n      PRIMARY KEY(collection,id))",
+    "CREATE TABLE ledger_conversations(\n  conversation_id TEXT PRIMARY KEY, connection_id TEXT NOT NULL, channel TEXT NOT NULL, account_id TEXT NOT NULL,\n  kind TEXT NOT NULL CHECK(kind IN ('direct','group','channel')), peer_id TEXT NOT NULL,\n  parent_id TEXT NOT NULL DEFAULT '', thread_id TEXT NOT NULL DEFAULT '', session_key TEXT NOT NULL, person_id TEXT,\n  reply_route TEXT NOT NULL, title TEXT, created_at INTEGER NOT NULL, last_inbound_at INTEGER,\n  UNIQUE(channel, account_id, kind, peer_id, parent_id, thread_id))",
+    "CREATE TABLE ledger_sessions(\n  session_key TEXT PRIMARY KEY,\n  kind TEXT NOT NULL CHECK(kind IN ('owner_main','peer','group','room','schedule','work','delegation')),\n  label TEXT NOT NULL, room_id TEXT, window INTEGER NOT NULL DEFAULT 1, last_seq INTEGER NOT NULL DEFAULT 0,\n  generation INTEGER NOT NULL DEFAULT 1, published_seq INTEGER NOT NULL DEFAULT 0,\n  title TEXT, archived INTEGER NOT NULL DEFAULT 0, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL)",
+    "CREATE TABLE ledger_session_windows(\n  session_key TEXT NOT NULL, window INTEGER NOT NULL, context_id TEXT NOT NULL UNIQUE,\n  opened_at INTEGER NOT NULL, closed_at INTEGER, reason TEXT, PRIMARY KEY(session_key, window))",
+    "CREATE TABLE ledger_session_conversations(\n  session_key TEXT NOT NULL, conversation_id TEXT NOT NULL,\n  role TEXT NOT NULL CHECK(role IN ('primary','participant','related')), last_inbound_at INTEGER,\n  PRIMARY KEY(session_key, conversation_id))",
+    "CREATE TABLE ledger_events(\n  session_key TEXT NOT NULL, seq INTEGER NOT NULL, event_id TEXT NOT NULL UNIQUE, window INTEGER NOT NULL,\n  kind TEXT NOT NULL, role TEXT NOT NULL CHECK(role IN ('user','assistant','system')),\n  sender_type TEXT NOT NULL CHECK(sender_type IN ('person','agent','external','system')), sender_id TEXT NOT NULL,\n  conversation_id TEXT, turn_id TEXT, ref_event_id TEXT, idempotency_key TEXT, created_at INTEGER NOT NULL, body TEXT NOT NULL,\n  PRIMARY KEY(session_key, seq), UNIQUE(session_key, idempotency_key))",
+    "CREATE TABLE ledger_ingress(\n  connection_id TEXT NOT NULL, external_id TEXT NOT NULL, input_id TEXT NOT NULL UNIQUE, hash TEXT NOT NULL,\n  state TEXT NOT NULL CHECK(state IN ('accepted','ignored','tombstone')), reason TEXT, event_id TEXT, conversation_id TEXT,\n  received_at INTEGER NOT NULL, expires_at INTEGER, PRIMARY KEY(connection_id, external_id))",
+    "CREATE TABLE ledger_pending_inputs(\n  input_id TEXT PRIMARY KEY, session_key TEXT NOT NULL, event_id TEXT NOT NULL,\n  state TEXT NOT NULL CHECK(state IN ('queued','starting','started','control','dropped','unknown')),\n  turn_id TEXT, retry_of TEXT, reason TEXT, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL)",
+    "CREATE TABLE ledger_turns(\n  turn_id TEXT PRIMARY KEY, session_key TEXT NOT NULL, window INTEGER NOT NULL,\n  admission TEXT NOT NULL CHECK(admission IN ('owner','peer','group','schedule','work','delegation')),\n  origin_conversation_id TEXT, origin_event_id TEXT, reply_route TEXT,\n  state TEXT NOT NULL CHECK(state IN ('queued','running','waiting','completed','failed','canceled','unknown')),\n  final_event_id TEXT, error TEXT, created_at INTEGER NOT NULL, started_at INTEGER, finished_at INTEGER)",
+    "CREATE TABLE ledger_cards(\n  card_id TEXT PRIMARY KEY, call_id TEXT NOT NULL, run_id TEXT NOT NULL, claim_id TEXT NOT NULL, turn_id TEXT NOT NULL,\n  session_key TEXT NOT NULL, event_id TEXT NOT NULL,\n  kind TEXT NOT NULL CHECK(kind IN ('question','approval','connector_approval','sensitive')),\n  status TEXT NOT NULL CHECK(status IN ('pending','answered','approved','rejected','expired','canceled')),\n  deadline_at INTEGER, answered_by TEXT, answer_key TEXT UNIQUE, result TEXT, updated_at INTEGER NOT NULL, source TEXT NOT NULL DEFAULT 'host', answer_surface TEXT, answer_summary TEXT)",
+    "CREATE TABLE ledger_card_tokens(token TEXT PRIMARY KEY, card_id TEXT NOT NULL, choice_id TEXT NOT NULL, result TEXT NOT NULL)",
+    "CREATE TABLE ledger_deliveries(\n  delivery_id TEXT PRIMARY KEY, event_id TEXT, conversation_id TEXT NOT NULL, connection_id TEXT NOT NULL, route TEXT NOT NULL,\n  purpose TEXT NOT NULL CHECK(purpose IN ('reply','notice','card','content','activity','mirror')),\n  status TEXT NOT NULL CHECK(status IN ('created','queued','sending','sent','suppressed','rejected','unknown','replied')),\n  content TEXT, attempts INTEGER NOT NULL DEFAULT 0, next_at INTEGER NOT NULL DEFAULT 0,\n  platform_message_id TEXT, error TEXT, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL)",
+    "CREATE TABLE ledger_platform_messages(\n  connection_id TEXT NOT NULL, platform_message_id TEXT NOT NULL, event_id TEXT NOT NULL, part INTEGER NOT NULL DEFAULT 0,\n  PRIMARY KEY(connection_id, platform_message_id))",
+    "CREATE TABLE ledger_attachments(\n  attachment_id TEXT PRIMARY KEY, event_id TEXT, name TEXT NOT NULL, content_type TEXT NOT NULL, size INTEGER,\n  sha256 TEXT, locator TEXT NOT NULL, created_at INTEGER NOT NULL)"
+   ],
+   "rows": {
+    "documents": {
+     "columns": [
+      "collection",
+      "id",
+      "value"
+     ],
+     "values": [
+      [
+       "meta",
+       "identity",
+       "\"@_ar_0b96ec77e92548ff9a389431ec0b834b:example.test\""
+      ],
+      [
+       "meta",
+       "sync",
+       "\"2\""
+      ],
+      [
+       "meta",
+       "matrix_runtime",
+       "\"active\""
+      ],
+      [
+       "meta",
+       "ledger_schema_version",
+       "4"
+      ],
+      [
+       "contacts",
+       "@owner:example.test",
+       "{\"address\":\"@owner:example.test\",\"note\":\"Owner\",\"tags\":[]}"
+      ],
+      [
+       "policies",
+       "@owner:example.test",
+       "{\"receive\":\"allow\",\"execution\":\"allow\"}"
+      ],
+      [
+       "meta",
+       "matrix_initialized",
+       "true"
+      ],
+      [
+       "meta",
+       "managed_initialized",
+       "true"
+      ],
+      [
+       "communication_connections",
+       "matrix",
+       "{\"kind\":\"matrix\",\"agentId\":\"0b96ec77-e925-48ff-9a38-9431ec0b834b\",\"fingerprint\":\"193bc712cec6de4fc925592eb7cc6da6dbb610040c2009c0356ba6fdbfad49b1\"}"
+      ],
+      [
+       "communication_checkpoints",
+       "[\"matrix\",\"account\"]",
+       "\"@_ar_0b96ec77e92548ff9a389431ec0b834b:example.test\""
+      ],
+      [
+       "communication_checkpoints",
+       "[\"matrix\",\"activation\"]",
+       "1794486569439"
+      ],
+      [
+       "communication_host",
+       "scope",
+       "\"ebad673f737099dda5054e3de7736a02949b586839717390b2714fd6094489f5\""
+      ],
+      [
+       "rooms",
+       "!dm:example.test",
+       "{\"encrypted\":false,\"members\":[\"@owner:example.test\",\"@_ar_0b96ec77e92548ff9a389431ec0b834b:example.test\"]}"
+      ],
+      [
+       "seen",
+       "[\"!dm:example.test\",\"$j\"]",
+       "true"
+      ],
+      [
+       "seen",
+       "[\"!dm:example.test\",\"$m\"]",
+       "true"
+      ],
+      [
+       "communication_inbox",
+       "61da8166b9bff95e87129769d56e44745a1bcff1e84180cd2662e3c8269578c6",
+       "{\"id\":\"61da8166b9bff95e87129769d56e44745a1bcff1e84180cd2662e3c8269578c6\",\"connectionId\":\"matrix\",\"source\":{\"externalId\":\"$m\",\"sender\":\"@owner:example.test\",\"threadId\":\"!dm:example.test\",\"scope\":\"direct\",\"text\":\"Matrix 上的消息\",\"reply\":{\"target\":\"!dm:example.test\",\"messageId\":\"$m\",\"data\":{\"sender\":\"@owner:example.test\",\"thread\":\"\"}},\"attachments\":[],\"native\":{\"content\":{\"msgtype\":\"m.text\",\"body\":\"Matrix 上的消息\"}}},\"conversationId\":\"c-7dd92097e38248ad8624dad0b813d1e3ea876847\",\"hash\":\"f9f24f893412200f567b3c20a82b681bece4bc2f0cf06ea2ad25c24b2cb66d67\",\"receivedAt\":\"2026-11-12T12:29:29.478Z\",\"replyRoute\":{\"connectionId\":\"matrix\",\"target\":\"!dm:example.test\",\"messageId\":\"$m\",\"data\":{\"sender\":\"@owner:example.test\",\"thread\":\"\"}},\"state\":\"done\",\"taskId\":\"05face5a-2e4b-4753-b416-7e1f824adbda\"}"
+      ],
+      [
+       "communication_threads",
+       "[\"matrix\",\"direct\",\"!dm:example.test\",\"@owner:example.test\"]",
+       "\"c-7dd92097e38248ad8624dad0b813d1e3ea876847\""
+      ],
+      [
+       "cli_work",
+       "05face5a-2e4b-4753-b416-7e1f824adbda",
+       "{\"task\":{\"id\":\"05face5a-2e4b-4753-b416-7e1f824adbda\",\"contextId\":\"c-7dd92097e38248ad8624dad0b813d1e3ea876847\",\"status\":{\"state\":3,\"timestamp\":\"2026-11-12T12:29:30.450Z\",\"message\":{\"messageId\":\"12e46686-bd2d-4b60-9337-8cdfda82f292\",\"contextId\":\"c-7dd92097e38248ad8624dad0b813d1e3ea876847\",\"taskId\":\"05face5a-2e4b-4753-b416-7e1f824adbda\",\"role\":2,\"parts\":[{\"content\":{\"$case\":\"text\",\"value\":\"Completed.\"},\"filename\":\"\",\"mediaType\":\"text/plain\"}],\"extensions\":[],\"referenceTaskIds\":[]}},\"history\":[{\"messageId\":\"channel-61da8166b9bff95e87129769d56e44745a1bcff1e84180cd2662e3c8269578c6\",\"contextId\":\"c-7dd92097e38248ad8624dad0b813d1e3ea876847\",\"taskId\":\"\",\"role\":1,\"parts\":[{\"content\":{\"$case\":\"text\",\"value\":\"Matrix 上的消息\"},\"filename\":\"\",\"mediaType\":\"\"},{\"content\":{\"$case\":\"text\",\"value\":\"Channel context (provider routing IDs): {\\\"channel\\\":\\\"matrix\\\",\\\"connectionId\\\":\\\"matrix\\\",\\\"scope\\\":\\\"direct\\\",\\\"conversationId\\\":\\\"!dm:example.test\\\",\\\"messageId\\\":\\\"$m\\\",\\\"senderId\\\":\\\"@owner:example.test\\\"}\"},\"filename\":\"\",\"mediaType\":\"\"}],\"extensions\":[],\"referenceTaskIds\":[]},{\"messageId\":\"12e46686-bd2d-4b60-9337-8cdfda82f292\",\"contextId\":\"c-7dd92097e38248ad8624dad0b813d1e3ea876847\",\"taskId\":\"05face5a-2e4b-4753-b416-7e1f824adbda\",\"role\":2,\"parts\":[{\"content\":{\"$case\":\"text\",\"value\":\"Completed.\"},\"filename\":\"\",\"mediaType\":\"text/plain\"}],\"extensions\":[],\"referenceTaskIds\":[]}],\"artifacts\":[{\"artifactId\":\"a2f8b231d42c5424687d998f65477ad0c4ec1effbb6bce54e2fd7939b984c4e3\",\"name\":\"result\",\"description\":\"\",\"parts\":[{\"content\":{\"$case\":\"text\",\"value\":\"回答-1\"},\"filename\":\"\",\"mediaType\":\"\"}],\"extensions\":[]}],\"metadata\":{}},\"input\":{\"messageId\":\"channel-61da8166b9bff95e87129769d56e44745a1bcff1e84180cd2662e3c8269578c6\",\"contextId\":\"c-7dd92097e38248ad8624dad0b813d1e3ea876847\",\"taskId\":\"\",\"role\":1,\"parts\":[{\"content\":{\"$case\":\"text\",\"value\":\"Matrix 上的消息\"},\"filename\":\"\",\"mediaType\":\"\"},{\"content\":{\"$case\":\"text\",\"value\":\"Channel context (provider routing IDs): {\\\"channel\\\":\\\"matrix\\\",\\\"connectionId\\\":\\\"matrix\\\",\\\"scope\\\":\\\"direct\\\",\\\"conversationId\\\":\\\"!dm:example.test\\\",\\\"messageId\\\":\\\"$m\\\",\\\"senderId\\\":\\\"@owner:example.test\\\"}\"},\"filename\":\"\",\"mediaType\":\"\"}],\"extensions\":[],\"referenceTaskIds\":[]},\"source\":{\"sender\":\"[\\\"channel\\\",\\\"matrix\\\",\\\"@owner:example.test\\\"]\",\"room\":\"c-7dd92097e38248ad8624dad0b813d1e3ea876847\",\"approved\":true},\"revision\":1}"
+      ],
+      [
+       "cli_message_ids",
+       "channel-61da8166b9bff95e87129769d56e44745a1bcff1e84180cd2662e3c8269578c6",
+       "{\"id\":\"05face5a-2e4b-4753-b416-7e1f824adbda\",\"hash\":\"6915c2abbe9ae7fa91e7d1a4cff0093f78142c626c724195f8e4f3a56648b1d8\"}"
+      ],
+      [
+       "context_workers",
+       "c-7dd92097e38248ad8624dad0b813d1e3ea876847",
+       "\"1bd91a22-2c71-4b05-b98a-2db65e99f110\""
+      ],
+      [
+       "cli_claims",
+       "2b8578b8-332e-4085-b109-2edf8b503aa2",
+       "{\"workId\":\"05face5a-2e4b-4753-b416-7e1f824adbda\",\"revision\":1,\"worker\":\"1bd91a22-2c71-4b05-b98a-2db65e99f110\",\"actions\":{\"e0c909b847834477ccc9ab8165fb039b737499db99e5003a408d04d1d556daa3\":{\"id\":\"05face5a-2e4b-4753-b416-7e1f824adbda\",\"from\":\"[\\\"channel\\\",\\\"matrix\\\",\\\"@owner:example.test\\\"]\",\"conversation\":\"c-7dd92097e38248ad8624dad0b813d1e3ea876847\",\"contextId\":\"c-7dd92097e38248ad8624dad0b813d1e3ea876847\",\"status\":\"working\",\"needsApproval\":false,\"cancelRequested\":false,\"claimId\":\"2b8578b8-332e-4085-b109-2edf8b503aa2\",\"worker\":\"1bd91a22-2c71-4b05-b98a-2db65e99f110\",\"deferred\":true,\"newInput\":false,\"input\":{\"messageId\":\"channel-61da8166b9bff95e87129769d56e44745a1bcff1e84180cd2662e3c8269578c6\",\"contextId\":\"c-7dd92097e38248ad8624dad0b813d1e3ea876847\",\"role\":\"ROLE_USER\",\"parts\":[{\"text\":\"Matrix 上的消息\"},{\"text\":\"Channel context (provider routing IDs): {\\\"channel\\\":\\\"matrix\\\",\\\"connectionId\\\":\\\"matrix\\\",\\\"scope\\\":\\\"direct\\\",\\\"conversationId\\\":\\\"!dm:example.test\\\",\\\"messageId\\\":\\\"$m\\\",\\\"senderId\\\":\\\"@owner:example.test\\\"}\"}]},\"history\":[{\"messageId\":\"channel-61da8166b9bff95e87129769d56e44745a1bcff1e84180cd2662e3c8269578c6\",\"contextId\":\"c-7dd92097e38248ad8624dad0b813d1e3ea876847\",\"role\":\"ROLE_USER\",\"parts\":[{\"text\":\"Matrix 上的消息\"},{\"text\":\"Channel context (provider routing IDs): {\\\"channel\\\":\\\"matrix\\\",\\\"connectionId\\\":\\\"matrix\\\",\\\"scope\\\":\\\"direct\\\",\\\"conversationId\\\":\\\"!dm:example.test\\\",\\\"messageId\\\":\\\"$m\\\",\\\"senderId\\\":\\\"@owner:example.test\\\"}\"}]}],\"artifacts\":[]},\"c5092e551705b7577a49647ed31474c70eba41926c38c26052c8bbd6b665c435\":{\"id\":\"05face5a-2e4b-4753-b416-7e1f824adbda\",\"from\":\"[\\\"channel\\\",\\\"matrix\\\",\\\"@owner:example.test\\\"]\",\"conversation\":\"c-7dd92097e38248ad8624dad0b813d1e3ea876847\",\"contextId\":\"c-7dd92097e38248ad8624dad0b813d1e3ea876847\",\"status\":\"completed\",\"needsApproval\":false,\"cancelRequested\":false,\"claimId\":null,\"worker\":null,\"deferred\":false,\"newInput\":false,\"input\":{\"messageId\":\"channel-61da8166b9bff95e87129769d56e44745a1bcff1e84180cd2662e3c8269578c6\",\"contextId\":\"c-7dd92097e38248ad8624dad0b813d1e3ea876847\",\"role\":\"ROLE_USER\",\"parts\":[{\"text\":\"Matrix 上的消息\"},{\"text\":\"Channel context (provider routing IDs): {\\\"channel\\\":\\\"matrix\\\",\\\"connectionId\\\":\\\"matrix\\\",\\\"scope\\\":\\\"direct\\\",\\\"conversationId\\\":\\\"!dm:example.test\\\",\\\"messageId\\\":\\\"$m\\\",\\\"senderId\\\":\\\"@owner:example.test\\\"}\"}]},\"history\":[{\"messageId\":\"channel-61da8166b9bff95e87129769d56e44745a1bcff1e84180cd2662e3c8269578c6\",\"contextId\":\"c-7dd92097e38248ad8624dad0b813d1e3ea876847\",\"role\":\"ROLE_USER\",\"parts\":[{\"text\":\"Matrix 上的消息\"},{\"text\":\"Channel context (provider routing IDs): {\\\"channel\\\":\\\"matrix\\\",\\\"connectionId\\\":\\\"matrix\\\",\\\"scope\\\":\\\"direct\\\",\\\"conversationId\\\":\\\"!dm:example.test\\\",\\\"messageId\\\":\\\"$m\\\",\\\"senderId\\\":\\\"@owner:example.test\\\"}\"}]},{\"messageId\":\"12e46686-bd2d-4b60-9337-8cdfda82f292\",\"contextId\":\"c-7dd92097e38248ad8624dad0b813d1e3ea876847\",\"taskId\":\"05face5a-2e4b-4753-b416-7e1f824adbda\",\"role\":\"ROLE_AGENT\",\"parts\":[{\"text\":\"Completed.\",\"mediaType\":\"text/plain\"}]}],\"artifacts\":[{\"artifactId\":\"a2f8b231d42c5424687d998f65477ad0c4ec1effbb6bce54e2fd7939b984c4e3\",\"name\":\"result\",\"parts\":[{\"text\":\"回答-1\"}]}]}}}"
+      ],
+      [
+       "execution_sessions",
+       "c-7dd92097e38248ad8624dad0b813d1e3ea876847",
+       "{\"sessionId\":\"h-6e852a0ca16250124f918fda4c53bf55b3d772cd\",\"runtimeId\":\"fixture\",\"channelTools\":true}"
+      ],
+      [
+       "communication_runs",
+       "2b8578b8-332e-4085-b109-2edf8b503aa2",
+       "{\"claimId\":\"2b8578b8-332e-4085-b109-2edf8b503aa2\",\"taskId\":\"05face5a-2e4b-4753-b416-7e1f824adbda\",\"contextId\":\"c-7dd92097e38248ad8624dad0b813d1e3ea876847\",\"sessionId\":\"h-6e852a0ca16250124f918fda4c53bf55b3d772cd\",\"input\":\"Matrix 上的消息\\nChannel context (provider routing IDs): {\\\"channel\\\":\\\"matrix\\\",\\\"connectionId\\\":\\\"matrix\\\",\\\"scope\\\":\\\"direct\\\",\\\"conversationId\\\":\\\"!dm:example.test\\\",\\\"messageId\\\":\\\"$m\\\",\\\"senderId\\\":\\\"@owner:example.test\\\"}\",\"phase\":\"finished\",\"requestKey\":\"router-d9b965004aec582488f9a2762ef236c1583e91e1f2e4c55c92aa534a81537d55\",\"runId\":\"run-1\"}"
+      ],
+      [
+       "execution_results",
+       "05face5a-2e4b-4753-b416-7e1f824adbda",
+       "{\"id\":\"run-1\",\"sessionId\":\"h-6e852a0ca16250124f918fda4c53bf55b3d772cd\",\"runtimeId\":\"fixture\",\"status\":\"completed\",\"answer\":\"回答-1\"}"
+      ],
+      [
+       "communication_checkpoints",
+       "[\"matrix\",\"stream:05face5a-2e4b-4753-b416-7e1f824adbda:0\"]",
+       "\"$e\""
+      ],
+      [
+       "communication_checkpoints",
+       "[\"matrix\",\"stream-count:05face5a-2e4b-4753-b416-7e1f824adbda\"]",
+       "1"
+      ],
+      [
+       "communication_progress_messages",
+       "05face5a-2e4b-4753-b416-7e1f824adbda",
+       "[\"$e\"]"
+      ],
+      [
+       "communication_streams",
+       "05face5a-2e4b-4753-b416-7e1f824adbda",
+       "true"
+      ],
+      [
+       "communication_run_events",
+       "run-1",
+       "{\"cursor\":0,\"text\":\"回答-1\"}"
+      ],
+      [
+       "communication_results",
+       "05face5a-2e4b-4753-b416-7e1f824adbda",
+       "\"回答-1\""
+      ],
+      [
+       "communication_outbox",
+       "96cb9fe7ee7a4a75affc4831e9d4dfbe814aa3ec247b2a825f0a870000883806",
+       "{\"id\":\"96cb9fe7ee7a4a75affc4831e9d4dfbe814aa3ec247b2a825f0a870000883806\",\"taskId\":\"05face5a-2e4b-4753-b416-7e1f824adbda\",\"route\":{\"connectionId\":\"matrix\",\"target\":\"!dm:example.test\",\"messageId\":\"$m\",\"data\":{\"sender\":\"@owner:example.test\",\"thread\":\"\"}},\"text\":\"回答-1\",\"final\":true,\"state\":\"accepted\",\"attempts\":1,\"nextAt\":0,\"externalId\":\"$e\"}"
+      ]
+     ]
+    },
+    "ledger_conversations": {
+     "columns": [
+      "conversation_id",
+      "connection_id",
+      "channel",
+      "account_id",
+      "kind",
+      "peer_id",
+      "parent_id",
+      "thread_id",
+      "session_key",
+      "person_id",
+      "reply_route",
+      "title",
+      "created_at",
+      "last_inbound_at"
+     ],
+     "values": [
+      [
+       "cv_e3fdc0018a063e0e59789a52a84c5f120cdc67bb",
+       "matrix",
+       "matrix",
+       "@_ar_0b96ec77e92548ff9a389431ec0b834b:example.test",
+       "direct",
+       "@owner:example.test",
+       "!dm:example.test",
+       "",
+       "c-7dd92097e38248ad8624dad0b813d1e3ea876847",
+       "prs_c0e3e92bbfcb15486c507ac2",
+       "{\"connectionId\":\"matrix\",\"target\":\"!dm:example.test\",\"messageId\":\"$m\",\"data\":{\"sender\":\"@owner:example.test\",\"thread\":\"\"}}",
+       null,
+       1794486569479,
+       1794486569479
+      ]
+     ]
+    },
+    "ledger_sessions": {
+     "columns": [
+      "session_key",
+      "kind",
+      "label",
+      "room_id",
+      "window",
+      "last_seq",
+      "generation",
+      "published_seq",
+      "title",
+      "archived",
+      "created_at",
+      "updated_at"
+     ],
+     "values": [
+      [
+       "c-7dd92097e38248ad8624dad0b813d1e3ea876847",
+       "owner_main",
+       "owner-main",
+       null,
+       1,
+       6,
+       1,
+       6,
+       null,
+       0,
+       1794486569479,
+       1794486570456
+      ]
+     ]
+    },
+    "ledger_session_windows": {
+     "columns": [
+      "session_key",
+      "window",
+      "context_id",
+      "opened_at",
+      "closed_at",
+      "reason"
+     ],
+     "values": [
+      [
+       "c-7dd92097e38248ad8624dad0b813d1e3ea876847",
+       1,
+       "c-7dd92097e38248ad8624dad0b813d1e3ea876847",
+       1794486569479,
+       null,
+       null
+      ]
+     ]
+    },
+    "ledger_session_conversations": {
+     "columns": [
+      "session_key",
+      "conversation_id",
+      "role",
+      "last_inbound_at"
+     ],
+     "values": [
+      [
+       "c-7dd92097e38248ad8624dad0b813d1e3ea876847",
+       "cv_e3fdc0018a063e0e59789a52a84c5f120cdc67bb",
+       "participant",
+       1794486569479
+      ]
+     ]
+    },
+    "ledger_events": {
+     "columns": [
+      "session_key",
+      "seq",
+      "event_id",
+      "window",
+      "kind",
+      "role",
+      "sender_type",
+      "sender_id",
+      "conversation_id",
+      "turn_id",
+      "ref_event_id",
+      "idempotency_key",
+      "created_at",
+      "body"
+     ],
+     "values": [
+      [
+       "c-7dd92097e38248ad8624dad0b813d1e3ea876847",
+       1,
+       "ev_01M77VR2G7MAEC4E34GG8GVGXJ",
+       1,
+       "message",
+       "user",
+       "person",
+       "prs_c0e3e92bbfcb15486c507ac2",
+       "cv_e3fdc0018a063e0e59789a52a84c5f120cdc67bb",
+       "05face5a-2e4b-4753-b416-7e1f824adbda",
+       null,
+       "matrix:$m",
+       1794486569479,
+       "{\"text\":\"Matrix 上的消息\",\"channel\":\"matrix\"}"
+      ],
+      [
+       "c-7dd92097e38248ad8624dad0b813d1e3ea876847",
+       2,
+       "ev_01M77VR2Q393T9K2W0CH1XH8A3",
+       1,
+       "turn",
+       "system",
+       "system",
+       "router",
+       null,
+       "05face5a-2e4b-4753-b416-7e1f824adbda",
+       null,
+       "turn:05face5a-2e4b-4753-b416-7e1f824adbda:input:61da8166b9bff95e87129769d56e44745a1bcff1e84180cd2662e3c8269578c6",
+       1794486569699,
+       "{\"agentId\":\"0b96ec77-e925-48ff-9a38-9431ec0b834b\",\"state\":\"queued\",\"inputEventIds\":[\"ev_01M77VR2G7MAEC4E34GG8GVGXJ\"]}"
+      ],
+      [
+       "c-7dd92097e38248ad8624dad0b813d1e3ea876847",
+       3,
+       "ev_01M77VR3EG98BQ4NZ5J06H5V8A",
+       1,
+       "turn",
+       "system",
+       "system",
+       "router",
+       null,
+       "05face5a-2e4b-4753-b416-7e1f824adbda",
+       null,
+       "turn:05face5a-2e4b-4753-b416-7e1f824adbda:running",
+       1794486570448,
+       "{\"agentId\":\"0b96ec77-e925-48ff-9a38-9431ec0b834b\",\"state\":\"running\",\"inputEventIds\":[\"ev_01M77VR2G7MAEC4E34GG8GVGXJ\"]}"
+      ],
+      [
+       "c-7dd92097e38248ad8624dad0b813d1e3ea876847",
+       4,
+       "ev_01M77VR3EQR57M4ET8528QSN95",
+       1,
+       "message",
+       "assistant",
+       "agent",
+       "0b96ec77-e925-48ff-9a38-9431ec0b834b",
+       "cv_e3fdc0018a063e0e59789a52a84c5f120cdc67bb",
+       "05face5a-2e4b-4753-b416-7e1f824adbda",
+       null,
+       "turn:05face5a-2e4b-4753-b416-7e1f824adbda:final",
+       1794486570455,
+       "{\"text\":\"回答-1\",\"final\":true,\"channel\":\"matrix\"}"
+      ],
+      [
+       "c-7dd92097e38248ad8624dad0b813d1e3ea876847",
+       5,
+       "ev_01M77VR3EQY8J5BC9BW2SDN9RB",
+       1,
+       "turn",
+       "system",
+       "system",
+       "router",
+       null,
+       "05face5a-2e4b-4753-b416-7e1f824adbda",
+       null,
+       "turn:05face5a-2e4b-4753-b416-7e1f824adbda:completed",
+       1794486570455,
+       "{\"agentId\":\"0b96ec77-e925-48ff-9a38-9431ec0b834b\",\"state\":\"completed\",\"inputEventIds\":[\"ev_01M77VR2G7MAEC4E34GG8GVGXJ\"]}"
+      ],
+      [
+       "c-7dd92097e38248ad8624dad0b813d1e3ea876847",
+       6,
+       "ev_01M77VR3ERMG332W42VE21BM6Q",
+       1,
+       "delivery",
+       "system",
+       "system",
+       "router",
+       null,
+       "05face5a-2e4b-4753-b416-7e1f824adbda",
+       "ev_01M77VR3EQR57M4ET8528QSN95",
+       "delivery:96cb9fe7ee7a4a75affc4831e9d4dfbe814aa3ec247b2a825f0a870000883806:sent",
+       1794486570456,
+       "{\"targetEventId\":\"ev_01M77VR3EQR57M4ET8528QSN95\",\"delivery\":{\"deliveryId\":\"96cb9fe7ee7a4a75affc4831e9d4dfbe814aa3ec247b2a825f0a870000883806\",\"connectionId\":\"matrix\",\"channel\":\"matrix\",\"status\":\"sent\"}}"
+      ]
+     ]
+    },
+    "ledger_ingress": {
+     "columns": [
+      "connection_id",
+      "external_id",
+      "input_id",
+      "hash",
+      "state",
+      "reason",
+      "event_id",
+      "conversation_id",
+      "received_at",
+      "expires_at"
+     ],
+     "values": [
+      [
+       "matrix",
+       "$m",
+       "61da8166b9bff95e87129769d56e44745a1bcff1e84180cd2662e3c8269578c6",
+       "f9f24f893412200f567b3c20a82b681bece4bc2f0cf06ea2ad25c24b2cb66d67",
+       "accepted",
+       null,
+       "ev_01M77VR2G7MAEC4E34GG8GVGXJ",
+       "cv_e3fdc0018a063e0e59789a52a84c5f120cdc67bb",
+       1794486569479,
+       null
+      ]
+     ]
+    },
+    "ledger_pending_inputs": {
+     "columns": [
+      "input_id",
+      "session_key",
+      "event_id",
+      "state",
+      "turn_id",
+      "retry_of",
+      "reason",
+      "created_at",
+      "updated_at"
+     ],
+     "values": [
+      [
+       "61da8166b9bff95e87129769d56e44745a1bcff1e84180cd2662e3c8269578c6",
+       "c-7dd92097e38248ad8624dad0b813d1e3ea876847",
+       "ev_01M77VR2G7MAEC4E34GG8GVGXJ",
+       "started",
+       "05face5a-2e4b-4753-b416-7e1f824adbda",
+       null,
+       null,
+       1794486569479,
+       1794486569699
+      ]
+     ]
+    },
+    "ledger_turns": {
+     "columns": [
+      "turn_id",
+      "session_key",
+      "window",
+      "admission",
+      "origin_conversation_id",
+      "origin_event_id",
+      "reply_route",
+      "state",
+      "final_event_id",
+      "error",
+      "created_at",
+      "started_at",
+      "finished_at"
+     ],
+     "values": [
+      [
+       "05face5a-2e4b-4753-b416-7e1f824adbda",
+       "c-7dd92097e38248ad8624dad0b813d1e3ea876847",
+       1,
+       "owner",
+       "cv_e3fdc0018a063e0e59789a52a84c5f120cdc67bb",
+       "ev_01M77VR2G7MAEC4E34GG8GVGXJ",
+       "{\"connectionId\":\"matrix\",\"target\":\"!dm:example.test\",\"messageId\":\"$m\",\"data\":{\"sender\":\"@owner:example.test\",\"thread\":\"\"}}",
+       "completed",
+       "ev_01M77VR3EQR57M4ET8528QSN95",
+       null,
+       1794486569699,
+       1794486570448,
+       1794486570455
+      ]
+     ]
+    },
+    "ledger_deliveries": {
+     "columns": [
+      "delivery_id",
+      "event_id",
+      "conversation_id",
+      "connection_id",
+      "route",
+      "purpose",
+      "status",
+      "content",
+      "attempts",
+      "next_at",
+      "platform_message_id",
+      "error",
+      "created_at",
+      "updated_at"
+     ],
+     "values": [
+      [
+       "96cb9fe7ee7a4a75affc4831e9d4dfbe814aa3ec247b2a825f0a870000883806",
+       "ev_01M77VR3EQR57M4ET8528QSN95",
+       "cv_e3fdc0018a063e0e59789a52a84c5f120cdc67bb",
+       "matrix",
+       "{\"connectionId\":\"matrix\",\"target\":\"!dm:example.test\",\"messageId\":\"$m\",\"data\":{\"sender\":\"@owner:example.test\",\"thread\":\"\"},\"channel\":\"matrix\"}",
+       "reply",
+       "sent",
+       null,
+       1,
+       0,
+       "$e",
+       null,
+       1794486570455,
+       1794486570456
+      ]
+     ]
+    },
+    "ledger_platform_messages": {
+     "columns": [
+      "connection_id",
+      "platform_message_id",
+      "event_id",
+      "part"
+     ],
+     "values": [
+      [
+       "matrix",
+       "$m",
+       "ev_01M77VR2G7MAEC4E34GG8GVGXJ",
+       0
+      ],
+      [
+       "matrix",
+       "$e",
+       "ev_01M77VR3EQR57M4ET8528QSN95",
+       0
+      ]
+     ]
+    }
+   },
+   "after": [
+    "CREATE INDEX document_status ON documents(collection,json_extract(value,'$.status'))",
+    "CREATE INDEX ledger_conversations_session ON ledger_conversations(session_key)",
+    "CREATE INDEX ledger_events_turn ON ledger_events(turn_id) WHERE turn_id IS NOT NULL",
+    "CREATE INDEX ledger_events_ref ON ledger_events(ref_event_id) WHERE ref_event_id IS NOT NULL",
+    "CREATE INDEX ledger_pending_due ON ledger_pending_inputs(state, created_at) WHERE state IN ('queued','starting')",
+    "CREATE INDEX ledger_turns_session ON ledger_turns(session_key, created_at)",
+    "CREATE INDEX ledger_cards_open ON ledger_cards(session_key) WHERE status = 'pending'",
+    "CREATE INDEX ledger_deliveries_due ON ledger_deliveries(next_at) WHERE status = 'queued'",
+    "CREATE INDEX ledger_deliveries_event ON ledger_deliveries(event_id)",
+    "CREATE INDEX ledger_platform_by_event ON ledger_platform_messages(event_id)",
+    "CREATE INDEX ledger_pending_by_turn ON ledger_pending_inputs(turn_id) WHERE turn_id IS NOT NULL",
+    "CREATE INDEX ledger_cards_by_turn ON ledger_cards(turn_id)",
+    "CREATE INDEX ledger_pending_by_session ON ledger_pending_inputs(session_key, created_at)",
+    "CREATE INDEX ledger_cards_planned ON ledger_cards(updated_at) WHERE status = 'pending' AND answer_key IS NOT NULL",
+    "CREATE INDEX ledger_cards_by_run ON ledger_cards(run_id, call_id)",
+    "CREATE INDEX ledger_card_tokens_by_card ON ledger_card_tokens(card_id, choice_id)"
+   ]
+  },
+  "owners/319cbf06ddfa5bb79f3a1b4799868b429559d9bb6dacaef3ad38af131a494663.sqlite": {
+   "userVersion": 0,
+   "tables": [
+    "CREATE TABLE documents(collection TEXT NOT NULL, id TEXT NOT NULL, value TEXT NOT NULL,\n      PRIMARY KEY(collection,id))",
+    "CREATE TABLE hub_chats(\n  chat_id TEXT PRIMARY KEY, kind TEXT NOT NULL CHECK(kind IN ('dm','group','observed')),\n  agent_id TEXT, session_key TEXT, room_id TEXT, title TEXT NOT NULL, last_seq INTEGER NOT NULL DEFAULT 0,\n  generation INTEGER NOT NULL DEFAULT 1, last_event TEXT, active_turns INTEGER NOT NULL DEFAULT 0,\n  pending_cards INTEGER NOT NULL DEFAULT 0, archived INTEGER NOT NULL DEFAULT 0, updated_at INTEGER NOT NULL)",
+    "CREATE TABLE hub_read_markers(chat_id TEXT NOT NULL, person_id TEXT NOT NULL, read_seq INTEGER NOT NULL,\n  updated_at INTEGER NOT NULL, PRIMARY KEY(chat_id, person_id))",
+    "CREATE TABLE hub_rooms(\n  room_id TEXT PRIMARY KEY, title TEXT NOT NULL, created_by TEXT NOT NULL, created_at INTEGER NOT NULL,\n  matrix_room_id TEXT UNIQUE, last_seq INTEGER NOT NULL DEFAULT 0, generation INTEGER NOT NULL DEFAULT 1,\n  archived INTEGER NOT NULL DEFAULT 0)",
+    "CREATE TABLE hub_room_members(\n  room_id TEXT NOT NULL, member_type TEXT NOT NULL CHECK(member_type IN ('person','agent')), member_id TEXT NOT NULL,\n  role TEXT NOT NULL CHECK(role IN ('owner','agent')), joined_at INTEGER NOT NULL, left_at INTEGER,\n  PRIMARY KEY(room_id, member_type, member_id))",
+    "CREATE TABLE hub_room_events(\n  room_id TEXT NOT NULL, seq INTEGER NOT NULL, event_id TEXT NOT NULL UNIQUE,\n  kind TEXT NOT NULL, role TEXT NOT NULL, sender_type TEXT NOT NULL, sender_id TEXT NOT NULL,\n  turn_id TEXT, ref_event_id TEXT, idempotency_key TEXT, created_at INTEGER NOT NULL, body TEXT NOT NULL,\n  PRIMARY KEY(room_id, seq), UNIQUE(room_id, idempotency_key))",
+    "CREATE TABLE hub_fanout(\n  room_id TEXT NOT NULL, seq INTEGER NOT NULL, agent_id TEXT NOT NULL,\n  status TEXT NOT NULL CHECK(status IN ('queued','delivered','failed')), attempts INTEGER NOT NULL DEFAULT 0,\n  next_at INTEGER NOT NULL DEFAULT 0, error TEXT, PRIMARY KEY(room_id, seq, agent_id))",
+    "CREATE TABLE hub_commands(person_id TEXT NOT NULL, idempotency_key TEXT NOT NULL, request_hash TEXT NOT NULL,\n  response TEXT NOT NULL, created_at INTEGER NOT NULL, PRIMARY KEY(person_id, idempotency_key))",
+    "CREATE TABLE hub_pairing_codes(code_hash TEXT PRIMARY KEY, person_id TEXT NOT NULL, created_at INTEGER NOT NULL,\n  expires_at INTEGER NOT NULL, consumed_at INTEGER, consumed_identity TEXT)",
+    "CREATE TABLE hub_blobs(sha256 TEXT PRIMARY KEY, size INTEGER NOT NULL, content_type TEXT NOT NULL,\n  uploaded_by TEXT NOT NULL, created_at INTEGER NOT NULL, unreferenced_at INTEGER)",
+    "CREATE TABLE hub_uploads(attachment_id TEXT PRIMARY KEY, sha256 TEXT NOT NULL, name TEXT NOT NULL, content_type TEXT NOT NULL,\n  size INTEGER NOT NULL, uploaded_by TEXT NOT NULL, created_at INTEGER NOT NULL, bound_at INTEGER)",
+    "CREATE TABLE hub_blob_refs(sha256 TEXT NOT NULL, ref TEXT NOT NULL, created_at INTEGER NOT NULL, PRIMARY KEY(sha256, ref))",
+    "CREATE TABLE hub_room_attachments(attachment_id TEXT PRIMARY KEY, room_id TEXT NOT NULL, event_id TEXT, name TEXT NOT NULL,\n  content_type TEXT NOT NULL, size INTEGER, sha256 TEXT, locator TEXT NOT NULL, created_at INTEGER NOT NULL)",
+    "CREATE TABLE hub_room_cursors(room_id TEXT NOT NULL, agent_id TEXT NOT NULL, context_seq INTEGER NOT NULL,\n  PRIMARY KEY(room_id, agent_id))"
+   ],
+   "rows": {
+    "documents": {
+     "columns": [
+      "collection",
+      "id",
+      "value"
+     ],
+     "values": [
+      [
+       "meta",
+       "identity",
+       "\"@owner:example.test\""
+      ],
+      [
+       "meta",
+       "ledger_schema_version",
+       "2"
+      ],
+      [
+       "meta",
+       "hub_rooms_schema_version",
+       "1"
+      ]
+     ]
+    },
+    "hub_chats": {
+     "columns": [
+      "chat_id",
+      "kind",
+      "agent_id",
+      "session_key",
+      "room_id",
+      "title",
+      "last_seq",
+      "generation",
+      "last_event",
+      "active_turns",
+      "pending_cards",
+      "archived",
+      "updated_at"
+     ],
+     "values": [
+      [
+       "dm:0b96ec77-e925-48ff-9a38-9431ec0b834b",
+       "dm",
+       "0b96ec77-e925-48ff-9a38-9431ec0b834b",
+       "c-7dd92097e38248ad8624dad0b813d1e3ea876847",
+       null,
+       "coco",
+       6,
+       1,
+       "{\"eventId\":\"ev_01M77VR3EQR57M4ET8528QSN95\",\"at\":\"2026-11-12T12:29:30.455Z\",\"sender\":{\"type\":\"agent\",\"id\":\"0b96ec77-e925-48ff-9a38-9431ec0b834b\",\"name\":\"coco\"},\"preview\":\"回答-1\"}",
+       0,
+       0,
+       0,
+       1794486570456
+      ]
+     ]
+    }
+   },
+   "after": [
+    "CREATE INDEX document_status ON documents(collection,json_extract(value,'$.status'))",
+    "CREATE INDEX hub_chats_recent ON hub_chats(archived, updated_at DESC)",
+    "CREATE INDEX hub_uploads_unbound ON hub_uploads(created_at) WHERE bound_at IS NULL",
+    "CREATE INDEX hub_blob_refs_ref ON hub_blob_refs(ref)",
+    "CREATE INDEX hub_fanout_due ON hub_fanout(next_at) WHERE status = 'queued'",
+    "CREATE INDEX hub_room_members_agent ON hub_room_members(member_id) WHERE member_type = 'agent'",
+    "CREATE INDEX hub_room_events_turn ON hub_room_events(room_id, turn_id) WHERE turn_id IS NOT NULL"
+   ]
+  },
+  "registry.sqlite": {
+   "userVersion": 0,
+   "tables": [
+    "CREATE TABLE documents(collection TEXT NOT NULL, id TEXT NOT NULL, value TEXT NOT NULL,\n      PRIMARY KEY(collection,id))",
+    "CREATE TABLE reg_persons(person_id TEXT PRIMARY KEY, display_name TEXT NOT NULL, created_at INTEGER NOT NULL)",
+    "CREATE TABLE reg_person_identities(\n  identity_id TEXT PRIMARY KEY, person_id TEXT NOT NULL, provider TEXT NOT NULL, namespace TEXT NOT NULL, subject TEXT NOT NULL,\n  verified_by TEXT NOT NULL CHECK(verified_by IN ('login','config','pairing','admin')),\n  created_at INTEGER NOT NULL, revoked_at INTEGER, last_seen_at INTEGER, UNIQUE(provider, namespace, subject))"
+   ],
+   "rows": {
+    "documents": {
+     "columns": [
+      "collection",
+      "id",
+      "value"
+     ],
+     "values": [
+      [
+       "meta",
+       "identity",
+       "\"example.test\""
+      ],
+      [
+       "meta",
+       "legacy_channels_removed",
+       "1"
+      ],
+      [
+       "meta",
+       "registry_schema_version",
+       "2"
+      ],
+      [
+       "agents",
+       "0b96ec77-e925-48ff-9a38-9431ec0b834b",
+       "{\"id\":\"0b96ec77-e925-48ff-9a38-9431ec0b834b\",\"owner\":\"@owner:example.test\",\"name\":\"coco\",\"address\":\"owner/coco@example.test\",\"matrixId\":\"@_ar_0b96ec77e92548ff9a389431ec0b834b:example.test\",\"createdAt\":\"2026-11-12T12:29:29.432Z\",\"status\":\"active\"}"
+      ],
+      [
+       "matrix_agents",
+       "@_ar_0b96ec77e92548ff9a389431ec0b834b:example.test",
+       "\"0b96ec77-e925-48ff-9a38-9431ec0b834b\""
+      ],
+      [
+       "instances",
+       "1bd91a22-2c71-4b05-b98a-2db65e99f110",
+       "{\"id\":\"1bd91a22-2c71-4b05-b98a-2db65e99f110\",\"agentId\":\"0b96ec77-e925-48ff-9a38-9431ec0b834b\",\"name\":\"channel-host\",\"tokenHash\":\"7aef10967bf4aee916435aace834a692312f06bfea78d595fff78a3aa951c738\",\"createdAt\":\"2026-11-12T12:29:29.440Z\",\"lastSeen\":\"2026-11-12T12:29:30.451Z\",\"revoked\":false}"
+      ],
+      [
+       "as_members",
+       "!dm:example.test",
+       "{\"0b96ec77-e925-48ff-9a38-9431ec0b834b\":\"join\"}"
+      ],
+      [
+       "meta",
+       "as_sequence",
+       "2"
+      ],
+      [
+       "as_transactions",
+       "t0",
+       "\"2aa90824120a262a9d7e4a1ab28485d97e68de6844bb4f95d935dab2c35e2f38\""
+      ],
+      [
+       "as_transactions",
+       "t1",
+       "\"b4bf0415ffd385c5ceca20a4065f979419b4d0d7188fb42f99196c75f3d66093\""
+      ]
+     ]
+    },
+    "reg_persons": {
+     "columns": [
+      "person_id",
+      "display_name",
+      "created_at"
+     ],
+     "values": [
+      [
+       "prs_c0e3e92bbfcb15486c507ac2",
+       "owner",
+       1794486569431
+      ]
+     ]
+    },
+    "reg_person_identities": {
+     "columns": [
+      "identity_id",
+      "person_id",
+      "provider",
+      "namespace",
+      "subject",
+      "verified_by",
+      "created_at",
+      "revoked_at",
+      "last_seen_at"
+     ],
+     "values": [
+      [
+       "idn_000c303fd7c188fdb9ae17ee",
+       "prs_c0e3e92bbfcb15486c507ac2",
+       "cloudflare-access",
+       "example-team.cloudflareaccess.com",
+       "owner@example.test",
+       "login",
+       1794486569431,
+       null,
+       null
+      ],
+      [
+       "idn_3ce5b61c241a402bbb6ce296",
+       "prs_c0e3e92bbfcb15486c507ac2",
+       "matrix",
+       "example.test",
+       "@owner:example.test",
+       "config",
+       1794486569434,
+       null,
+       null
+      ]
+     ]
+    }
+   },
+   "after": [
+    "CREATE INDEX document_status ON documents(collection,json_extract(value,'$.status'))",
+    "CREATE INDEX reg_identities_person ON reg_person_identities(person_id)"
+   ]
+  }
+ }
+}
