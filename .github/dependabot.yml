@@ -4,10 +4,16 @@ updates:
     directory: /packages/router
     schedule:
       interval: weekly
+    groups:
+      all:
+        patterns: ["*"]
   - package-ecosystem: npm
     directory: /packages/router
     schedule:
       interval: weekly
+    groups:
+      all:
+        patterns: ["*"]
     ignore:
       - dependency-name: "@types/node"
         update-types: ["version-update:semver-major"]
@@ -15,6 +21,9 @@ updates:
     directory: /packages/router/examples/echo-agent
     schedule:
       interval: weekly
+    groups:
+      all:
+        patterns: ["*"]
     ignore:
       - dependency-name: "@types/node"
         update-types: ["version-update:semver-major"]
@@ -22,6 +31,9 @@ updates:
     directory: /packages/router
     schedule:
       interval: weekly
+    groups:
+      all:
+        patterns: ["*"]
     ignore:
       - dependency-name: node
         update-types: ["version-update:semver-major"]
@@ -29,3 +41,6 @@ updates:
     directory: /
     schedule:
       interval: weekly
+    groups:
+      all:
+        patterns: ["*"]
