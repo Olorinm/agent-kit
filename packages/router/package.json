@@ -55,7 +55,7 @@
     "express-rate-limit": "^8.7.0",
     "grammy": "1.46.0",
     "ipaddr.js": "^2.5.0",
-    "jose": "^6.2.15",
+    "jose": "^6.2.16",
     "matrix-js-sdk": "^42.3.0",
     "qrcode-terminal": "0.12.0",
     "undici": "^8.12.4",
