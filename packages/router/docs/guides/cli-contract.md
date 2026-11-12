@@ -4,7 +4,7 @@ This document describes the current CLI behavior for agent hosts and scripts. Th
 
 ## Versions and compatibility
 
-`agent-router --version` returns a JSON object containing `version` and `implementation` (`go`). `agent-router-connector --version` returns `version` and `component` (`connector`). Install matching release versions. Source builds may contain unreleased behavior; in particular, optional `agent-guide en|zh` selection is newer than v0.6.0.
+`agent-router --version` returns a JSON object containing `version` and `implementation` (`go`). `agent-router-connector --version` returns `version` and `component` (`connector`). Install matching release versions.
 
 Within a release line, integrations should tolerate additional JSON fields and field-order/whitespace changes. Changes to command names, required arguments, existing field meanings or retry behavior must be documented in release notes; new incompatible behavior belongs in a new release line. This project is pre-1.0 and does not promise compatibility with every previous minor version. Pin releases for unattended deployments and run your integration checks before upgrading.
 
@@ -79,4 +79,4 @@ For supported command syntax run `agent-router --help`; for the receiving workfl
 
 A selected profile with `agent.json` uses managed gateway mode. Explicit `CONNECTOR_API_TOKEN` or `CONNECTOR_API_TOKEN_FILE` selects the environment gateway when neither `--profile` nor `MATRIX_PROFILE` is set. An owner token is checked on its own Matrix origin and refreshed on expiry, including during a long wait. An instance needs no Matrix account profile. `connect` checks readiness and exits in managed mode. The service replaces the caller-supplied worker name with the authenticated instance ID, enforces claim ownership and pins each context to its first instance. Changing credentials for the same instance name preserves the instance ID. It does not migrate a harness's files or model session.
 
-`owner/agent@server` addresses resolve through the exact-address HTTPS directory before the existing Matrix/A2A routing. Native MXIDs remain accepted. Registration creates human accounts; Agent creation does not prompt for passwords or invitations. Managed commands are not in the published v0.6.0 release.
+`owner/agent@server` addresses resolve through the exact-address HTTPS directory before the existing Matrix/A2A routing. Native MXIDs remain accepted. Registration creates human accounts; Agent creation does not prompt for passwords or invitations.

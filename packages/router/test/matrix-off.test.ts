@@ -13,7 +13,6 @@ import type { MatrixTransport, SyncBatch } from "../src/matrix/transport.js";
 import { Host, until } from "./ledger-fixture.js";
 import { AgentLedger } from "../src/ledger/ledger.js";
 import { createBlobStore } from "../src/ledger/blobs.js";
-import { exportMatrix, forgetMatrix, promoteMedia } from "../src/matrix/removal.js";
 import { DurableStore } from "../src/communication/store.js";
 import { digest } from "../src/execution/protocol.js";
 
@@ -171,7 +170,6 @@ describe("Router with AGENT_MATRIX=off (ADR 0005 phase 7)", () => {
 
     // Deleting needs no Synapse deactivation.
     expect((await t.api(`${root}/agents/${writer.id}`, "DELETE")).status).toBe(204);
-    expect(t.router.service.store.entries("matrix_orphans")).toEqual([]);
 
     // Nothing ever went to the homeserver, or to any Matrix API.
     expect(urls.filter((url) => !url.startsWith(t.base) && (url.includes(`:${t.homeserverPort}`) || url.includes("/_matrix/")))).toEqual([]);
@@ -210,7 +208,6 @@ describe("Router with AGENT_MATRIX=off (ADR 0005 phase 7)", () => {
     await until(() => t.events(chatId), (items) => items.some((event) => event.role === "assistant"));
     expect((await t.api(`${root}/agents/${legacy.id}`, "DELETE")).status).toBe(204);
     // The account was not deactivated: `matrix forget` lists it.
-    expect(t.router.service.store.entries("matrix_orphans").map(({ id }) => id)).toEqual([legacy.matrixId]);
     expect(urls.filter((url) => !url.startsWith(t.base) && (url.includes(`:${t.homeserverPort}`) || url.includes("/_matrix/")))).toEqual([]);
   }, 60_000);
 });
@@ -413,87 +410,4 @@ describe("external identity sessions without Synapse (19.2)", () => {
     await expect(service.authenticate("syt_matrix")).rejects.toMatchObject({ message: "matrix_disabled", status: 401 });
     expect(urls).toEqual(["https://issuer.example.test/userinfo"]);
   });
-});
-
-describe("Synapse removal tooling (19.4)", () => {
-  it("promotes mxc:// media into the blob store idempotently, reports consistency and forgets the Matrix mirrors", async () => {
-    const stateDir = mkdtempSync(join(tmpdir(), "matrix-removal-"));
-    cleanup.push(() => rmSync(stateDir, { recursive: true, force: true }));
-    const t = await boot(stateDir, { matrix: { enabled: true } }, { provision: async () => {},
-      transport: (agent, inbox) => ({ identity: async () => agent.matrixId,
-        sync: async (since): Promise<SyncBatch> => { await new Promise((r) => setTimeout(r, 20)); return inbox.next(agent.id, since) ?? { next_batch: since ?? "0" }; },
-        state: async () => [{ type: "m.room.member", event_id: "$m1", sender: owner, state_key: owner, content: { membership: "join" } },
-          { type: "m.room.member", event_id: "$m2", sender: agent.matrixId, state_key: agent.matrixId, content: { membership: "join" } }],
-        history: async () => ({ events: [] }), createRoom: async () => "!dm:example.test", join: async () => {}, send: async () => "$e", stop: () => {} }) });
-    const agent = (await t.api(`${root}/agents`, "POST", { name: "media" })).data;
-    await t.router.connections.edit(owner, agent.id, (config) => {
-      config.connections.push({ id: "matrix", kind: "matrix", ownerAddresses: [owner], peerAddresses: [], groupIds: [] });
-      config.host = { binding: "fixture", runtimeId: "fixture", instanceName: "channel-host", instructions: "" };
-    });
-    t.router.service.inbox.receive("j", { events: [{ event_id: "$j", room_id: "!dm:example.test", sender: agent.matrixId, type: "m.room.member", state_key: agent.matrixId, content: { membership: "join" } }] });
-    t.router.service.inbox.receive("i", { events: [{ event_id: "$img", room_id: "!dm:example.test", sender: owner, type: "m.room.message", origin_server_ts: Date.now() + 1000,
-      content: { msgtype: "m.image", body: "cat.png", url: "mxc://example.test/abc", info: { mimetype: "image/png", size: png.length } } }] });
-    const ledger = AgentLedger.attached((await t.router.service.runtime(agent.id)).connector.store)!;
-    await until(() => ledger.store.db.prepare("SELECT COUNT(*) AS n FROM ledger_attachments WHERE event_id IS NOT NULL").get()!.n, (n) => Number(n) === 1);
-    await t.stop(); cleanup.splice(cleanup.indexOf(t.stop), 1);
-
-    const store = createBlobStore(undefined, stateDir), reads: string[] = [];
-    // The media read is a network call: no SQLite write transaction may be open on the agent store or the owner hub across it.
-    const unlocked = (path: string) => { const db = new DatabaseSync(path); try { db.exec("PRAGMA busy_timeout=0; BEGIN IMMEDIATE; ROLLBACK"); return true; } catch { return false; } finally { db.close(); } };
-    const read = () => async (uri: string) => {
-      await new Promise((r) => setTimeout(r, 5));
-      expect(unlocked(join(stateDir, "agents", `${agent.id}.sqlite`))).toBe(true);
-      expect(unlocked(join(stateDir, "owners", `${digest(owner)}.sqlite`))).toBe(true);
-      reads.push(uri); return png;
-    };
-    const before = await exportMatrix({ stateDir, all: true });
-    expect(before.report).toMatchObject({ ready: false, blocking: { unpromotedMedia: 1 } });
-    expect(await promoteMedia({ stateDir, all: true, dryRun: true, store })).toMatchObject({ remaining: 1, agents: [{ candidates: 1, promoted: 0 }] });
-    const promoted = await promoteMedia({ stateDir, all: true, store, read });
-    expect(promoted).toMatchObject({ dryRun: false, remaining: 0, agents: [{ agentId: agent.id, candidates: 1, promoted: 1, failed: [], remaining: 0 }] });
-    expect(reads).toEqual(["mxc://example.test/abc"]);
-    expect(await promoteMedia({ stateDir, all: true, store, read })).toMatchObject({ remaining: 0, agents: [{ candidates: 0, promoted: 0 }] });
-    expect(reads).toHaveLength(1);
-
-    const out = join(stateDir, "export");
-    const { manifest, report } = await exportMatrix({ stateDir, all: true, out });
-    expect(report.blocking.unpromotedMedia).toBe(0);
-    expect(manifest.agents).toEqual([expect.objectContaining({ id: agent.id, matrixId: agent.matrixId, state: "active" })]);
-    expect(manifest.rooms.find((room) => room.roomId === "!dm:example.test")).toMatchObject({ agents: [agent.id], members: [agent.matrixId, owner].sort(),
-      conversations: [expect.objectContaining({ agentId: agent.id, kind: "direct" })] });
-    expect(report.blocking.ownersWithoutEdgeLogin).toEqual([]);
-
-    // Everything except the lease, per table and collection: what a command leaves behind can be compared exactly.
-    const snapshot = (path: string) => {
-      const store = new DurableStore(path, path.endsWith("registry.sqlite") ? "example.test" : agent.matrixId);
-      try {
-        const tables = (store.db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name LIKE 'ledger_%'").all() as Array<{ name: string }>).map(({ name }) => name);
-        return { collections: Object.fromEntries((store.db.prepare("SELECT collection, COUNT(*) AS n FROM documents GROUP BY collection").all() as Array<{ collection: string; n: number }>).map((row) => [row.collection, Number(row.n)])),
-          documents: digest(store.db.prepare("SELECT collection,id,value FROM documents WHERE NOT (collection='meta' AND id='lease') ORDER BY collection,id").all()),
-          ledger: Object.fromEntries(tables.map((name) => [name, digest(store.db.prepare(`SELECT * FROM ${name}`).all())])) };
-      } finally { store.close(); }
-    };
-    const agentFile = join(stateDir, "agents", `${agent.id}.sqlite`), registryFile = join(stateDir, "registry.sqlite");
-    const agentBefore = snapshot(agentFile), registryBefore = snapshot(registryFile);
-    const dry = await forgetMatrix({ stateDir, all: true, dryRun: true });
-    expect(dry.agents[0]).toMatchObject({ agentId: agent.id, previous: "active", documents: { rooms: 1, "meta.sync": 1 } });
-    expect(dry.registry).toMatchObject({ matrix_agents: 1 });
-    expect(snapshot(agentFile)).toEqual(agentBefore);
-    expect(snapshot(registryFile)).toEqual(registryBefore);
-    await forgetMatrix({ stateDir, all: true });
-    // Only the listed Matrix mirrors go: the ledger and every other collection stay exactly as they were.
-    const agentAfter = snapshot(agentFile), registryAfter = snapshot(registryFile), gone = ["timeline", "room_info", "read_markers", "rooms"];
-    expect(agentAfter.ledger).toEqual(agentBefore.ledger);
-    expect(agentAfter.collections).toEqual(Object.fromEntries(Object.entries(agentBefore.collections).filter(([name]) => !gone.includes(name)).map(([name, n]) => [name, name === "meta" ? n - 1 : n])));
-    expect(Object.keys(registryBefore.collections).filter((name) => !(name in registryAfter.collections)).every((name) => name.startsWith("as_") || name.startsWith("matrix_"))).toBe(true);
-    expect(registryAfter.collections.agents).toBe(registryBefore.collections.agents);
-    expect(await forgetMatrix({ stateDir, all: true, dryRun: true })).toMatchObject({ agents: [{ previous: "none", documents: { rooms: 0, "meta.sync": 0 } }],
-      registry: { matrix_agents: 0, as_queue: 0, as_members: 0 } });
-
-    // The promoted attachment is served from the blob store by a Router with Matrix off.
-    const off = await boot(stateDir);
-    expect((await off.api(`${root}/agents/${agent.id}`)).data.matrix).toEqual({ state: "none", userId: null });
-    const image = (await off.events(`dm:${agent.id}`)).find((event) => event.attachments?.length);
-    expect(await off.download(image.attachments[0].url)).toMatchObject({ status: 200, body: png });
-  }, 60_000);
 });

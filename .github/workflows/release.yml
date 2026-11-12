@@ -58,7 +58,7 @@ jobs:
           (cd packages/host && npm ci --ignore-scripts && npm pack --pack-destination "$out")
           (cd packages/connectors && npm ci && npm pack --pack-destination "$out")
           (cd packages/environment && npm ci && npm pack --pack-destination "$out")
-          (cd packages/router && npm ci && npm run build && npm pack --pack-destination "$out" \
+          (cd packages/router && npm ci && npm pack --pack-destination "$out" \
             && AGENT_ROUTER_RELEASE_DIR="$out" sh scripts/package-cli.sh && rm -rf "$out"/agent-router_*/)
           (cd "$out" && sha256sum ./*.tgz ./*.tar.gz > SHA256SUMS && cat SHA256SUMS >> "$GITHUB_STEP_SUMMARY")
 

@@ -197,13 +197,7 @@ export class ManagedService {
       control: async (agentId) => (await this.runtime(agentId)).extension?.control,
       groups: Boolean(config.ledgerSend && config.ledgerGroups), kick: () => this.fanout?.kick(),
       open: async (agentId) => { await this.runtime(agentId); }, owned: (owner) => this.agents(owner).filter((agent) => agent.status === "active"),
-      attachments: this.attachments, matrix: this.matrixOn,
-      debug: (agentId) => {
-        const ledger = this.ledgers.get(agentId), store = ledger?.store;
-        const count = (collection: string) => Number(store?.db.prepare("SELECT COUNT(*) AS n FROM documents WHERE collection=?").get(collection)?.n ?? 0);
-        return { ledger: ledger?.counts() ?? null, error: ledger?.lastError || null, timeline: count("timeline"), inbox: count("communication_inbox"),
-          outbox: count("communication_outbox"), backfill: store?.get("meta", "ledger_backfill") ?? null };
-      } }) : undefined;
+      attachments: this.attachments, matrix: this.matrixOn }) : undefined;
   }
   /** Channel runtime options for hub rooms (phase 5). Without `groups` the room connection is not registered. */
   roomOptions(agent: ManagedAgent) {
@@ -476,13 +470,8 @@ export class ManagedService {
       .some(({ value }) => ["running", "submitting", "unknown"].includes(value.phase));
   }
   private async deprovision(agent: ManagedAgent) {
-    // No account (`none`): nothing to deactivate. Matrix off or a dormant agent: deactivation is skipped and the account
-    // is remembered, so `matrix forget` lists it (ADR 0005 19.2).
-    if (this.matrixState(agent) === "none") return;
-    if (this.effectiveMatrix(agent) !== "active") {
-      this.store.set("matrix_orphans", agent.matrixId, { agentId: agent.id, owner: agent.owner, deletedAt: new Date().toISOString() });
-      return;
-    }
+    // No account (`none`), Matrix off or a dormant agent: nothing to deactivate.
+    if (this.effectiveMatrix(agent) !== "active") return;
     if (this.dependencies.deprovision) { await this.dependencies.deprovision(agent); return; }
     // Synapse lets an application service deactivate its own users without interactive auth;
     // deactivation leaves every room, rejects invites and removes the user from the directory.
