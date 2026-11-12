@@ -10,7 +10,7 @@ npm init -y
 npm install https://github.com/Olorinm/agent-host/releases/download/v0.1.0-alpha.8/olorinm-agent-host-0.1.0-alpha.8.tgz
 ```
 
-The archive is published on [GitHub Releases](https://github.com/Olorinm/agent-host/releases). The package is not on the npm registry yet. Native binaries other than Claude's SDK engine are separate prerequisites. The release has the same contents tested by the independent archive consumer.
+New releases are published on [GitHub Releases](https://github.com/Olorinm/agent-kit/releases?q=host-v) with tags `host-v<version>`; versions up to 0.1.0-alpha.14 remain in the former `Olorinm/agent-host` repository, as in the example above. The package is not on the npm registry yet. Native binaries other than Claude's SDK engine are separate prerequisites. The release has the same contents tested by the independent archive consumer.
 
 ## Run a task yourself
 

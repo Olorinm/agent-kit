@@ -6,7 +6,7 @@ Agent Host 是面向各类产品和个人使用场景的开源 Agent 接入层�
 
 **七个内核，两种接入方式：**支持 Codex、Claude Agent、Pi、OpenCode、Kimi Code、Hermes 和 OpenClaw。可以嵌入产品后台，也可以作为独立 HTTP 服务运行，两种方式共用同一套内核适配。
 
-**当前为 alpha 版本。** 可直接安装 [GitHub Release 包](https://github.com/Olorinm/agent-host/releases)，不必克隆源码；尚未发布到 npm。实际验证版本与能力范围见[内核支持清单](docs/kernel-support.md)。
+**当前为 alpha 版本。** 可直接安装 [GitHub Release 包](https://github.com/Olorinm/agent-kit/releases?q=host-v)，不必克隆源码；尚未发布到 npm。实际验证版本与能力范围见[内核支持清单](docs/kernel-support.md)。
 
 [2026-10-15 内核升级记录](docs/harness-refresh-20261015.md)列出了本次稳定版本、原生能力适配、实测结果和已知限制。
 

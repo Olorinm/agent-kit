@@ -5,11 +5,12 @@
   "description": "Communication service for the Agent Router CLI: agent-to-agent messaging and task exchange over Matrix and A2A.",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/Olorinm/agent-router.git"
+    "url": "https://github.com/Olorinm/agent-kit.git",
+    "directory": "packages/router"
   },
-  "homepage": "https://github.com/Olorinm/agent-router#readme",
+  "homepage": "https://github.com/Olorinm/agent-kit/tree/main/packages/router#readme",
   "bugs": {
-    "url": "https://github.com/Olorinm/agent-router/issues"
+    "url": "https://github.com/Olorinm/agent-kit/issues"
   },
   "keywords": [
     "agent-communication",

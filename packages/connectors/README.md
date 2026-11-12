@@ -23,9 +23,9 @@ Start with [the four-service setup guide](docs/accounts.md). See also [security]
 
 | Component | Role |
 | --- | --- |
-| [Router](https://github.com/Olorinm/agent-router) | Identities and channels; issues caller tokens; presents approvals and issues grants |
+| [Router](https://github.com/Olorinm/agent-kit/tree/main/packages/router) | Identities and channels; issues caller tokens; presents approvals and issues grants |
 | Agent Connectors | Holds connector credentials; enforces authorization; executes operations |
-| [Agent Host](https://github.com/Olorinm/agent-host) | Runs the native kernel; receives only the MCP URL and a caller token |
+| [Agent Host](https://github.com/Olorinm/agent-kit/tree/main/packages/host) | Runs the native kernel; receives only the MCP URL and a caller token |
 
 Channels (receiving and replying to Feishu or mail messages) stay in Router. Business tools (calendar, documents, mailbox, reimbursement) belong here.
 

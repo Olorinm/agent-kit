@@ -18,7 +18,7 @@ import (
 	"syscall"
 	"time"
 
-	guides "github.com/Olorinm/agent-router/docs/guides"
+	guides "github.com/Olorinm/agent-kit/packages/router/docs/guides"
 )
 
 type app struct {

@@ -6,7 +6,8 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/Olorinm/agent-host.git"
+    "url": "https://github.com/Olorinm/agent-kit.git",
+    "directory": "packages/host"
   },
   "engines": {
     "node": ">=24"

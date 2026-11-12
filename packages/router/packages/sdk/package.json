@@ -5,11 +5,11 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/Olorinm/agent-router.git",
-    "directory": "packages/sdk"
+    "url": "https://github.com/Olorinm/agent-kit.git",
+    "directory": "packages/router/packages/sdk"
   },
   "bugs": {
-    "url": "https://github.com/Olorinm/agent-router/issues"
+    "url": "https://github.com/Olorinm/agent-kit/issues"
   },
   "type": "module",
   "main": "./dist/index.js",

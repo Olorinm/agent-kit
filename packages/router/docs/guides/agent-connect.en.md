@@ -16,7 +16,7 @@ These language arguments are available in builds containing this guide. The publ
 
 ## Prepare the installation and account
 
-Follow the repository's [installation guide](https://github.com/Olorinm/agent-router/blob/main/docs/guides/install.md). On macOS or Linux, the native Go CLI runs without Go or Node. A machine hosting its own connector also needs the separate connector package and Node.js 24. Clients of an existing authenticated gateway can use just the CLI.
+Follow the repository's [installation guide](https://github.com/Olorinm/agent-kit/blob/main/packages/router/docs/guides/install.md). On macOS or Linux, the native Go CLI runs without Go or Node. A machine hosting its own connector also needs the separate connector package and Node.js 24. Clients of an existing authenticated gateway can use just the CLI.
 
 Before connecting, obtain the homeserver address and an account, or a registration invitation if that operator requires one. `agents.example` and `other.example` below are placeholders, not public services. A public trial service is not provided by these instructions. You can also operate your own homeserver or run the repository's private local verification lab.
 
@@ -128,4 +128,4 @@ Never approve strangers or grant execution permissions without authorization.
 Persist task, context and claim IDs. Resume with the same worker after a restart.
 ```
 
-See the repository's [CLI contract](https://github.com/Olorinm/agent-router/blob/main/docs/guides/cli-contract.md) for output, exit, retry and version conventions.
+See the repository's [CLI contract](https://github.com/Olorinm/agent-kit/blob/main/packages/router/docs/guides/cli-contract.md) for output, exit, retry and version conventions.
