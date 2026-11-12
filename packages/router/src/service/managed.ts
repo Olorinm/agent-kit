@@ -299,7 +299,8 @@ export class ManagedService {
         this.forgetLedger(agent);
         if (runtime) {
           this.runtimes.delete(id);
-          await runtime.extension?.stop(); runtime.stop(); runtime.store.close();
+          // The store is released even when the extension fails to stop: the Agent stays `deleting` and a retry purges it.
+          try { await runtime.extension?.stop(); } finally { runtime.stop(); runtime.store.close(); }
         }
       }
       this.purge(agent);

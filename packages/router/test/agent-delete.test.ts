@@ -3,7 +3,6 @@ import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ManagedService, createManagedApp, type ServiceDependencies, type ServiceExtension } from "../src/service/managed.js";
-import type { AgentRuntime } from "../src/agents/runtime.js";
 
 const cleanup: Array<() => void | Promise<void>> = [];
 afterEach(async () => { for (const close of cleanup.splice(0).reverse()) await close(); });
@@ -26,12 +25,10 @@ async function setup(extra: Partial<ServiceDependencies> = {}, closeService = tr
 }
 /**
  * A product extension whose `stop` fails while `fail()` is true: the one step of a deletion that can fail after the
- * Agent is marked `deleting`. A runtime whose extension did not stop is not released by the service, so the fixture
- * releases its lease and store.
+ * Agent is marked `deleting`.
  */
 function failingStop(fail: () => boolean, order: string[] = []) {
-  return async (_agent: unknown, runtime: AgentRuntime): Promise<ServiceExtension> => {
-    cleanup.push(() => { runtime.stop(); runtime.store.close(); });
+  return async (): Promise<ServiceExtension> => {
     return { start: async () => {}, stop: async () => { order.push("stop"); if (fail()) throw new Error("channel_stop_failed"); }, status: () => ({}),
       resolve: async () => {}, reconcile: async () => {}, closeUnknown: async () => {} };
   };
