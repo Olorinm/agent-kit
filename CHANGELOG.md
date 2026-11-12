@@ -7,8 +7,6 @@ section in the version-bump commit before tagging. Changes up to the versions li
 
 ## [Unreleased]
 
-## [Unreleased]
-
 - **Router:** removed the one-time migration tools that moved a deployment from Matrix to the
   owner ledger (`ledger:backfill`, `ledger:promote-media`, `matrix:export`, `matrix:forget`) and
   the `GET /web/debug/ledger` diffing endpoint. Deleting an agent whose Matrix account is dormant
