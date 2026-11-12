@@ -5,6 +5,25 @@ tag publishes a GitHub Release whose notes are this file's section for that vers
 section in the version-bump commit before tagging. Changes up to the versions listed under
 0.8.0-alpha.1 are in each package's own `CHANGELOG.md`.
 
+## [Unreleased]
+
+- **Host:** removed the package exports `./environment/windows-discovery`,
+  `./environment/windows-query`, `./transport`, `./acp/mcp-server`, `./native-session-lock` and
+  `./openclaw/plugin`; the modules remain internal and the OpenClaw plugin is still loaded from
+  `plugins/openclaw`. Removed the manual probe scripts, the `probe:codex` script and the
+  `AGENT_HOST_NATIVE_COVERAGE` option of `test:package`. Removed the dated upgrade, evidence,
+  audit and evaluation documents and `examples/cloud` from the package. The two editor examples
+  depend on the package directory that contains them instead of a fixed archive version. The
+  service store no longer reads run records written before event kinds were tracked.
+- **Connectors:** the package root no longer exports `GENERIC_CATALOG`, `defaultSetting`,
+  `PolicyOperationView`, `LIMITS`, `TOKEN_TYPES`, `TokenError`, `operationDigest` and
+  `CloudflareBrowserRun`. Removed the `Dockerfile` and the `test:cloudflare` script; run
+  `npm test` in `cloudflare/` instead.
+- **Environment:** requires Node.js 24 or later. Removed `scripts/probe.mjs` and the `probe`
+  script. The Cloudflare start script example installs Codex 0.166.0.
+- **CI:** Host is tested on Linux and Windows, Connectors and Environment on Linux, all with
+  Node.js 24.22.2.
+
 ## [0.8.0-alpha.1] - 2026-11-12
 
 First release from this repository. Host, Router, Connectors and Environment now share one

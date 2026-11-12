@@ -225,8 +225,8 @@ structured handoff; see [browser security](security-model.md#browser-cloudflare-
 
 The package contains agent-browser's binaries for every platform. Its install script only marks the binary
 executable (and rewrites a global npm link when one exists), so it is denied in `allowScripts`; the connector runs
-the binary directly when it is executable and otherwise copies it once into its private directory. Images keep only
-their platform's binary, executable (see `Dockerfile`).
+the binary directly when it is executable and otherwise copies it once into its private directory. A deployment
+image can keep only its own platform's binary.
 
 Only exact names in the code-reviewed catalog are exposed. New upstream tools remain unavailable until reviewed.
 Upstream schemas validate input without transforming it. Google schemas apply documented defaults before the exact

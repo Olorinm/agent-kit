@@ -8,8 +8,6 @@ Agent Host is an open-source integration layer that makes native coding Agents e
 
 **Status: alpha.** Install the tested archive from [GitHub Releases](https://github.com/Olorinm/agent-kit/releases); no source checkout is needed. It is not yet published to npm. See the [tested versions and verification limits](docs/kernel-support.md).
 
-The [2026-10-15 harness refresh](docs/harness-refresh-20261015.md) records the latest stable targets, native feature changes and verification limits.
-
 The HTTP service preserves attachment bytes, supported native image inputs and image tool results. See [media input](docs/http-service.md#media-input) for runtime differences and limits.
 
 ## Core principles
@@ -20,8 +18,6 @@ The HTTP service preserves attachment bytes, supported native image inputs and i
 2. **Make integration straightforward for products and people.** Provide consistent ways to configure an Agent, start and continue work, receive progress, handle approvals and questions, and cancel execution. Embedded and HTTP access should deliver the same native capability wherever the environment permits it, with differences discoverable before use.
 
 **Unify how Agents are used while keeping their capability differences visible.** Common operations belong in shared interfaces; native features remain accessible through explicit extensions. Support claims need implementation and verification evidence, and the integration must report any loss or limitation clearly.
-
-The [gap checklist](docs/capability-gaps.md) records implementation, verification and remaining native/environment boundaries against these principles.
 
 ## What it provides
 
@@ -55,7 +51,7 @@ The examples consume the public package API. Archive tests install the package o
 
 ## Design and scope
 
-See [scope and responsibilities](docs/scope.md) for the boundary between a product, Agent Host and the native Agent. The [Rivet backend evaluation](docs/rivet.md) explains the native-continuation requirements behind the current adapters.
+See [scope and responsibilities](docs/scope.md) for the boundary between a product, Agent Host and the native Agent.
 
 ## License
 

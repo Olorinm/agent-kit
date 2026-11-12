@@ -1,6 +1,6 @@
 # Agent Host API (alpha)
 
-The package targets Node.js 24+ and provides native adapters for all seven Kernels in the [support matrix](kernel-support.md). Native installations and authentication remain separate from the consuming product. The common turn/tool/event boundary is alpha; optional controls remain Kernel-specific. The first example below uses Codex 0.162.1.
+The package targets Node.js 24+ and provides native adapters for all seven Kernels in the [support matrix](kernel-support.md). Native installations and authentication remain separate from the consuming product. The common turn/tool/event boundary is alpha; optional controls remain Kernel-specific. The first example below uses Codex.
 
 For a source-free installation and personal task CLI, start with the [quickstart](quickstart.md). Shared interactions, settings, progress and native conversation operations are described in the [common API](common-api.md).
 
@@ -11,13 +11,12 @@ From a checkout of this repository:
 ```sh
 npm ci
 npm test
-npm pack
 cd examples/file-editor
-npm install ../../olorinm-agent-host-0.1.0-alpha.9.tgz
+npm install
 AGENT_HOST_CODEX=../../node_modules/.bin/codex npm start
 ```
 
-Codex must already be authenticated. `AGENT_HOST_CODEX` selects an executable; it does not install or replace a global CLI. The editor owns one example `document.txt`, asks before editing it, supports Ctrl-C cancellation and saves native bindings for restart. This alpha is installed from its archive; it has not been published to the npm registry.
+Codex must already be authenticated. `AGENT_HOST_CODEX` selects an executable; it does not install or replace a global CLI. The editor owns one example `document.txt`, asks before editing it, supports Ctrl-C cancellation and saves native bindings for restart. The example links the package directory of this checkout; the package has not been published to the npm registry.
 
 For an independently running HTTP process and a browser client, see [Standalone HTTP service](http-service.md). Both entry points use the same native adapters.
 
@@ -88,15 +87,13 @@ For external token management or custom process discovery, supply `connect`, ret
 
 `npm test` exercises protocol fixtures: event ordering, restart bindings, explicit recovery failures, tool deduplication and errors, namespaces, permissions/questions, cancellation, compaction and sibling-turn isolation. `npm run test:package` installs an archive into a separate consumer directory and runs the editor's approve/reject/cancel and restart tests, plus a TypeScript consumer check.
 
-Native probes use real model access and are opt-in:
+A native probe uses real model access and is opt-in:
 
 ```sh
-npm run probe:codex
 AGENT_HOST_NATIVE_PROBE=1 npm run test:package
 ```
 
-On macOS arm64 with Codex 0.162.1 and an existing native login, the native probe verifies a namespaced product tool, conversation continuation after process restart and native compaction. The current refresh and earlier platform/interaction probes have separate versioned evidence in the [support matrix](kernel-support.md).
-
+With an existing native Codex login, it runs the installed editor and HTTP service against the real executable: a rejected edit leaves the document unchanged, an approved edit saves, and the conversation continues after restart. See the [support matrix](kernel-support.md) for what the tests do and do not establish.
 
 ## Choosing an adapter
 
@@ -144,7 +141,7 @@ Use `createAgent({ kernel: 'hermes', transport: 'acp', options })` or `new Herme
 
 The HTTP profile selects `transport: 'acp'` and uses a stable private tool-connection reference under its state directory. Embedded products can inject `toolBridgeProvider: new AcpHostToolBridgeServer('agent-host', 'AGENT_HOST_TOOL', { connectionDirectory })` from the ACP entry point. Injected providers are caller-owned and must be closed by the caller. Programmatic HTTP profiles exclude the provider instance from their configuration fingerprint; use `configurationRevision` when intentionally changing its behavior. Reuse the directory and installation paths across restart, and enforce one active writer per session. Native MCP descriptors stay unchanged while endpoint tokens rotate. Forks preserve that configuration identity; concurrent tool calls through the same frozen configuration fail explicitly.
 
-Only negotiated model selection is exposed on this surface. ACP has no confirmed delete, steer or compression receipt in 0.22.1; those controls remain unsupported. See the [Gateway review](upgrade-gateways-20261015.md) for the native list limitation and TUI/ACP differences. TUI `fastMode` accepts `fast`, `normal`, `auto`, `cold`, `ultrafast`; OpenClaw accepts `true`, `false`, `auto`, `ultrafast`, subject to native provider availability.
+Only negotiated model selection is exposed on this surface. ACP has no confirmed delete, steer or compression receipt in 0.22.1; those controls remain unsupported. TUI `fastMode` accepts `fast`, `normal`, `auto`, `cold`, `ultrafast`; OpenClaw accepts `true`, `false`, `auto`, `ultrafast`, subject to native provider availability.
 
 ### OpenClaw product tools
 
@@ -164,9 +161,3 @@ Start a local Gateway with the bundled plugin. In its native configuration, add 
 The plugin declares one native `agent_host_call` tool and forwards the selected product action through a scoped loopback callback. The Gateway and product must be on the same machine. Remote Gateways can run native turns without product tools; this callback transport is not a remote sandbox bridge. Missing plugin or unavailable tools fails before submitting a turn.
 
 Pass a fully qualified `provider/model` when choosing a model. Canonical session keys returned by the Gateway are saved. `compact(nativeSessionKey)` only succeeds when the native result confirms compaction. Native shell approvals and questions are not mapped to common callbacks in this adapter.
-
-## Probes for the other Kernels
-
-After building, run `node scripts/probe-acp.mjs opencode|kimi|claude|pi|hermes|openclaw` with one Kernel name. Despite its historical filename, this script dispatches the native adapter for each Kernel. It packs and installs the package into a separate consumer, then checks rejection, approval and native restart continuation. It uses `AGENT_HOST_COMMAND`, `AGENT_HOST_ARGS` (JSON array), `AGENT_HOST_MODEL`, native credential environment, and for OpenClaw `AGENT_HOST_OPENCLAW_URL` / `AGENT_HOST_OPENCLAW_TOKEN`. Pi provider overrides are documented in the script as `AGENT_HOST_PI_*`; Hermes requires a prepared product-owned `HERMES_HOME`.
-
-See the [support matrix](kernel-support.md) for what native tests do and do not establish.

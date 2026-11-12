@@ -1,9 +1,9 @@
-# Cloudflare trial gateway
+# Cloudflare gateway
 
 An operator gateway over Cloudflare's native Durable Object Container API.
 The existing Environment interface remains unchanged; Mau handles accounts,
 ownership and lifecycle coordination, while Host retains native Agent sessions,
-tools and approvals. This is a bounded trial, not a completed production migration.
+tools and approvals. Cloudflare is the only provider of the Environment package.
 
 ## Deploy
 
@@ -96,7 +96,7 @@ for this gateway; do not enable those profile options.
   exposes no snapshot deletion; storage may remain billable until expiration.
 - File transfers are limited to 16 MiB per file; recursive listings to 10000
   files. Invocation logs must stay disabled. Explicit audit logs contain only safe event codes, resource IDs, outcomes and byte counts; never log headers, commands, request bodies or results.
-- Container placement is selected by Cloudflare. This trial does not promise
+- Container placement is selected by Cloudflare. The gateway does not promise
   a particular region or data residency. Check destination network access with
   the real native runtime before migrating traffic.
 
@@ -130,16 +130,7 @@ memory continuation.
 Adapter fixtures: from the parent directory run `npm test` and
 `npm run test:package`. Gateway validation: `npm run check && npm test`.
 
-The existing live probe provisions and destroys a billable environment:
-
-```sh
-node scripts/probe.mjs --config /private/providers.json --provider cloudflare \
-  --template node24 --workspace /workspace --report /private/probe.json
-```
-
-Run it from the parent directory. Where a local Node installation needs a proxy,
-configure it explicitly, for example `NODE_USE_ENV_PROXY=1`; never copy a local
-proxy address into the guest.
+These checks use local fixtures and do not create cloud environments.
 
 Real cloud acceptance on 2026-10-20 confirmed create, separate command streams,
 binary files, listing, explicit pause and resume with the same ID and file bytes.

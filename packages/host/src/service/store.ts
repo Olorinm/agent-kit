@@ -190,9 +190,6 @@ export class TaskStore {
     }
   }
   events(run: RunRecord, after: number, limit: number): EventPage {
-    const first = this.db
-      .prepare("SELECT MIN(sequence) AS sequence FROM events WHERE run_id = ?")
-      .get(run.id)?.sequence;
     const rows = this.db
       .prepare(
         "SELECT sequence, data FROM events WHERE run_id = ? AND sequence > ? ORDER BY sequence LIMIT ?",
@@ -203,13 +200,11 @@ export class TaskStore {
       event: JSON.parse(String(row.data)) as ServiceEvent,
     }));
     const cursor = events.at(-1)?.sequence ?? after;
-    // Runs recorded before kinds were tracked evicted any event; treat a gap as loss.
-    const legacy = run.lostThrough === undefined && run.liveDroppedThrough === undefined && typeof first === "number" && after < first - 1;
     return {
       events,
       cursor,
       hasMore: cursor < run.sequence,
-      historyTruncated: after < (run.lostThrough ?? 0) || legacy,
+      historyTruncated: after < (run.lostThrough ?? 0),
       liveGap: after < (run.liveDroppedThrough ?? 0),
     };
   }

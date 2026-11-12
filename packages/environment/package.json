@@ -10,7 +10,7 @@
     "directory": "packages/environment"
   },
   "engines": {
-    "node": ">=22"
+    "node": ">=24"
   },
   "files": [
     "dist",
@@ -43,7 +43,6 @@
     "build": "node --input-type=module -e \"import { rmSync } from 'node:fs'; rmSync('dist', { recursive: true, force: true });\" && tsc -p tsconfig.json",
     "test": "npm run build && node --test test/*.test.mjs",
     "test:package": "node scripts/test-package.mjs",
-    "probe": "npm run build && node scripts/probe.mjs",
     "prepack": "npm run build"
   },
   "devDependencies": {

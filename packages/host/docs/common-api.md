@@ -120,4 +120,4 @@ HTTP `task.steer(text)` is wired for Codex, Claude, Pi, Hermes TUI and OpenClaw.
 
 `client.session(...).compact()` is wired for all seven Kernels through their supported transport; Hermes canonical ACP lacks a verifiable completion receipt and reports unsupported. Native completion is required: Codex correlated events, Claude `compact_boundary`, Pi settled durable task/submission, OpenCode 2 ACP compaction receipt, Kimi completion receipt, Hermes compressed result, OpenClaw compacted result. Pi can explicitly finish with nothing to compact; the `control.result` reports `compacted:false` and the operation completes successfully. Kimi completion remains valid if the summary happens to grow. Missing receipts and uncertain cancellations remain failures with native uncertainty, not false success.
 
-See [native evidence](native-verification.md) for what has actually been executed and [remaining boundaries](capability-gaps.md) for upstream/environment limits.
+See [kernel support](kernel-support.md) for tested versions, what the tests establish and upgrade boundaries.

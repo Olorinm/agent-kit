@@ -27,6 +27,56 @@ updates:
     ignore:
       - dependency-name: "@types/node"
         update-types: ["version-update:semver-major"]
+  - package-ecosystem: npm
+    directory: /packages/host
+    schedule:
+      interval: weekly
+    groups:
+      all:
+        patterns: ["*"]
+    ignore:
+      - dependency-name: "@types/node"
+        update-types: ["version-update:semver-major"]
+  - package-ecosystem: npm
+    directory: /packages/connectors
+    schedule:
+      interval: weekly
+    groups:
+      all:
+        patterns: ["*"]
+    ignore:
+      - dependency-name: "@types/node"
+        update-types: ["version-update:semver-major"]
+  - package-ecosystem: npm
+    directory: /packages/connectors/cloudflare
+    schedule:
+      interval: weekly
+    groups:
+      all:
+        patterns: ["*"]
+    ignore:
+      - dependency-name: "@types/node"
+        update-types: ["version-update:semver-major"]
+  - package-ecosystem: npm
+    directory: /packages/environment
+    schedule:
+      interval: weekly
+    groups:
+      all:
+        patterns: ["*"]
+    ignore:
+      - dependency-name: "@types/node"
+        update-types: ["version-update:semver-major"]
+  - package-ecosystem: npm
+    directory: /packages/environment/cloudflare
+    schedule:
+      interval: weekly
+    groups:
+      all:
+        patterns: ["*"]
+    ignore:
+      - dependency-name: "@types/node"
+        update-types: ["version-update:semver-major"]
   - package-ecosystem: docker
     directory: /packages/router
     schedule:
