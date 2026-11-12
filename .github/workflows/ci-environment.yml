@@ -10,6 +10,11 @@ permissions:
 defaults:
   run:
     working-directory: packages/environment
+env:
+  # scripts/build.mjs applies the E2B patch with `git apply`, which skips paths
+  # outside the current directory inside a repository. Stop repository discovery
+  # above the package so the patch applies to the package's build copy.
+  GIT_CEILING_DIRECTORIES: ${{ github.workspace }}/packages
 jobs:
   check:
     runs-on: ubuntu-latest

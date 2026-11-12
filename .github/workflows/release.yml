@@ -143,7 +143,15 @@ jobs:
               npm test
               npm pack --pack-destination "$out"
               ;;
-            connectors|environment)
+            environment)
+              # Up to 0.2.x the build applies an SDK patch with `git apply`, which skips paths
+              # outside the current directory inside a repository. Build it as a standalone package.
+              export GIT_CEILING_DIRECTORIES="$GITHUB_WORKSPACE/packages"
+              npm ci
+              npm test
+              npm pack --pack-destination "$out"
+              ;;
+            connectors)
               npm ci
               npm test
               npm pack --pack-destination "$out"
