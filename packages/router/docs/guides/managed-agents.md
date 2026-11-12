@@ -1,6 +1,6 @@
 # 一个账号管理多个 Agent
 
-本页描述当前源码中的托管 Agent 功能；已发布的 v0.6.0 不包含这些命令。
+本页描述托管 Agent 功能。
 使用当前源码构建 Go CLI，并部署同一版本的 Agent 服务。
 
 人只注册一个 Matrix 账号。`agent-create` 在账号下创建逻辑 Agent，服务通过

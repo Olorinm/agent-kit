@@ -39,7 +39,6 @@ export interface WebLedgerDependencies {
   /** Opens the agent runtime (and so its ledger) when a chat names an agent that is not running yet. */
   open(agentId: string): Promise<void>;
   owned(ownerId: string): Array<{ id: string; name: string }>;
-  debug(agentId: string): Record<string, unknown>;
   /** ADR 0005 `send` (phase 3, `AGENT_LEDGER_SEND`): owner messages and redactions through the web channel. */
   send?: boolean | undefined;
   /** The agent's web channel; undefined when the agent has no channel runtime. */
@@ -318,12 +317,6 @@ export function createWebLedger(dependencies: WebLedgerDependencies) {
   }
   mountRoomRoutes(router, { principal, hub, owned: dependencies.owned, open: dependencies.open, enabled: groups, kick: () => dependencies.kick?.() });
   if (dependencies.identity) identityRoutes(router, dependencies.identity, principal);
-  /** Phase 1 diffing aid: ledger counts beside the legacy and Matrix mirror counts, per owned agent. */
-  router.get("/debug/ledger", async (_req, res) => {
-    const data = [];
-    for (const agent of dependencies.owned(principal(res).ownerId)) { await dependencies.open(agent.id); data.push({ agentId: agent.id, ...dependencies.debug(agent.id) }); }
-    res.json({ data });
-  });
   // ---- Phase 4: attachments (ADR 0005 16.5), routes in src/ledger/blobs-web.ts ----
   attachmentRoutes(router, dependencies.attachments, principal);
 

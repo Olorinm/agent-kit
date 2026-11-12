@@ -112,8 +112,6 @@ describe("owner history API", () => {
     expect((await t.api(`${root}/web/chats/${enc(chatId)}/turns/missing`)).status).toBe(404);
     expect((await t.api(`${root}/web/chats/${enc(chatId)}/events?after=1&generation=1`)).data).toMatchObject({ mode: "reset", reset: { reason: "gap_too_large" } });
     expect((await t.api(`${root}/web/chats/${enc(chatId)}/events?limit=200`)).data.events).toHaveLength(200);
-    const debug = (await t.api(`${root}/web/debug/ledger`)).data.data[0];
-    expect(debug).toMatchObject({ agentId: t.agent.id, ledger: { sessions: 2, events: 1102 }, inbox: 2, timeline: 0 });
   });
   it("opens a DM chat idempotently for owned agents only", async () => {
     const t = await setup(), chatId = `dm:${t.agent.id}`;
@@ -126,7 +124,7 @@ describe("owner history API", () => {
   it("authenticates every route", async () => {
     const t = await setup();
     for (const [method, path] of [["GET", "/me"], ["POST", "/socket-tickets"], ["GET", "/chats"], ["GET", `/chats/dm:${t.agent.id}`],
-      ["GET", `/chats/dm:${t.agent.id}/events`], ["POST", `/chats/dm:${t.agent.id}/read`], ["GET", "/debug/ledger"], ["GET", "/unknown"]] as const)
+      ["GET", `/chats/dm:${t.agent.id}/events`], ["POST", `/chats/dm:${t.agent.id}/read`], ["GET", "/unknown"]] as const)
       expect((await t.api(`${root}/web${path}`, "", method, method === "POST" ? {} : undefined)).status).toBe(401);
   });
   it("stays off unless ledger_read is enabled", async () => {

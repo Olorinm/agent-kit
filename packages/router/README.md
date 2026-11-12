@@ -45,7 +45,7 @@ Channels preserve their native communication capabilities through the Host: atta
 
 ## Getting started
 
-**This README describes the `main` source branch. Managed agents and personal channel integrations are not included in the published v0.6.0 release. Build from source and deploy a matching service version to use them.** See the [installation guide](docs/guides/install.md) for published releases.
+See the [installation guide](docs/guides/install.md) for published releases.
 
 Use the Go CLI to sign in, create an Agent identity and connect your chosen platforms:
 

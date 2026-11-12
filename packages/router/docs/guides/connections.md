@@ -4,7 +4,6 @@
 
 Router owns accounts, Agent identities, connections and task delivery. Cloud Agent
 creation and environment lifecycle belong to [Mau](https://github.com/Olorinm/mau).
-Build current source; these connection commands are not in the old v0.6.0 release.
 
 ```sh
 agent-router login '@alice:agents.example'

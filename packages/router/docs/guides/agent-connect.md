@@ -6,18 +6,18 @@
 
 先用 `agent-current` 查看当前 Agent／实例，再使用下方的 `claim`、`work`、`reply` 操作。服务用凭证中的实例 ID 判断身份，不信任 `--worker` 提交的名字；每个会话固定到首次领取的实例，其他实例不能提交这个领取的结果。每份实例凭证只运行一个进程。联系人及许可修改由主人账号完成。Node 服务和 Matrix 凭证留在节点服务器。
 
-详见[一个账号管理多个 Agent](managed-agents.md)。这些命令需要当前源码构建，已发布的 v0.6.0 尚不包含。下方单身份连接器的注册与启动说明用于原生 Matrix 互操作；托管实例跳过这些步骤，直接领取工作。
+详见[一个账号管理多个 Agent](managed-agents.md)。下方单身份连接器的注册与启动说明用于原生 Matrix 互操作；托管实例跳过这些步骤，直接领取工作。
 
 
 双方 Agent 都可以只使用 `agent-router`。CLI 负责账号、收发、会话和权限，并把处理进度与结果接回原请求；Matrix 和 A2A 的传输转换由连接器完成。默认不需要 Agent Card、A2A 服务或公网端口。
 
 [English guide](agent-connect.en.md) · [安装入口](install.md) · [命令与输出约定](cli-contract.md)
 
-当前源码构建的 `agent-router agent-guide` 默认输出英文，`agent-guide zh` 输出本指南。已发布的 v0.6.0 二进制仍使用原来的无参数命令输出中文，语言选择参数将在后续发布中提供。
+`agent-router agent-guide` 默认输出英文，`agent-guide zh` 输出本指南。
 
 ## 登录并保持连接
 
-先按[安装入口](install.md)安装发布包：Homebrew 安装 Go CLI，npm 安装同一版本的 connector；已有本项目源码时也可以执行 `sh scripts/install.sh --version 0.6.0` 一次安装两者。默认安装到 `~/.local/bin`，请把该目录加入 Agent 宿主的 PATH。CLI 本身不需要 Go/Node/npm，本地常驻 connector 需要 Node.js 24。
+先按[安装入口](install.md)安装同一版本的 Go CLI 和 connector；已有本项目源码时也可以执行 `sh scripts/install.sh` 一次安装两者。默认安装到 `~/.local/bin`，请把该目录加入 Agent 宿主的 PATH。CLI 本身不需要 Go/Node/npm，本地常驻 connector 需要 Node.js 24。
 
 先取得服务器地址、账号或邀请码，以及对方 Agent 的地址。下面的 `agents.example` 是占位符，不是公开试用服务器。没有账号时可以按[本地验证指南](local-verification.md)创建隔离的测试身份。注册、登录由 Go 直接完成，消息与任务命令调用已运行的通信服务。
 

@@ -6,13 +6,12 @@ An owner logs in once and creates Agents with `agent-create NAME`. `agent-use NA
 
 Use `agent-current` to inspect the selected Agent and instance, then the `claim`/`work`/`reply` loop below. The service authenticates the instance independently of `--worker`, pins each conversation to its first instance and rejects updates to another instance's claim. Keep one running process per instance credential. Contact/permission changes require the owner's profile. The Node service and all Matrix credentials stay on the node.
 
-See [the managed onboarding guide](managed-agents.md) and the README. These commands require the current source build, not the published v0.6.0 binary. The single-identity connector instructions below describe native Matrix interoperability mode; skip its registration and local connector startup when using a managed instance.
+See [the managed onboarding guide](managed-agents.md) and the README. The single-identity connector instructions below describe native Matrix interoperability mode; skip its registration and local connector startup when using a managed instance.
 
 
 Use `agent-router` to send requests to remote agents, claim incoming work and return results. The receiving agent works with its own model, files, tools and permissions. Keep your existing agent session running to handle work; `connect` maintains communication and does not launch a model.
 
 English: `agent-router agent-guide en`. 中文：`agent-router agent-guide zh`.
-These language arguments are available in builds containing this guide. The published v0.6.0 binary prints its original Chinese guide with `agent-router agent-guide`; use this document for English instructions until the next release.
 
 ## Prepare the installation and account
 
