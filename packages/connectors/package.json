@@ -1,0 +1,85 @@
+{
+  "name": "@olorinm/agent-connectors",
+  "version": "0.1.0-alpha.11",
+  "description": "Business connectors for Agents: credentials, server-side authorization and approval-bound writes behind MCP",
+  "type": "module",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Olorinm/agent-connectors.git"
+  },
+  "engines": {
+    "node": ">=24"
+  },
+  "files": [
+    "dist",
+    "guides",
+    "LICENSE",
+    "NOTICE",
+    "README.md",
+    "README.zh-CN.md",
+    "docs"
+  ],
+  "allowScripts": {
+    "@larksuite/cli@1.0.97": true,
+    "agent-browser@0.41.2": false
+  },
+  "exports": {
+    "./guides": {
+      "types": "./dist/guides.d.ts",
+      "import": "./dist/guides.js"
+    },
+    "./read-client": {
+      "types": "./dist/read-client.d.ts",
+      "import": "./dist/read-client.js"
+    },
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./issuer": {
+      "types": "./dist/issuer.d.ts",
+      "import": "./dist/issuer.js"
+    },
+    "./feishu-bot-reader": {
+      "types": "./dist/feishu-bot-reader.d.ts",
+      "import": "./dist/feishu-bot-reader.js"
+    },
+    "./cloudflare-read-client": {
+      "types": "./dist/cloudflare-read-client.d.ts",
+      "import": "./dist/cloudflare-read-client.js"
+    }
+  },
+  "bin": {
+    "agent-connectors": "dist/cli.js"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "npm run build && node --test test/*.test.mjs",
+    "prepack": "npm run build",
+    "test:cloudflare": "node --test cloudflare/test/*.test.mjs"
+  },
+  "dependencies": {
+    "@google-cloud/kms": "6.3.0",
+    "@googleapis/calendar": "^20.1.0",
+    "@googleapis/docs": "^14.1.1",
+    "@googleapis/drive": "^26.0.2",
+    "@googleapis/gmail": "^22.0.2",
+    "@googleapis/sheets": "^18.1.1",
+    "@googleapis/slides": "^10.1.1",
+    "@larksuite/cli": "1.0.97",
+    "@modelcontextprotocol/sdk": "^1.32.1",
+    "agent-browser": "0.41.2",
+    "gaxios": "^8.3.1",
+    "google-auth-library": "^11.3.1",
+    "html-to-text": "^10.0.1",
+    "jose": "^6.2.12",
+    "nodemailer": "^10.3.1",
+    "zod": "^4.6.7"
+  },
+  "devDependencies": {
+    "@types/html-to-text": "^9.0.4",
+    "@types/node": "^24.19.2",
+    "typescript": "^7.0.2"
+  }
+}

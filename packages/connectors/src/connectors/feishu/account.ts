@@ -1,0 +1,216 @@
+// Adapted from Agent Router (MIT, Agent Router contributors): src/services/feishu/cli.ts.
+import { execFile } from "node:child_process";
+import { createRequire } from "node:module";
+import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
+import { dirname, join, resolve } from "node:path";
+import { randomUUID } from "node:crypto";
+import { z } from "zod";
+import { secretPath } from "../../secret-files.js";
+
+export const feishuCredentialsSchema = z.object({ version: z.literal(1), appId: z.string().min(1),
+  appSecretFile: z.string().min(1), domain: z.enum(["feishu", "lark"]), ownerOpenId: z.string().min(1) }).strict();
+export type FeishuCredentials = z.infer<typeof feishuCredentialsSchema>;
+export function privateFile(path: string, value: unknown): void {
+  mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
+  const temporary = `${path}.${randomUUID()}.partial`;
+  writeFileSync(temporary, typeof value === "string" ? value : JSON.stringify(value, null, 2) + "\n", { mode: 0o600, flag: "wx" });
+  renameSync(temporary, path); chmodSync(path, 0o600);
+}
+export function loadFeishuCredentials(path: string) {
+  const credentials = feishuCredentialsSchema.parse(JSON.parse(readFileSync(path, "utf8")));
+  secretPath(credentials.appSecretFile);
+  const directory = dirname(resolve(path));
+  const appSecret = readFileSync(resolve(directory, credentials.appSecretFile), "utf8").trim();
+  if (!appSecret) throw new Error("empty_feishu_app_secret");
+  return { credentials, directory, appSecret };
+}
+export type FeishuState = "connected" | "authorization_required" | "expired" | "verification_failed" | "owner_mismatch" | "application_mismatch";
+export interface FeishuStatus {
+  appId: string; ownerOpenId: string; authorized: boolean; verified: boolean; userName: string; scope: string[];
+  /** Product-facing state; `reason` explains `expired`. */
+  state: FeishuState; reason?: string;
+  /** The CLI's own user status, kept for diagnostics. */
+  status: string;
+}
+export const feishuApplicationSchema = z.object({
+  appId: z.string().regex(/^cli_[a-zA-Z0-9_]{1,128}$/), appSecret: z.string().regex(/^[\x21-\x7e]{1,512}$/),
+  domain: z.enum(["feishu", "lark"]), ownerOpenId: z.string().regex(/^ou_[a-zA-Z0-9_-]{1,128}$/),
+}).strict();
+export type FeishuApplication = z.infer<typeof feishuApplicationSchema>;
+
+/**
+ * Installs an application the product already created (for example the bot that Router's chat channel uses) into a
+ * connection directory. The same app and owner keep the owner's existing authorization; a different app or owner
+ * removes the previous CLI configuration and user tokens, which belonged to the old identity.
+ */
+export function installFeishuApplication(directory: string, application: FeishuApplication): { changed: boolean } {
+  const credentialsFile = join(directory, "credentials.json");
+  let changed = true;
+  if (existsSync(credentialsFile)) {
+    const current = feishuCredentialsSchema.safeParse(JSON.parse(readFileSync(credentialsFile, "utf8")));
+    changed = !current.success || current.data.appId !== application.appId || current.data.domain !== application.domain ||
+      current.data.ownerOpenId !== application.ownerOpenId;
+  }
+  mkdirSync(directory, { recursive: true, mode: 0o700 });
+  if (changed) for (const name of ["lark-cli", "cli-data", "home", "workspace", "authorization.json", "authorized.json"])
+    rmSync(join(directory, name), { recursive: true, force: true });
+  privateFile(join(directory, "app-secret"), application.appSecret);
+  privateFile(credentialsFile, { version: 1, appId: application.appId, appSecretFile: "app-secret", domain: application.domain, ownerOpenId: application.ownerOpenId });
+  return { changed };
+}
+export interface CliResult { code: number; stdout: string; stderr: string; }
+export type CliRunner = (args: string[], options: { cwd: string; env: NodeJS.ProcessEnv; timeout: number }) => Promise<CliResult>;
+export const runOfficialCli: CliRunner = (args, options) => new Promise((resolveResult, reject) => {
+  const require = createRequire(import.meta.url);
+  const binary = join(dirname(require.resolve("@larksuite/cli/package.json")), "bin", process.platform === "win32" ? "lark-cli.exe" : "lark-cli");
+  if (!existsSync(binary)) { reject(new Error("official_lark_cli_not_installed")); return; }
+  // Invoke the pinned official binary, never a shell or the user's global CLI configuration.
+  const child = execFile(binary, args, { ...options, maxBuffer: 2_000_000, encoding: "utf8" }, (error, stdout, stderr) => {
+    if (error && typeof error.code !== "number") { reject(new Error(error.killed ? "lark_cli_execution_interrupted" : "lark_cli_execution_failed")); return; }
+    resolveResult({ code: error?.code as number ?? 0, stdout, stderr });
+  });
+  // Commands that would wait for stdin get end-of-file immediately.
+  child.stdin?.end();
+});
+function json(output: CliResult): any {
+  const text = output.stdout.trim() || output.stderr.trim();
+  try { return JSON.parse(text); } catch { throw new Error("invalid_lark_cli_response"); }
+}
+const scopeSchema = z.array(z.string().regex(/^[a-zA-Z0-9_:.-]{1,128}$/)).max(100);
+const pendingSchema = z.object({ deviceCode: z.string().min(1), verificationUrl: z.url(), expiresAt: z.number(), requestedScopes: scopeSchema.default([]) });
+export class FeishuAccount {
+  readonly workspace: string;
+  readonly configDirectory: string;
+  readonly dataDirectory: string;
+  readonly homeDirectory: string;
+  private queue: Promise<unknown> = Promise.resolve();
+  private authorizationQueue: Promise<unknown> = Promise.resolve();
+  constructor(readonly credentials: FeishuCredentials, readonly directory: string, readonly runner: CliRunner = runOfficialCli) {
+    this.directory = resolve(directory);
+    this.workspace = join(this.directory, "workspace"); this.configDirectory = join(this.directory, "lark-cli");
+    this.dataDirectory = join(this.directory, "cli-data");
+    this.homeDirectory = join(this.directory, "home");
+    mkdirSync(this.homeDirectory, { recursive: true, mode: 0o700 });
+    mkdirSync(this.workspace, { recursive: true, mode: 0o700 });
+    mkdirSync(this.configDirectory, { recursive: true, mode: 0o700 });
+    mkdirSync(this.dataDirectory, { recursive: true, mode: 0o700 });
+    const configFile = join(this.configDirectory, "config.json");
+    if (!existsSync(configFile)) privateFile(configFile, { apps: [{ appId: credentials.appId,
+      appSecret: { source: "file", id: resolve(this.directory, credentials.appSecretFile) },
+      brand: credentials.domain, defaultAs: "user", users: [] }] });
+    const config = JSON.parse(readFileSync(configFile, "utf8"));
+    if (config.apps?.length !== 1 || config.apps[0]?.appId !== credentials.appId || config.apps[0]?.brand !== credentials.domain)
+      throw new Error("feishu_cli_application_mismatch");
+    // A restored encrypted bundle has a new private runtime path on each start.
+    secretPath(credentials.appSecretFile);
+    config.apps[0].appSecret = { source: "file", id: resolve(this.directory, credentials.appSecretFile) };
+    privateFile(configFile, config);
+  }
+  command(args: string[], timeout = 30_000, cwd = this.workspace): Promise<CliResult> {
+    const operation = this.queue.then(() => {
+      const env = { ...process.env };
+      for (const name of Object.keys(env)) if (/^(OPENCLAW_|HERMES_)/.test(name) || name === "LARK_CHANNEL" ||
+        /^LARKSUITE_CLI_(APP_ID|APP_SECRET|BRAND|PROFILE|DEFAULT_AS|USER_ACCESS_TOKEN|TENANT_ACCESS_TOKEN.*|AUTH_PROXY|TOKEN_ONLY__.*)$/.test(name)) delete env[name];
+      // The CLI also allows ~/files; give each account its own empty home.
+      env.HOME = this.homeDirectory;
+      env.LARKSUITE_CLI_CONFIG_DIR = this.configDirectory;
+      env.LARKSUITE_CLI_DATA_DIR = this.dataDirectory;
+      env.LARKSUITE_CLI_NO_UPDATE_NOTIFIER = "1"; env.LARKSUITE_CLI_NO_SKILLS_NOTIFIER = "1";
+      // After the first word and in --name=value form, so no preceding flag can take it as a value.
+      return this.runner([args[0]!, `--profile=${this.credentials.appId}`, ...args.slice(1)], { cwd, env, timeout });
+    });
+    this.queue = operation.catch(() => {}); return operation;
+  }
+  async status(verify = false): Promise<FeishuStatus> {
+    const output = await this.command(["auth", "status", "--json", ...(verify ? ["--verify"] : [])]);
+    const value = json(output), user = value.identities?.user;
+    const appMatches = value.appId === this.credentials.appId;
+    const ownerMatches = user?.openId === this.credentials.ownerOpenId;
+    const tokenStatus = String(user?.tokenStatus ?? ""), message = String(user?.message ?? "");
+    const authorized = output.code === 0 && appMatches && ownerMatches && user?.available === true && !["expired", "missing", "invalid", "revoked"].includes(tokenStatus);
+    const verified = verify && value.verified === true && user?.verified === true && appMatches && ownerMatches;
+    // The CLI reports a lost user token as `missing`, like one that never existed; the local marker tells them apart.
+    if (authorized && ownerMatches && !existsSync(this.markerFile)) privateFile(this.markerFile, { openId: this.credentials.ownerOpenId, at: new Date().toISOString() });
+    const previously = existsSync(this.markerFile);
+    let state: FeishuState, reason: string | undefined;
+    if (!appMatches) state = "application_mismatch";
+    else if (user?.available && !ownerMatches) state = "owner_mismatch";
+    else if (authorized) state = verify && !verified ? "verification_failed" : "connected";
+    else if (previously) {
+      state = "expired";
+      reason = /refresh token expired/i.test(message) || tokenStatus === "expired" ? "refresh_token_expired"
+        : ["invalid", "revoked"].includes(tokenStatus) ? "token_revoked" : "authorization_lost";
+    } else state = "authorization_required";
+    return { appId: this.credentials.appId, ownerOpenId: this.credentials.ownerOpenId, authorized, verified,
+      userName: ownerMatches ? String(user?.userName ?? "") : "", scope: ownerMatches ? String(user?.scope ?? "").split(/\s+/).filter(Boolean) : [],
+      state, ...(reason ? { reason } : {}),
+      status: !appMatches ? "application_mismatch" : user?.available && !ownerMatches ? "owner_mismatch" : String(user?.status ?? "not_authorized"),
+    };
+  }
+  /** Set after the owner's authorization was verified once; distinguishes expiry from never authorized. */
+  get markerFile() { return join(this.directory, "authorized.json"); }
+  /** A pending device authorization the owner has not finished yet. */
+  pending(): { verificationUrl: string; expiresAt: string } | undefined {
+    const path = join(this.directory, "authorization.json");
+    if (!existsSync(path)) return undefined;
+    const pending = pendingSchema.safeParse(JSON.parse(readFileSync(path, "utf8")));
+    if (!pending.success || pending.data.expiresAt <= Date.now()) return undefined;
+    return { verificationUrl: pending.data.verificationUrl, expiresAt: new Date(pending.data.expiresAt).toISOString() };
+  }
+  private authorize<T>(operation: () => Promise<T>): Promise<T> {
+    const result = this.authorizationQueue.then(operation);
+    this.authorizationQueue = result.catch(() => {}); return result;
+  }
+  begin(domains: string[] = ["all"]) { return this.authorize(() => this.beginAuthorization(domains, [])); }
+  private async beginAuthorization(domains: string[], scopes: string[]) {
+    const selected = z.array(z.string().regex(/^[a-z][a-z0-9_]{0,47}$/)).min(1).max(30).parse(domains);
+    const requestedScopes = scopeSchema.parse(scopes);
+    const output = await this.command(["auth", "login", "--domain", selected.join(","), ...(requestedScopes.length ? ["--scope", requestedScopes.join(" ")] : []), "--no-wait", "--json"]);
+    if (output.code !== 0) throw new Error("feishu_authorization_start_failed");
+    const value = json(output);
+    const pending = pendingSchema.parse({ deviceCode: value.device_code, verificationUrl: value.verification_url, requestedScopes,
+      expiresAt: Date.now() + z.number().int().positive().max(86_400).parse(value.expires_in) * 1000 });
+    privateFile(join(this.directory, "authorization.json"), pending);
+    return { verificationUrl: pending.verificationUrl, expiresAt: new Date(pending.expiresAt).toISOString() };
+  }
+  complete() { return this.authorize(() => this.completeAuthorization()); }
+  disconnect() {
+    return this.authorize(async () => {
+      const result = await this.command(["auth", "logout", "--json"]);
+      if (result.code !== 0) throw new Error("feishu_logout_failed");
+      this.clearPending();
+      rmSync(this.markerFile, { force: true });
+      return { status: "disconnected" };
+    });
+  }
+  private async completeAuthorization() {
+    const current = await this.status(true);
+    if (current.authorized && current.verified) { this.clearPending(); return current; }
+    const pending = pendingSchema.parse(JSON.parse(readFileSync(join(this.directory, "authorization.json"), "utf8")));
+    if (pending.expiresAt <= Date.now()) throw new Error("feishu_authorization_expired");
+    const output = await this.command(["auth", "login", "--device-code", pending.deviceCode, "--json"], 30_000);
+    if (output.code !== 0) throw new Error("feishu_authorization_not_completed");
+    const status = await this.status(true);
+    if (!status.authorized || !status.verified) throw new Error(status.status === "owner_mismatch" ? "feishu_authorized_wrong_owner" : "feishu_authorization_verification_failed");
+    this.clearPending();
+    privateFile(this.markerFile, { openId: this.credentials.ownerOpenId, at: new Date().toISOString() });
+    return status;
+  }
+  private clearPending() { const path = join(this.directory, "authorization.json"); if (existsSync(path)) unlinkSync(path); }
+  async pollAuthorization(): Promise<void> {
+    const path = join(this.directory, "authorization.json");
+    if (!existsSync(path)) return;
+    const pending = pendingSchema.parse(JSON.parse(readFileSync(path, "utf8")));
+    if (pending.expiresAt <= Date.now()) return;
+    try { await this.complete(); } catch { /* Pending consent is normal. The next bounded poll resumes it. */ }
+  }
+  authorizationLink(scopes: string[] = []) { return this.authorize(() => this.pendingAuthorizationLink(scopeSchema.parse(scopes))); }
+  private async pendingAuthorizationLink(scopes: string[]) {
+    const path = join(this.directory, "authorization.json");
+    if (existsSync(path)) {
+      const pending = pendingSchema.parse(JSON.parse(readFileSync(path, "utf8")));
+      if (pending.expiresAt > Date.now() && scopes.every((scope) => pending.requestedScopes.includes(scope))) return pending.verificationUrl;
+    }
+    return (await this.beginAuthorization(["all"], scopes)).verificationUrl;
+  }
+}

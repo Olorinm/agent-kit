@@ -1,0 +1,15 @@
+node_modules
+keys/
+secrets/
+dist/
+coverage/
+*.tgz
+.env
+.env.*
+.DS_Store
+.local/
+state/
+.wrangler/
+.dev.vars*
+__pycache__/
+*.py[cod]
