@@ -13,4 +13,4 @@ The OpenClaw runtime is not included or required.
 
 Feishu uses the official Lark SDK 1.74.0 as an npm dependency.
 Telegram uses grammY; their licenses
-remain with their distributed packages. Matrix continues to use the existing matrix-js-sdk transport.
+remain with their distributed packages.

@@ -7,11 +7,33 @@ section in the version-bump commit before tagging. Changes up to the versions li
 
 ## [Unreleased]
 
-- **Router:** the service (`ManagedService`, `createManagedApp`) moved from `src/matrix/` to
-  `src/service/managed.ts`, the standalone entry to `src/service/main.ts` (`npm run agent:service`
-  now starts `dist/service/main.js`), and the per-agent runtime and gateway to `src/agents/`.
-  `src/matrix/` holds only Matrix modules. The re-export files `src/matrix/cli-work.ts` and
-  `src/matrix/store.ts` are gone. The package root exports and behaviour are unchanged.
+- **Router:** the service (`ManagedService`, `createManagedApp`) lives in `src/service/managed.ts`,
+  the standalone entry in `src/service/main.ts` (`npm run agent:service` starts
+  `dist/service/main.js`) and the per-agent runtime in `src/agents/runtime.ts`; `src/matrix/` is gone.
+- **Router:** removed Matrix and everything built on it. Router is now accounts and agents, channel
+  connections, the owner ledger and task delivery to Agent Host.
+  - Removed: the Matrix transport, Application Service, per-agent Matrix toggle and `matrix` connection
+    kind; the social/contacts/rooms API, A2A between agents over Matrix and federation; `/directory`;
+    external identity (`ars_` sessions, `/auth/exchange`, `AGENT_IDENTITY_CONFIG_FILE`); the per-agent
+    HTTP gateway (`/agents/:id/gateway/*`) and instance routes (`/agents/:id/instances`), so work is
+    taken only by the in-process Host worker; the Go CLI `agent-router` with its install script and
+    release archives; the standalone connector (`agent-router-connector`); the TypeScript SDK
+    (`packages/sdk`) and `examples/echo-agent`; `compose.yaml`, `Dockerfile`, `Caddyfile`, `deploy/`,
+    `scripts/matrix` and the two-homeserver lab; the guides, specification, conformance document and
+    ADRs 0002–0004 that described them.
+  - Operators: no configuration change is required. `MATRIX_SERVER_NAME` is still read, as the account
+    namespace. `AGENT_MATRIX`, `MATRIX_HOMESERVER_URL`, `MATRIX_AS_TOKEN_FILE`, `MATRIX_HS_TOKEN_FILE`
+    and `MATRIX_ADMIN_TOKEN_FILE` are ignored. `ledgerRead` without `ledgerSend` is rejected at start.
+    A `matrix` connection left in a stored channel configuration is ignored.
+  - Embedding API: `ServiceConfig` has no `matrix`, `homeserver`, `asToken`, `hsToken` or
+    `externalIdentity`; `ServiceDependencies` has no `provision`, `transport` or `deprovision`;
+    `service.runtime(id)` resolves to an `AgentRuntime` (`store`, `work`, `extension`) instead of
+    `{ connector, app, token, extension }`; agent API objects and the `GET /web/me` features have no
+    `matrix` member; `externalIdentityConfigSchema` is no longer exported; the package has no `bin`.
+    A bearer token is resolved only by `ServiceDependencies.authenticate` (401
+    `account_login_required` without it) and its result is not cached.
+  - `CODE_OF_CONDUCT.md`, `CONTRIBUTING.md` and `SECURITY.md` moved to the repository root and cover
+    all packages.
 
 ## [0.8.0-alpha.2] - 2026-11-12
 

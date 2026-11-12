@@ -2,145 +2,114 @@
 
 [简体中文](connections.zh-CN.md)
 
-Router owns accounts, Agent identities, connections and task delivery. Cloud Agent
-creation and environment lifecycle belong to [Mau](https://github.com/Olorinm/mau).
+Router owns accounts, agents, channel connections and task delivery. Creating execution environments and starting a Host
+belong to the operator or the embedding product.
 
-```sh
-agent-router login '@alice:agents.example'
-agent-router agent-create helper
-agent-router connection-options
+The routes below are under `/_agent-router/v1` and require the authenticated owner of the agent (see
+[Accounts and agents](managed-agents.md)). Responses are sent with `Cache-Control: no-store`.
+
+| Route | Purpose |
+| --- | --- |
+| `GET /connection-options` | The mail services an owner can choose (`id`, `label`) |
+| `GET /agents/:id/configuration` | The agent, its Host (`runtimeId`) and its connections (`id`, `kind`), plus live channel status. No secrets. |
+| `POST /agents/:id/connections` | Connect one platform |
+| `GET /agents/:id/connection-jobs` | Recent setup jobs |
+| `GET /agents/:id/connection-jobs/:job` | One setup job |
+| `POST /agents/:id/connection-jobs/:job/pairing` | Supply a Weixin pairing code: `{ "code": "123456" }` |
+| `POST /agents/:id/check` | Read-only checks of the Host and every connection; body `{}` |
+
+## Connect a platform
+
+`POST /agents/:id/connections` takes one of these bodies:
+
+```json
+{ "kind": "feishu", "domain": "feishu" }
+{ "kind": "weixin" }
+{ "kind": "telegram", "token": "<bot token>" }
+{ "kind": "grove-mail", "serviceId": "mail", "inboxId": "helper@mail.example.test",
+  "apiKey": "<inbox API key>", "ownerEmail": "alice@example.test" }
 ```
 
-An operator or embedding product connects a Host; an existing worker may also
-claim tasks using Router's normal instance API.
+An agent has at most one connection of each platform. Connecting a platform that is already configured is refused with
+`409 platform_already_connected`; it does not replace the existing connection.
 
-## Connect your chosen platforms
+Feishu, Weixin and Telegram answer `202` with a setup job:
 
-```sh
-agent-router channel-connect feishu
-agent-router channel-connect weixin
-agent-router channel-connect telegram --bot-token-file /private/telegram-token
-agent-router channel-connect matrix
+```json
+{ "id": "<job id>", "kind": "feishu", "state": "starting", "expiresAt": "<ISO time>",
+  "url": "https://…", "qr": "<terminal QR code of url>" }
 ```
 
-Run only the commands for the platforms you want.
+Poll `GET /agents/:id/connection-jobs/:job` until `state` is `ready` or `failed`. `url` and `qr` are present while the
+owner has something to open or scan. A failed job has `error`.
 
-- **Feishu:** the terminal displays the official app setup QR/link. App consent
-  connects messaging through the app's bot. Use `--domain lark` for Lark. Router
-  has no personal (user-identity) Feishu tools; the app credentials it saves in
-  the Agent directory (`feishu/credentials.json`, `feishu/app-secret`) can be
-  reused by a separate connector for that.
-- **Weixin:** scan the terminal QR in WeChat. If Tencent requires a pairing code,
-  the CLI prompts without echo. This is Tencent iLink private chat support.
-- **Telegram:** create a bot with BotFather and supply its token using a file
-  or hidden prompt. Open the printed one-use link and press Start in a private
-  chat. The Router binds that sender only after the matching `/start` proof.
-  The bot must have no webhook or other polling consumer.
-- **Matrix:** connect native chat using the Agent's existing service identity.
-  The underlying Matrix identity/transport remains part of the node even when
-  you do not choose Matrix as a user-facing platform.
+- **Feishu:** open or scan `url` to create the app through the official app registration page. App consent connects
+  messaging through the app's bot. Use `"domain": "lark"` for Lark. Router sends and receives as the bot only; it has no
+  tools that act as the owner's personal Feishu account. The app credentials are saved in the agent's connection
+  directory (`feishu/credentials.json`, `feishu/app-secret`).
+- **Weixin:** scan the QR code in WeChat. When the job state becomes `pairing`, post the code shown by WeChat to the
+  pairing route. This is Tencent iLink private chat support.
+- **Telegram:** create a bot with BotFather and send its token in the request. Open the one-use link in `url` and press
+  Start in a private chat with the bot. Router binds that sender as the owner only after the matching `/start` message.
+  The bot must have no webhook and no other polling consumer. A bot already connected to another agent is refused.
+- **Email:** `serviceId` selects a Grove Mail service configured by the operator, `inboxId` is an existing inbox and
+  `apiKey` its key. Router verifies access to the inbox, stores the key as a private file and answers `200` with the
+  agent's configuration; there is no setup job. Arbitrary Gmail or Outlook mailboxes cannot be connected this way.
 
-Email setup uses an operator-configured Grove Mail service and an existing inbox:
+Bark push notifications and manually created Feishu apps are configured in the agent's channel configuration by the
+operator; see [Channels](personal-channels.md).
 
-```sh
-agent-router channel-connect grove-mail \
-  --mail-service mail --inbox helper@mail.example \
-  --owner-email alice@example.org --api-key-file /private/mail-key
-```
+### Setup jobs
 
-This does not authorize an arbitrary Gmail/Outlook mailbox.
-Secrets are read from files or hidden prompts, never command-line token values.
+Feishu app consent waits for the expiry reported by the official SDK (`expireIn`), or ten minutes when the SDK reports
+none. Weixin and Telegram jobs have a ten-minute deadline. Job history, credentials and channel configuration survive a
+Router restart. A consent poll interrupted by a restart is reported as failed with `connection_setup_interrupted`: the
+SDK has no durable resume token, so a lost poll cannot be continued.
 
-The CLI waits for QR setup by default, and prints the job ID immediately.
-`--no-wait` returns JSON for automation. You can close the CLI and resume while
-the Router remains running:
+A failed Feishu job includes a `recovery` object (`action`, optional `appId`, `domain`):
 
-```sh
-agent-router channel-jobs
-agent-router channel-job JOB_ID
-agent-router channel-pair JOB_ID --pairing-code-file /private/pairing-code
-```
+- `retry_binding`: the credentials were saved but binding failed. Post the same request again; the saved credentials
+  are reused.
+- `authorize_existing_app`: the app was or may have been created, but its credentials were not saved. Post the request
+  with the app's id from the developer console, `{ "kind": "feishu", "appId": "cli_…", "domain": "feishu" }`, and
+  authorize the same app again. No app secret has to be copied. Router does not create another app while the result of
+  a creation is uncertain; do not delete the pending marker to retry.
+- `retry`: start again.
 
-Feishu app consent uses the expiry reported by the official SDK (`expireIn`),
-including its fallback. Router no longer adds a separate ten-minute consent limit.
-Other setup jobs have a ten-minute deadline. Recent job history, credentials and channel
-configuration survive Router restarts. An interrupted consent poll is reported as
-failed with recovery instructions; the SDK does not expose a durable app-registration
-resume token. `channel-job` resumes observation of a running poll, not a lost poll.
-
-If the app was created but setup expired before credentials were saved, select its
-App ID from the developer console and authorize that same app through the official
-page. No App Secret needs to be copied:
-
-```sh
-agent-router channel-connect feishu --app-id cli_YOUR_EXISTING_APP_ID
-```
-
-Use the original `--domain` choice when retrying. A saved
-credential is reused after a binding failure. An uncertain creation result blocks
-creating another app until an existing App ID is supplied; never delete the pending
-marker merely to retry. Apps already assigned to another Agent are rejected.
-Connecting an already configured platform does not silently replace it.
-The API accepts optional `appId` on the Feishu connection request. Failed jobs
-include a `recovery` object (`action`, optional `appId`, `domain`).
+Keep the original `domain` when retrying. An app that is already assigned to another agent is rejected.
 
 ## Check and chat
 
-```sh
-agent-router channels
-agent-router connection-check
-```
+`POST /agents/:id/check` returns `{ "checks": [...] }`. Each check has `agentId`, `kind`, `status` (`verified`,
+`needs_action` or `not_verified`), `detail` and, for a connection, `connectionId`. The Host check verifies that the Host
+service answers and has the configured runtime. Connection checks verify credentials and access, and that the running
+connection started without an error. An agent without a Host or without connections is reported explicitly.
 
-Checks verify configuration, access and connection startup. They do not consume
-new messages, send a test message or run a model. An empty connections list is
-reported explicitly. Send a real message in your
-chosen platform to verify a complete round trip.
+Checks do not consume messages, send a test message or run a model. Send a real message on the platform to verify a
+complete round trip.
 
-The existing CLI `send/get` path also works without an IM connection. Select a
-separate calling Agent because an Agent cannot send a task to itself:
+## Host
 
-```sh
-agent-router agent-create client
-# Grant this calling Agent access to helper:
-agent-router agent-use helper
-agent-router contact-add alice/client@agents.example --allow-receive --allow-execution
-agent-router agent-use client
-agent-router send alice/helper@agents.example 'Hello' --wait 60
-```
-
-Use the returned `contextId` in the next `send --context-id ID` to continue the
-same conversation, and `get ADDRESS TASK_ID` to retrieve a pending result.
-Personal Feishu tools are restricted to linked owner channel conversations;
-A2A access alone does not confer access to the owner's personal account.
-
-To share your Agent, your friend logs in and runs `agent-create client` without a Host.
-You select your executing Agent and grant their public address:
-
-```sh
-agent-router agent-use helper
-agent-router contact-add bob/client@agents.example --allow-receive --allow-execution
-```
-
-Your friend can then `send alice/helper@agents.example 'Hello' --wait 60`.
-They can use the Agent you authorized; they cannot manage your Host, connections
-or account. `requests`, `approve` and `reject` retain the existing per-request
-approval flow when automatic execution has not been granted.
+A Host is not configured over HTTP: owner requests cannot supply Host endpoints or credential paths. The operator writes
+`host` into the agent's channel configuration, or an embedding product sets it through `router.connections` and provides
+the Host through the package API; see [Embedding Agent Router](../architecture/embedding.md). An agent without a Host
+receives and stores messages, but nothing answers them.
 
 ## Operator configuration
 
-Deploy the [Router node](managed-agents.md#部署节点). Optional
-`AGENT_ROUTER_CONNECTIONS_FILE` points to a private JSON object containing
-`mailServices` (id, label, URL and attachmentOrigins); omit it for other channels.
-No cloud credentials or environment profiles are loaded by Router.
+`AGENT_ROUTER_CONNECTIONS_FILE` (standalone) or the `connections` option of `createRouter` supplies the mail services:
 
-Persist the entire Router state, including `connections/agents/`. Channel edits
-are atomic and stop the previous consumer before replacement. Active or uncertain
-work blocks a change. Configuration views omit secrets; runtime credentials cannot
-manage owner connections. [Embedding products](../architecture/embedding.md) may
-provide a Host through the public package API.
+```json
+{ "mailServices": [{ "id": "mail", "label": "Team mail", "url": "https://mail.example.test",
+    "attachmentOrigins": ["https://mail-files.example.test"] }] }
+```
 
-HTTP routes are under `/_agent-router/v1`: `GET /connection-options`,
-`GET /agents/:id/configuration`, `POST /agents/:id/connections`,
-`GET /agents/:id/connection-jobs`, `GET /agents/:id/connection-jobs/:job`,
-`POST /agents/:id/connection-jobs/:job/pairing`, and `POST /agents/:id/check`.
-The former `/setup` and environment routes are removed.
+Omit it when no email connection is offered. Router does not load cloud credentials or environment profiles.
+
+Each agent's connections are stored in `connections/agents/<agentId>/channels.json` under the state directory, next to
+their credential files. Persist the whole state directory. A configuration change is applied atomically: the previous
+consumer is stopped before its replacement starts, and a change is refused while the agent has a running run or a run
+with an unknown outcome.
+
+A stored configuration that still lists a connection of kind `matrix` is accepted: that connection is dropped when the
+file is read, so it is neither started nor listed.

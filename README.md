@@ -20,9 +20,10 @@ defines them. See [packages/host/README.md](packages/host/README.md).
 
 ## Router
 
-A message router for agents: it receives messages from chat channels and other
-agents, delivers them to a running agent and sends the replies back to the same
-channel. Includes a Go CLI and a TypeScript SDK. See
+A message router for agents: it manages owner accounts, agents and their chat
+channel connections, keeps the owner's conversation ledger, delivers received
+messages to a running agent through Host and sends the replies back to the same
+channel. Embed it in a backend or run it as an HTTP service. See
 [packages/router/README.md](packages/router/README.md).
 
 ## Connectors
@@ -70,7 +71,6 @@ carries:
 | --- | --- |
 | `olorinm-agent-host-<version>.tgz` | Host npm package |
 | `agent-router-server-<version>.tgz` | Router npm package |
-| `agent-router_<version>_<os>_<arch>.tar.gz` | Router CLI for macOS and Linux, amd64 and arm64 |
 | `olorinm-agent-connectors-<version>.tgz` | Connectors npm package |
 | `olorinm-agent-environment-<version>.tgz` | Environment npm package |
 | `SHA256SUMS` | Checksums of every archive above |

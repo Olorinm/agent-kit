@@ -2,97 +2,111 @@
 
 **English** | [简体中文](README.zh-CN.md)
 
-Cloud Agent provisioning is provided by the separate [Mau product](https://github.com/Olorinm/mau).
-
-Agent Router is a communication service for agents: it receives messages across channels, delivers them to a running agent, and sends replies back to the same channel.
-
-Ask your cloud agent to do something in Feishu and receive its reply there. Switch to an explicitly linked Weixin private chat to continue the same personal conversation. Other agents can also send tasks, check progress, and retrieve results.
-
-## How it works
+Agent Router is a message router for agents. It receives messages from chat channels and the web, delivers them to a running agent through Agent Host, and sends the replies back to the conversation each message came from. A product embeds it through the package root (`@agent-router/server`), or it runs as a standalone HTTP service.
 
 ```text
-Feishu / Weixin / Telegram / Email / Matrix / Other agents
-                           ↕
-                Agent Router (communication)
-                           ↕
-                Agent Host / worker (execution)
-                           ↕
-                  Models, tools, and workspace
+Feishu / Weixin / Telegram / Email / Web
+                  ↕
+   Agent Router: accounts, connections, ledger, work queue
+                  ↕
+   Agent Host: models, tools and workspace
 ```
 
-Router manages agent identities, channel connections, communication sessions, task delivery, and replies. Agent Host or an existing worker runs models and tools in its own environment and retains the model's native session. The execution environment can be in the cloud or on a personal computer.
+## What it does
 
-- **Stable identities**: one account can manage multiple agents. Each agent has its own address and can connect to multiple runtime instances.
-- **Continuous conversations**: explicitly linked owner private chats share a main session. Group chats and other contacts have separate sessions; each reply returns to the channel that received that turn.
-- **Feishu groups**: add the bot to a group and any member can @mention it to chat. No group or sender allowlist is required.
-- **Feishu receipts**: each turn adds a random reaction from the full official emoji catalog to the original message. It stays after processing ends.
-- **Quiet updates**: incoming reactions, message edits, and redactions are recorded without starting an agent turn or sending a receipt.
-- **Persistent records**: incoming messages, tasks, execution bindings, and delivery receipts are saved. Known state is restored after a restart; uncertain outcomes wait for reconciliation to avoid duplicate execution.
+- **Accounts and agents.** An owner is identified by an account id `@name:<namespace>`. Each owner creates up to 50 agents; every agent has its own SQLite store and work queue.
+- **Channel connections.** Each agent can connect Feishu, Weixin (WeChat), Telegram, email through a Grove Mail service, and Bark push notifications. The owner's linked private chats share one main session; group chats and other contacts get separate sessions. Every reply returns to the channel that received that turn.
+- **Owner ledger.** Conversation history, cards, attachments, groups and linked identities are stored by Router and served to a web client under `/_agent-router/v1/web`. See [ADR 0005](docs/architecture/decisions/0005-owner-ledger.md).
+- **Task delivery.** Received messages and product-authored work enter the agent's durable work queue. The Host worker inside Router claims the work, starts runs on an [Agent Host](../host/README.md), relays questions and tool calls, and records the result. Known state is restored after a restart; a run with an unknown outcome waits for reconciliation and is not executed again.
 
-## Available integrations
-
-| Entry point | Current capabilities |
+| Channel | Capabilities |
 | --- | --- |
-| Feishu | Text, media, replies, streaming cards and interaction buttons through the official Channel; QR setup for the app |
-| Weixin (WeChat) | Tencent iLink QR login, private text/media messages, voice transcripts and replies |
-| Telegram | grammY Bot API: text/media, drafts, buttons and replies in private chats and group topics |
-| Email | Incoming messages and replies through [Grove Mail](docs/guides/personal-channels.md) |
-| Matrix | Text/HTML, media, replies and streaming edits; A2A tasks and results exchanged between agents over Matrix |
-| Bark (push only) | Owner notifications on iPhone and Apple Watch through the [Bark](https://github.com/Finb/Bark) app: answers, questions and reminders that would otherwise reach only the web, optionally encrypted |
-| Products / other agents | Account, agent, and task APIs through the CLI or [TypeScript SDK](packages/sdk/README.md) |
+| Feishu | Text, media, replies, streaming cards and buttons through the official Channel SDK; QR setup of the app |
+| Weixin (WeChat) | Tencent iLink QR login; private text and media messages, voice transcripts, replies |
+| Telegram | Bot API through grammY: text, media, drafts, buttons and replies in private chats and group topics |
+| Email | Incoming mail and replies through a Grove Mail service |
+| Bark (push only) | Owner notifications on iOS through the [Bark](https://github.com/Finb/Bark) app, optionally encrypted |
+| Web | Owner chat, groups, cards and attachments through the ledger web API |
 
-Channels preserve their native communication capabilities through the Host: attachments, replies, supported streaming and interaction controls. Voice/video understanding depends on the chosen runtime and its tools. Weixin supports iLink private chats only; encrypted Matrix rooms are unsupported. Execution connects directly to a configured instance; intelligent scheduling and automatic failover are not implemented.
+## Build and test
 
-## Getting started
-
-See the [installation guide](docs/guides/install.md) for published releases.
-
-Use the Go CLI to sign in, create an Agent identity and connect your chosen platforms:
-
-```sh
-agent-router login '@alice:agents.example'
-agent-router connection-options
-agent-router agent-create helper
-agent-router channel-connect feishu  # Optional; choose Weixin, Telegram, email or Matrix too
-agent-router connection-check
-```
-
-Setup QR codes and links appear in the terminal. Platforms are optional; friends can sign up and use Agents you authorize through the CLI. See the [channel guide](docs/guides/connections.md) for channel configuration. An operator or product supplies the Host binding.
-
-Build from the repository root with Node.js 24+ and Go 1.26+. Go selects its toolchain from `go.mod`:
+Requires Node.js 24 or later.
 
 ```sh
 npm ci
-npm run build
-sh scripts/build-cli.sh
-```
-
-For your own server, see [node deployment](docs/guides/managed-agents.md#部署节点). For manual channel configuration, see [personal integrations](docs/guides/personal-channels.md).
-
-## More documentation
-
-Most detailed guides are currently in Chinese; the agent CLI guide is available in both languages.
-
-| What you want to do | Start here |
-| --- | --- |
-| Chat with a personal agent through IM or email | [Personal channel integrations](docs/guides/personal-channels.md) |
-| Create agents, connect runtime instances, and collaborate with other agents | [Managed agents](docs/guides/managed-agents.md) |
-| Have an existing agent claim tasks, reply, and handle cancellation | [Agent CLI guide](docs/guides/agent-connect.en.md) · [简体中文](docs/guides/agent-connect.md) |
-| Install larkCLI directly in the cloud execution environment | [Worker tools](docs/guides/worker-tools.md) |
-| Add communication capabilities to your own product | [TypeScript SDK](packages/sdk/README.md) · [Existing product accounts](docs/guides/product-integration.md) |
-| Manage native work sessions and product-authored tasks | [Native sessions](docs/guides/native-sessions.md) |
-| Understand module boundaries, sessions, and recovery | [Communication architecture](docs/architecture/communication-layer.md) · [CLI contract](docs/guides/cli-contract.md) |
-| Deploy an independent domain with Matrix federation | [Node deployment](docs/guides/matrix.md#部署独立域) |
-
-## Development and verification
-
-```sh
-go test -race ./...
 npm run typecheck
 npm test
 npm run build
 ```
 
-Automated checks cover session isolation, deduplication, recovery, authorization, and the public Host interface. Live account round trips for the new chat connections still need integration testing. See the [verified scope](docs/guides/personal-channels.md#已验证范围) and [local verification guide](docs/guides/local-verification.md).
+## Run standalone
+
+```sh
+MATRIX_SERVER_NAME=agents.example.test \
+AGENT_SERVICE_URL=https://router.example.test \
+AGENT_EDGE_IDENTITY_FILE=/private/edge-identity.json \
+npm run agent:service
+```
+
+The service listens on `127.0.0.1:8790` and stores its state under `state/agent-service`.
+
+| Variable | Meaning |
+| --- | --- |
+| `MATRIX_SERVER_NAME` | Required. The account namespace: owner ids are `@name:<namespace>`. The variable name is historical. |
+| `AGENT_SERVICE_URL` | Required. The public URL of the service. |
+| `AGENT_SERVICE_STATE` | State directory. Default `state/agent-service`. |
+| `HOST`, `PORT` | Listen address. Default `127.0.0.1` and `8790`. |
+| `AGENT_EDGE_IDENTITY_FILE` | Owner sign-in through Cloudflare Access; see [Accounts and agents](docs/guides/managed-agents.md). |
+| `AGENT_TRUST_PROXY` | Comma-separated trusted proxy addresses or ranges. Forwarded headers are ignored without it. |
+| `AGENT_ROUTER_CONNECTIONS_FILE` | JSON file with `mailServices` for email connections; see [Connections](docs/guides/connections.md). |
+| `AGENT_LEDGER_READ`, `AGENT_LEDGER_SEND` | Set to `1` to serve the web history API and event socket, and to accept owner web messages. `AGENT_LEDGER_READ` requires `AGENT_LEDGER_SEND`. |
+| `AGENT_LEDGER_CARDS`, `AGENT_LEDGER_CONTROL`, `AGENT_LEDGER_GROUPS`, `AGENT_LEDGER_ATTACHMENTS` | Set to `1` for card answers, cancel/steer/reset/purge, groups, and attachments on the web API. Each needs `AGENT_LEDGER_SEND`. |
+| `AGENT_LEDGER_IDENTITY` | Set to `1` for owner resolution by linked identity and `/link` pairing. |
+| `AGENT_BLOB_STORE` | `local` (default) or `r2`. |
+| `AGENT_BLOB_DIR` | Directory of the local blob store. Default `<state>/blobs`. |
+| `AGENT_R2_BUCKET`, `AGENT_R2_ACCESS_KEY_ID_FILE`, `AGENT_R2_SECRET_ACCESS_KEY_FILE` | Required with `AGENT_BLOB_STORE=r2`. The keys are read from files. |
+| `AGENT_R2_ENDPOINT` or `AGENT_R2_ACCOUNT_ID` | The R2 endpoint, or the account id it is derived from. |
+| `AGENT_ATTACHMENT_QUOTA_BYTES` | Attachment quota per owner. Default 5 GiB. |
+
+Owners sign in through the edge identity. A standalone service without `AGENT_EDGE_IDENTITY_FILE` accepts no owner requests; an embedding product can supply its own bearer-token authenticator.
+
+## Embed in a product
+
+```ts
+import { createRouter, loadServiceConfig } from "@agent-router/server";
+
+const router = createRouter(loadServiceConfig(), { connections: {} });
+const server = router.app.listen(8790, "127.0.0.1");
+server.on("upgrade", (req, socket, head) => { if (!router.upgrade(req, socket, head)) socket.destroy(); });
+await router.start();
+```
+
+See [Embedding Agent Router](docs/architecture/embedding.md) for authentication, Host bindings and the agent lifecycle.
+
+## HTTP surface
+
+All routes except `GET /health/live` are under `/_agent-router/v1` and require an authenticated owner.
+
+| Routes | Purpose |
+| --- | --- |
+| `GET /account` | The authenticated owner |
+| `GET`, `POST /agents`; `GET`, `DELETE /agents/:id` | List, create, read and delete agents |
+| `GET /connection-options`; `/agents/:id/configuration`, `/connections`, `/connection-jobs`, `/check` | Channel connection setup and checks |
+| `/agents/:id/communication` | Channel and Host status; `sessions`, `work-events`, `tasks` and `runs` for work sessions and run observation |
+| `/web/...` | Ledger web API: chats, events, messages, cards, groups, attachments, identities and socket tickets |
+
+## Documentation
+
+| Topic | Guide |
+| --- | --- |
+| Owner sign-in, agents, deletion, rate limits | [Accounts and agents](docs/guides/managed-agents.md) |
+| Connecting channels over HTTP | [Connections](docs/guides/connections.md) · [简体中文](docs/guides/connections.zh-CN.md) |
+| Channel configuration, groups, media and recovery | [Channels](docs/guides/personal-channels.md) |
+| Work sessions and product-authored work | [Native sessions](docs/guides/native-sessions.md) |
+| Tools inside the execution environment | [Worker tools](docs/guides/worker-tools.md) · [简体中文](docs/guides/worker-tools.zh-CN.md) |
+| Writing a channel adapter | [Adding a channel](docs/guides/adding-a-channel.md) |
+| Embedding API | [Embedding Agent Router](docs/architecture/embedding.md) |
+| Module boundaries and sessions (Chinese) | [Communication architecture](docs/architecture/communication-layer.md) |
+| Ledger design | [ADR 0005](docs/architecture/decisions/0005-owner-ledger.md) |
 
 License: [MIT](LICENSE). See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) for reused components and their licenses.
