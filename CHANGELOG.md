@@ -5,6 +5,16 @@ tag publishes a GitHub Release whose notes are this file's section for that vers
 section in the version-bump commit before tagging. Changes up to the versions listed under
 0.8.0-alpha.1 are in each package's own `CHANGELOG.md`.
 
+## [0.10.0-alpha.3] - 2026-11-13
+
+- **Router:** an agent can have default native settings. `WorkSessions.setDefaultSettings`
+  stores a selection such as `{ model, effort }` and Router sends it with every turn of that
+  agent, including turns started by channel messages, which could not carry settings before. A
+  work event's own `settings` win key by key and compaction takes none. Host still decides which
+  values are allowed; a turn whose setting Host refuses fails with `setting_not_allowed:<key>`
+  and a message saying so, and is not retried with other settings. `WorkSessions.inspect()`
+  returns the runtime description, including its allowed settings, without a native handshake.
+
 ## [0.10.0-alpha.2] - 2026-11-13
 
 - **Host:** a runtime's `allowedSettings` list is no longer part of its configuration key. Adding,
