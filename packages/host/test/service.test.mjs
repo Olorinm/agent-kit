@@ -803,3 +803,66 @@ test("compaction rejects attachments before creating a task or saving media", as
   const { access } = await import("node:fs/promises");
   await assert.rejects(access(join(root, ".agent-host/attachments")));
 });
+
+test("changing the owner's selectable settings keeps existing sessions; selections are still checked on each run", async (t) => {
+  let allowedSettings;
+  const keys = [];
+  const { client, restart } = await fixture(t, {
+    configure: (root) => {
+      const runtime = createNativeRuntime(
+        {
+          id: "codex",
+          kernel: "codex",
+          cwd: root,
+          model: "first-model",
+          options: {
+            command: resolve("test/fixtures/codex-server.mjs"),
+            args: [],
+            cancellationGraceMs: 1_000,
+            requestTimeoutMs: 5_000,
+          },
+          ...(allowedSettings ? { allowedSettings } : {}),
+        },
+        root,
+      );
+      keys.push(runtime.configurationKey);
+      return [runtime];
+    },
+  });
+  const turn = async (sessionId, settings) => {
+    const task = await client().start({
+      runtimeId: "codex",
+      sessionId,
+      input: "hello",
+      ...(settings ? { settings } : {}),
+    });
+    return (await task.wait({ pollMs: 5 })).status;
+  };
+  assert.equal(await turn("before"), "completed");
+  await assert.rejects(turn("before", { effort: "high" }), /setting_not_allowed/);
+
+  allowedSettings = {
+    model: { values: ["first-model", "second-model"] },
+    effort: { values: ["low", "high"] },
+  };
+  await restart();
+  assert.equal(await turn("before"), "completed");
+  assert.equal(await turn("before", { effort: "high" }), "completed");
+  assert.equal(
+    await turn("after", { model: "second-model", effort: "low" }),
+    "completed",
+  );
+  await assert.rejects(turn("before", { effort: "xhigh" }), /setting_not_allowed/);
+  await assert.rejects(turn("before", { command: "other" }), /setting_not_allowed/);
+
+  allowedSettings = { effort: { values: ["low"] } };
+  await restart();
+  assert.equal(await turn("before", { effort: "low" }), "completed");
+  await assert.rejects(turn("after", { model: "second-model" }), /setting_not_allowed/);
+
+  allowedSettings = undefined;
+  await restart();
+  assert.equal(await turn("after"), "completed");
+  assert.equal(new Set(keys).size, 1, "the selectable list is not part of the configuration key");
+  assert.equal(keys.length, 4);
+});

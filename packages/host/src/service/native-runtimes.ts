@@ -118,6 +118,8 @@ export function createNativeRuntime(
   const fingerprintConfig: Record<string, unknown> = { ...config, cwd };
   // Administrative transport policy does not change the native thread's tools or instructions.
   delete fingerprintConfig.nativeAccess;
+  // The owner's list of selectable values is not thread configuration either; a selection is checked on each run.
+  delete fingerprintConfig.allowedSettings;
   if (
     (config.kernel === "opencode" ||
       config.kernel === "kimi" ||
