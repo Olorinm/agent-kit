@@ -15,6 +15,8 @@ import { cardBody, cardKind, type LedgerControl } from "../ledger/control.js";
 
 interface ToolReceipt { hash: string; phase: "executing" | "completed" | "uncertain"; result?: HostToolResult; }
 
+/** Collection holding an agent's default native settings, written through `WorkSessions.setDefaultSettings`. */
+export const DEFAULT_SETTINGS = "execution_default_settings";
 export interface ExecutionSession { sessionId: string; runtimeId: string; tools?: false; channelTools?: boolean; }
 
 export interface RunBinding {
@@ -226,12 +228,15 @@ export class HostWorker {
           const admission = authored?.admission ?? this.options.admission?.(claim.contextId, claim.id);
           const delivered = admission && admission.kind !== "owner" && authored?.mode !== "compact"
             ? await this.deliveryInput(runtimeId, input, admission, authored?.inputItems) : undefined;
+          // The agent's default settings apply to every turn; a turn's own selection wins. Compaction takes none.
+          const defaults = authored?.mode === "compact" ? undefined : this.store.get<Record<string, unknown>>(DEFAULT_SETTINGS, "default");
+          const settings = defaults || authored?.settings ? { ...defaults, ...authored?.settings } : undefined;
           submissionAttempted = true;
           const started = await this.host.start({ sessionId, runtimeId,
             instructions: this.instructions + (withTools ? this.tools!.instructions : ""), input: delivered ? "" : input,
             requestKey: binding.requestKey!,
             ...(delivered ? { toolOutput: delivered } : authored?.inputItems ? { inputItems: authored.inputItems } : {}),
-            ...(authored?.settings ? { settings: authored.settings } : {}),
+            ...(settings ? { settings } : {}),
             ...(authored?.mode ? { mode: authored.mode } : {}),
             ...(admission ? { admission } : {}),
             ...(attachments?.length ? { attachments } : {}),
@@ -244,9 +249,11 @@ export class HostWorker {
         } catch (error) {
           const rejected = !submissionAttempted || (error instanceof ChannelHttpError || error instanceof WorkError) && [400, 401, 403, 404, 409, 413, 422].includes(error.status);
           const preparationError = !submissionAttempted && error instanceof Error && /^[a-z0-9_]+$/.test(error.message) ? error.message : undefined;
-          binding = { ...binding, phase: rejected ? "finished" : "unknown", error: preparationError ?? (rejected ? "host_submission_rejected" : "host_submission_unknown") };
+          // Host names the setting it refused; say so instead of the general rejection.
+          const refusedSetting = rejected && error instanceof ChannelHttpError && /^setting_not_allowed:[a-zA-Z0-9]{1,64}$/.test(error.code) ? error.code : undefined;
+          binding = { ...binding, phase: rejected ? "finished" : "unknown", error: preparationError ?? refusedSetting ?? (rejected ? "host_submission_rejected" : "host_submission_unknown") };
           this.store.set("communication_runs", claim.claimId, binding);
-          this.work.update(claim.claimId, rejected ? "fail" : "progress", rejected ? "执行服务未接受本轮请求，请检查配置与运行状态。" : "本轮是否已经执行暂时无法确认，系统不会自动重复执行。", undefined, this.instanceId);
+          this.work.update(claim.claimId, rejected ? "fail" : "progress", refusedSetting ? "所选的模型设置当前不可用，请重新选择后再试。" : rejected ? "执行服务未接受本轮请求，请检查配置与运行状态。" : "本轮是否已经执行暂时无法确认，系统不会自动重复执行。", undefined, this.instanceId);
           if (rejected) this.finishWork(claim.id, "failed"); else { this.turn(claim.id, "unknown", binding.error); this.ledger(() => this.control?.unknownTurn(binding!)); }
           return;
         }

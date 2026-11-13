@@ -59,6 +59,15 @@ Router verifies requested skill names and paths against the native catalog and i
 those references for on-demand loading; this does not force native skill injection.
 Other typed items on an internal delivery are rejected before submitting a run.
 
+`setDefaultSettings(selection)` stores native settings (for example `model` and `effort`) that
+Router sends with every turn of the agent, including turns started by channel messages;
+`defaultSettings()` reads them and an empty selection removes them. A work event's own
+`settings` win key by key, and compaction takes none. Router does not decide which values are
+valid: Host checks each one against the allowed list in the runtime owner's configuration when
+the turn starts, and `inspect()` returns that description without a native handshake. A value
+Host refuses fails that turn with `setting_not_allowed:<key>`; Router does not retry it with
+different settings.
+
 `HostAdmission` is trusted embedding metadata, never a model-visible authorization token.
 The product's Host decorator consumes and strips it; the default `HttpAgentHost` also
 strips it before the Host HTTP request. Owner channel admission is issued for a

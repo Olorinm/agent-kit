@@ -6,7 +6,7 @@ import type { DurableStore } from "../communication/store.js";
 import { ChannelHttpError } from "../http.js";
 import type { HostAdmission, HostPort, HostRun, HostStartInput, NativeSessionInput } from "./host.js";
 import { runtimeWorkingDirectory } from "./host.js";
-import type { ExecutionSession, RunBinding } from "./host-worker.js";
+import { DEFAULT_SETTINGS, type ExecutionSession, type RunBinding } from "./host-worker.js";
 import { digest, key } from "./protocol.js";
 import { CliWork, WorkError } from "./work.js";
 import { AgentLedger } from "../ledger/ledger.js";
@@ -14,6 +14,8 @@ import { personId } from "../ledger/registry.js";
 import { WEB_CONNECTION } from "../ledger/surfaces.js";
 
 const identifier = z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9_.:-]{0,159}$/);
+const settingsSchema = z.record(z.string().regex(/^[a-zA-Z][a-zA-Z0-9]{0,63}$/), z.json())
+  .refine(value => Object.keys(value).length <= 16 && Buffer.byteLength(JSON.stringify(value)) <= 4096, "settings_too_large");
 const admissionSchema = z.object({ kind: z.enum(["owner", "delegation", "schedule"]), owner: z.string().min(1), agentId: z.string().min(1), reference: z.string().min(1),
   expiresAt: z.iso.datetime().optional(), maxToolCalls: z.number().int().min(0).max(1_000_000).optional(),
   toolGrants: z.object({ business: z.boolean().optional(), feishu: z.boolean().optional(),
@@ -267,6 +269,28 @@ export class WorkSessions {
     this.validate();
     if (!this.host.discoverRuntime) throw new WorkError("host_discovery_unsupported", 409);
     return this.request(() => this.host.discoverRuntime!(this.runtimeId));
+  }
+  /** The runtime's description as its Host reports it, including the owner's allowed settings. No native handshake. */
+  async inspect() {
+    this.validate();
+    if (!this.host.inspectRuntime) throw new WorkError("host_runtime_inspection_unsupported", 409);
+    return this.request(() => this.host.inspectRuntime!(this.runtimeId));
+  }
+  /** Native settings (model, effort, ...) sent with every turn of this agent that does not select its own. */
+  defaultSettings(): Record<string, unknown> {
+    this.validate();
+    return this.store.get<Record<string, unknown>>(DEFAULT_SETTINGS, "default") ?? {};
+  }
+  /**
+   * Replace the agent's default settings; an empty selection removes them. Host checks every value against the
+   * runtime owner's allowed list when a turn starts, so a selection that is no longer allowed fails that turn openly.
+   */
+  setDefaultSettings(selection: Record<string, unknown>) {
+    this.validate();
+    const settings = settingsSchema.parse(selection);
+    if (Object.keys(settings).length) this.store.set(DEFAULT_SETTINGS, "default", settings);
+    else this.store.delete(DEFAULT_SETTINGS, "default");
+    return settings;
   }
   private nativeRequest(method: string, params: Record<string, unknown> = {}, runtimeId = this.runtimeId) {
     this.validate();

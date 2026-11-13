@@ -185,6 +185,31 @@ describe("native session coordination", () => {
     await h.worker.tick(); expect(h.host.starts).toHaveLength(1);
     expect(h.sessions.get("invalid")).toMatchObject({ status: "failed", outcomeUnknown: false, error: "native_tool_delivery_typed_input_unsupported" });
   });
+  it("sends the agent's default settings with channel and work turns, lets a turn's own selection win and reports a refused setting", async () => {
+    const h = setup();
+    h.core.register({ id: "chat", ownerAddresses: ["owner"] }, { kind: "telegram", start: async () => {}, stop: async () => {}, send: async () => ({ externalId: "sent" }) });
+    await h.core.start();
+    const direct = (id: string) => h.core.receive("chat", { externalId: id, sender: "owner", scope: "direct", threadId: "private", text: "hello", reply: { target: "private", messageId: id, data: {} } });
+    expect(h.sessions.defaultSettings()).toEqual({});
+    direct("before"); await h.core.dispatch(); await h.worker.tick();
+    expect(h.host.starts[0]).not.toHaveProperty("settings");
+    for (const run of h.host.runs.values()) run.status = "completed";
+    await ticks(h.worker);
+    expect(() => h.sessions.setDefaultSettings({ "not a key": 1 })).toThrow();
+    expect(h.sessions.setDefaultSettings({ model: "small", effort: "low" })).toEqual({ model: "small", effort: "low" });
+    expect(h.sessions.defaultSettings()).toEqual({ model: "small", effort: "low" });
+    direct("after"); await h.core.dispatch(); await h.worker.tick();
+    expect(h.host.starts[1]!.settings).toEqual({ model: "small", effort: "low" });
+    await h.sessions.submit({ eventId: "own", input: "work", admission, settings: { effort: "high" } }); await h.worker.tick();
+    expect(h.host.starts[2]!.settings).toEqual({ model: "small", effort: "high" });
+    await h.sessions.submit({ eventId: "compact", sessionId: "w", input: "compact", admission, mode: "compact" }); await h.worker.tick();
+    expect(h.host.starts[3]).not.toHaveProperty("settings");
+    h.host.start = async () => { throw new ChannelHttpError(400, "setting_not_allowed:model"); };
+    await h.sessions.submit({ eventId: "refused", input: "work", admission }); await h.worker.tick();
+    expect(h.sessions.get("refused")).toMatchObject({ status: "failed", outcomeUnknown: false, error: "setting_not_allowed:model" });
+    expect(h.sessions.setDefaultSettings({})).toEqual({});
+    expect(h.sessions.defaultSettings()).toEqual({});
+  });
   it("rejects forged, expired and ungranted admissions before queueing work", async () => {
     const h = setup();
     for (const invalid of [{ ...admission, owner: "other" }, { ...admission, agentId: "other" },

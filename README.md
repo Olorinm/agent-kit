@@ -57,9 +57,9 @@ when that package changes.
 All packages share one version. To release:
 
 ```sh
-node scripts/set-version.mjs 0.10.0-alpha.2   # every package.json and lockfile
-# add a "## [0.10.0-alpha.2]" section to CHANGELOG.md, commit, wait for CI
-git tag v0.10.0-alpha.2 && git push origin v0.10.0-alpha.2
+node scripts/set-version.mjs 0.10.0-alpha.3   # every package.json and lockfile
+# add a "## [0.10.0-alpha.3]" section to CHANGELOG.md, commit, wait for CI
+git tag v0.10.0-alpha.3 && git push origin v0.10.0-alpha.3
 ```
 
 The [release workflow](.github/workflows/release.yml) builds every package at the
@@ -78,7 +78,7 @@ carries:
 Install a package straight from a release, for example:
 
 ```sh
-npm install https://github.com/Olorinm/agent-kit/releases/download/v0.10.0-alpha.2/olorinm-agent-host-0.10.0-alpha.2.tgz
+npm install https://github.com/Olorinm/agent-kit/releases/download/v0.10.0-alpha.3/olorinm-agent-host-0.10.0-alpha.3.tgz
 ```
 
 A tag may point at any commit whose checks have passed, including a branch that
