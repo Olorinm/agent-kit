@@ -866,3 +866,43 @@ test("changing the owner's selectable settings keeps existing sessions; selectio
   assert.equal(new Set(keys).size, 1, "the selectable list is not part of the configuration key");
   assert.equal(keys.length, 4);
 });
+
+test("a Codex turn without a selected model returns to the runtime's configured model", async (t) => {
+  const { client } = await fixture(t, {
+    configure: (root) => [
+      createNativeRuntime(
+        {
+          id: "codex",
+          kernel: "codex",
+          cwd: root,
+          model: "first-model",
+          turn: { effort: "high" },
+          options: {
+            command: resolve("test/fixtures/codex-server.mjs"),
+            args: [],
+            cancellationGraceMs: 1_000,
+            requestTimeoutMs: 5_000,
+          },
+          allowedSettings: {
+            model: { values: ["first-model", "second-model"] },
+            effort: { values: ["low", "high"] },
+          },
+        },
+        root,
+      ),
+    ],
+  });
+  // The fixture, like Codex, keeps a turn's model for the thread's following turns.
+  const turn = async (settings) => {
+    const task = await client().start({
+      runtimeId: "codex",
+      sessionId: "one-thread",
+      input: "turn-settings",
+      ...(settings ? { settings } : {}),
+    });
+    return JSON.parse((await task.wait({ pollMs: 5 })).answer);
+  };
+  assert.deepEqual(await turn(), { model: "first-model", effort: "high" });
+  assert.deepEqual(await turn({ model: "second-model", effort: "low" }), { model: "second-model", effort: "low" });
+  assert.deepEqual(await turn(), { model: "first-model", effort: "high" });
+});
