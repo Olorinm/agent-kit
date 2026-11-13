@@ -23,10 +23,10 @@ application with every route under `/_agent-router/v1`. `upgrade` handles the ev
 ## Configuration
 
 `config` is a `ServiceConfig`: `serverName` (the account namespace of owner ids `@name:<serverName>`), `publicUrl`,
-`stateDir`, and the optional `trustedProxies`, `edgeIdentity`, ledger flags (`ledgerRead`, `ledgerSend`, `ledgerCards`,
-`ledgerControl`, `ledgerGroups`, `ledgerIdentity`, `ledgerAttachments`), `blobStore` and `attachmentQuotaBytes`.
-`ledgerRead` requires `ledgerSend`. `loadServiceConfig()` builds the same object from the operator environment
-variables listed in the [README](../../README.md#run-standalone).
+`stateDir`, and the optional `trustedProxies`, `edgeIdentity`, `blobStore` and `attachmentQuotaBytes`. The web API,
+cards, control, groups, identities and attachments are always served; there are no switches for them.
+`loadServiceConfig()` builds the same object from the operator environment variables listed in the
+[README](../../README.md#run-standalone).
 
 `connections` accepts a JSON file path or an object containing `mailServices`. Router does not load cloud providers or
 create execution environments.

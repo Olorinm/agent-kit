@@ -66,9 +66,38 @@ describe("ledger migrations", () => {
       expect(versions(a[name]), name).toEqual(versions(b[name]));
       expect(a[name].get("meta", "probe"), name).toBe(name);
     }
-    expect(versions(a.agent)).toEqual({ ledger_schema_version: 4 });
+    expect(versions(a.agent)).toEqual({ ledger_schema_version: 5 });
     expect(versions(a.hub)).toEqual({ ledger_schema_version: 2, hub_rooms_schema_version: 1, hub_identity_schema_version: 1 });
     expect(versions(a.registry)).toEqual({ registry_schema_version: 2 });
+  });
+  it("folds the inbox and outbox documents of earlier releases into the ledger and deletes them", async () => {
+    const { AGENT_LEDGER_V1, AGENT_LEDGER_V2, AGENT_LEDGER_V3, AGENT_LEDGER_V4 } = await import("../src/ledger/schema.js");
+    const agent = store(join(dir(), "agent.sqlite"), "agent-1");
+    [AGENT_LEDGER_V1, AGENT_LEDGER_V2, AGENT_LEDGER_V3, AGENT_LEDGER_V4].forEach((sql, index) => agent.migrate(index + 1, sql));
+    const route = { connectionId: "chat", target: "room", messageId: "m1", data: {} }, source = { externalId: "m1", sender: "owner", scope: "direct", threadId: "t", text: "你好", reply: { target: "room", messageId: "m1", data: {} } };
+    agent.db.exec(`INSERT INTO ledger_ingress(connection_id,external_id,input_id,hash,state,received_at) VALUES('chat','m1','in-1','h1','accepted',1),('chat','m2','in-2','h2','tombstone',2);
+      INSERT INTO ledger_deliveries(delivery_id,event_id,conversation_id,connection_id,route,purpose,status,created_at,updated_at)
+        VALUES('out-final','ev_1','cv_1','chat','${JSON.stringify({ ...route, channel: "chat" })}','reply','queued',1,1)`);
+    agent.set("communication_inbox", "in-1", { id: "in-1", connectionId: "chat", source, conversationId: "c-main", replyRoute: route, hash: "h1", state: "submitted", taskId: "turn-1", forkFromContextId: "c-parent" });
+    agent.set("communication_inbox", "in-2", { id: "in-2", connectionId: "chat", source: { ...source, externalId: "m2", text: "" }, conversationId: "c-main", replyRoute: route, hash: "h2", state: "done" });
+    agent.set("communication_inbox", "in-3", { id: "in-3", connectionId: "chat", source: { ...source, externalId: "m3" }, conversationId: "c-main", replyRoute: route, hash: "h3", state: "done" });
+    agent.set("communication_outbox", "out-final", { id: "out-final", taskId: "turn-1", route, text: "回答", final: true, state: "queued", attempts: 2, nextAt: 9 });
+    agent.set("communication_outbox", "out-push", { id: "out-push", taskId: null, route: { connectionId: "bark", target: "owner", messageId: "", data: {} }, text: "推送", state: "accepted", attempts: 1, nextAt: 0, externalId: "p1" });
+    agent.set("communication_outbox", "out-web", { id: "out-web", taskId: "turn-1", route: { ...route, connectionId: "web" }, text: "网页", final: true, state: "accepted", attempts: 0, nextAt: 0, externalId: "ev_2" });
+    agent.set("communication_outbox", "out-media", { id: "out-media", taskId: null, originTaskId: "turn-1", route, text: "图", content: { text: "图", html: "<b>图</b>" }, state: "uncertain", attempts: 1, nextAt: 0, error: "send_interrupted" });
+    const ledger = AgentLedger.open(agent);
+    // A claim takes its message, session and fork parent from its inbox record; a tombstone keeps no content.
+    expect(ledger.claimByInput("in-1")).toMatchObject({ source, sessionKey: "c-main", forkFrom: "c-parent" });
+    expect(ledger.claimByInput("in-2")).toMatchObject({ state: "tombstone", source: null, sessionKey: "c-main" });
+    // An inbox record that never had a claim is not carried over.
+    expect(ledger.claimByInput("in-3")).toBeUndefined();
+    // A delivery takes its text and turn from its outbox record and stays queued; records without a delivery row become one.
+    expect(ledger.delivery("out-final")).toMatchObject({ status: "queued", purpose: "reply", text: "回答", turnId: "turn-1", eventId: "ev_1", conversationId: "cv_1" });
+    expect(ledger.delivery("out-push")).toMatchObject({ status: "sent", purpose: "notice", text: "推送", platformMessageId: "p1", eventId: null, route: { target: "owner" } });
+    expect(ledger.delivery("out-media")).toMatchObject({ status: "unknown", purpose: "content", originTurnId: "turn-1", content: { html: "<b>图</b>" }, error: "send_interrupted" });
+    // The web connection's event is its delivery.
+    expect(ledger.delivery("out-web")).toBeUndefined();
+    expect(agent.entries("communication_inbox")).toEqual([]); expect(agent.entries("communication_outbox")).toEqual([]);
   });
   it("is idempotent when the stores are opened again", () => {
     const root = dir();

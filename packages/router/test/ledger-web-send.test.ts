@@ -36,7 +36,7 @@ async function setup(overrides: Partial<ServiceConfig> = {}) {
   cleanup.push(() => rmSync(stateDir, { recursive: true, force: true }));
   const host = new Host(), extensions = new Map<string, ServiceExtension>();
   const service: ManagedService = new ManagedService({ serverName: "example.test", publicUrl: "https://example.test/_agent-router/v1",
-    stateDir, ledgerRead: true, ledgerSend: true, ...overrides }, {
+    stateDir, ...overrides }, {
     authenticate: async (token) => { if (token === "alice") return owner; if (token === "bob") return other; throw new Error("bad_credentials"); },
     configure: async (agent, runtime) => {
       const config = channelConfigSchema.parse({ agents: [{ agentId: agent.id, connections: [],
@@ -60,7 +60,7 @@ async function setup(overrides: Partial<ServiceConfig> = {}) {
     return { status: response.status, data: response.status === 204 ? null : await response.json() as any };
   }
   const agent = await service.create(owner, "helper");
-  const ledger = AgentLedger.attached((await service.runtime(agent.id)).store)!;
+  const ledger = AgentLedger.open((await service.runtime(agent.id)).store);
   const chatId = `dm:${agent.id}`;
   const send = (body: Record<string, unknown>, token = "alice") => api(`${root}/web/chats/${enc(chatId)}/messages`, token, "POST", body);
   const events = async () => (await api(`${root}/web/chats/${enc(chatId)}/events?limit=200`)).data.events as any[];
@@ -80,7 +80,6 @@ const key = "01JC9Z7Q4M0000000000000001";
 describe("owner send via Router (web channel)", () => {
   it("creates the DM chat, sends with an idempotency key, runs a turn and pushes the reply over the socket", async () => {
     const t = await setup();
-    expect((await t.api(`${root}/web/me`)).data.limits.features).toMatchObject({ history: true, send: true, attachments: false });
     expect((await t.api(`${root}/web/chats`)).data.data).toEqual([]);
     const dm = await t.api(`${root}/web/chats/dm`, "alice", "POST", { agentId: t.agent.id });
     expect(dm.data).toMatchObject({ chatId: t.chatId, kind: "dm", readOnly: false, lastSeq: 0 });
@@ -100,7 +99,7 @@ describe("owner send via Router (web channel)", () => {
     expect((await t.events())[1].turnId).toBe(reply.data.turnId);
     expect((await t.api(`${root}/web/chats/${enc(t.chatId)}/turns/${reply.data.turnId}`)).data).toMatchObject({ state: "completed", admission: "owner",
       inputEventIds: [sent.data.event.eventId], finalEventId: reply.data.eventId });
-    // The legacy task API still sees the turn, keyed by the web connection.
+    // The task API sees the turn, keyed by the web connection.
     const tasks = (await t.api(`${root}/agents/${t.agent.id}/communication/tasks`)).data.data;
     expect(tasks).toMatchObject([{ id: reply.data.turnId, conversationId: legacySession(t.agent.id, "owner-main"), source: { connectionId: "web", scope: "direct" },
       replyMessageIds: [reply.data.eventId] }]);
@@ -166,16 +165,4 @@ describe("owner send via Router (web channel)", () => {
     expect(await redact("ev_missing", `${key}t`)).toEqual({ status: 404, data: { error: "event_not_found" } });
     expect(t.host.starts).toHaveLength(1);
   }, 20_000);
-  it("refuses history without the send flag, and stays off with both flags off: routes not found, dispatch on the legacy path", async () => {
-    await expect(setup({ ledgerSend: false })).rejects.toThrow("ledger_read_requires_ledger_send");
-    const t = await setup({ ledgerRead: false, ledgerSend: false });
-    expect(t.service.web).toBeUndefined();
-    expect((await t.api(`${root}/web/me`)).status).toBe(404);
-    expect((await t.send({ idempotencyKey: key, text: "x" })).status).toBe(404);
-    expect((await t.api(`${root}/web/chats/${enc(t.chatId)}/events/ev_x/redact`, "alice", "POST", { idempotencyKey: key })).status).toBe(404);
-    expect(t.ledger.authoritative).toBe(false);
-    // No web connection without the flags: channel status and dispatch are exactly the phase 2 ones.
-    expect(t.extension().web).toBeUndefined();
-    expect((t.extension().status() as { connections: Array<{ id: string }> }).connections.map((item) => item.id)).toEqual([CHAT]);
-  });
 });

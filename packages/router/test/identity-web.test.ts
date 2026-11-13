@@ -23,7 +23,7 @@ async function setup(overrides: Partial<ServiceConfig> = {}) {
     return Response.json(url.pathname.endsWith("/events/lifecycle") ? { events: [], next_cursor: Number(url.searchParams.get("after")) } : { inbox_id: inbox });
   });
   const service: ManagedService = new ManagedService({ serverName: "example.test", publicUrl: "https://example.test/_agent-router/v1",
-    stateDir, ledgerRead: true, ledgerSend: true, ledgerIdentity: true, ...overrides }, {
+    stateDir, ...overrides }, {
     authenticate: async (token) => { if (token === "alice") return owner; throw new Error("bad_credentials"); },
     configure: async (agent, runtime) => {
       const config = channelConfigSchema.parse({ agents: [{ agentId: agent.id, connections: [{ id: "mail", kind: "grove-mail", url: mail, inboxId: inbox,
@@ -48,16 +48,9 @@ async function setup(overrides: Partial<ServiceConfig> = {}) {
   return { service, api, agent };
 }
 
-describe("identity web API (features.identity)", () => {
-  it("reads the flag from AGENT_LEDGER_IDENTITY", () => {
-    const env = { MATRIX_SERVER_NAME: "example.test", AGENT_SERVICE_URL: "https://example.test" };
-    expect(loadServiceConfig({ ...env, AGENT_LEDGER_IDENTITY: "1" }).ledgerIdentity).toBe(true);
-    expect(loadServiceConfig(env).ledgerIdentity).toBeUndefined();
-  });
+describe("identity web API", () => {
   it("lists config-seeded identities as fixed, issues, lists and cancels pairing codes, and enforces the pending limit", async () => {
     const t = await setup();
-    const me = await t.api("/me");
-    expect(me.data.limits.features).toMatchObject({ history: true, identity: true });
     const listed = await t.api("/identities");
     expect(listed.status).toBe(200);
     expect(listed.data.data.map((item: any) => [item.provider, item.namespace, item.subject, item.verifiedBy, item.removable])).toEqual([
@@ -78,11 +71,5 @@ describe("identity web API (features.identity)", () => {
     expect(await t.api(`/identities/pairing-codes/${created.data.id}`, "DELETE")).toEqual({ status: 404, data: { error: "pairing_code_not_found" } });
     expect((await t.api("/identities/pairing-codes")).data.data).toHaveLength(2);
     expect((await t.api("/identities/pairing-codes", "POST", { extra: true })).status).toBe(400);
-  });
-  it("without the flag the routes are absent and the feature is off", async () => {
-    const t = await setup({ ledgerIdentity: false });
-    expect((await t.api("/me")).data.limits.features.identity).toBe(false);
-    expect((await t.api("/identities")).status).toBe(404);
-    expect(t.service.identity).toBeUndefined();
   });
 });

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { CommunicationCore, type InboxRecord, type OutboxRecord } from "../src/communication/core.js";
+import { CommunicationCore } from "../src/communication/core.js";
 import { DurableStore } from "../src/communication/store.js";
 import { CliWork } from "../src/execution/work.js";
 import { AgentLedger, legacySession } from "../src/ledger/ledger.js";
@@ -37,7 +37,7 @@ function registry() {
 async function harness(options: { identity?: boolean; mailPairing?: boolean } = {}) {
   const r = registry();
   const store = new DurableStore(":memory:", "agent"); cleanup.push(() => store.close());
-  const ledger = AgentLedger.open(store); ledger.authoritative = true;
+  const ledger = AgentLedger.open(store);
   const work = new CliWork(store, () => "allow"), core = new CommunicationCore("agent", store, work);
   core.ownerPersonId = person;
   const namespaces = new Map<string, { provider: IdentityProvider; namespace: string }>([
@@ -54,9 +54,8 @@ async function harness(options: { identity?: boolean; mailPairing?: boolean } = 
   const web = new WebChannel(core, owner);
   core.register({ id: WEB_CONNECTION, ownerAddresses: [person] }, web);
   await core.start();
-  const inbox = (connectionId: string, externalId: string) => store.get<InboxRecord>("communication_inbox", ledger.claimFor(connectionId, externalId)!.inputId)!;
-  const outbox = () => store.entries<OutboxRecord>("communication_outbox").map(({ value }) => value);
-  return { ...r, store, ledger, core, web, adapters, inbox, outbox };
+  const inbox = (connectionId: string, externalId: string) => core.inputById(ledger.claimFor(connectionId, externalId)!.inputId)!;
+  return { ...r, store, ledger, core, web, adapters, inbox };
 }
 let counter = 0;
 const dm = (sender: string, text: string, extra: Partial<ChannelMessage> = {}): ChannelMessage => ({ externalId: `m${++counter}`, sender, scope: "direct",
@@ -132,8 +131,11 @@ describe("pairing at channel ingress", () => {
     expect(record).toMatchObject({ state: "ignored", reason: "pairing", source: { text: "/link ********" } });
     expect(JSON.stringify(record)).not.toContain(code.code.toLowerCase());
     expect(h.ledger.claimFor("feishu", message.externalId)).toMatchObject({ state: "ignored", reason: "pairing", eventId: null });
-    expect(h.ledger.counts()).toMatchObject({ events: 0, sessions: 0, conversations: 0, turns: 0, deliveries: 0 });
+    // The only thing recorded besides the claim is the reply, a delivery without a conversation or a transcript event.
+    expect(h.ledger.counts()).toMatchObject({ events: 0, sessions: 0, conversations: 0, turns: 0, deliveries: 1 });
     await h.core.dispatch(); await h.core.flush();
+    expect(h.ledger.recentDeliveries()).toMatchObject([{ status: "sent", purpose: "notice", eventId: null, conversationId: "" }]);
+    expect(h.adapters.feishu.sent).toHaveLength(1);
     expect(h.adapters.feishu.sent).toEqual([{ route: expect.objectContaining({ target: "chat-ou_new" }), text: REPLIES.linked("alice") }]);
     expect(h.ledger.counts()).toMatchObject({ events: 0, turns: 0 });
     expect(h.persons.resolve("feishu", "cli_one", "ou_new")).toBe(person);

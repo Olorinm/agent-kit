@@ -7,6 +7,13 @@
 > unchanged as the historical record; they do not describe the current code. The service lives in
 > `src/service/managed.ts`.
 
+> **Status note (single record).** The ledger is now also the only record of channel messages. The
+> `communication_inbox` and `communication_outbox` documents, the shadow writes that kept them in step with the ledger,
+> and the feature switches (`AGENT_LEDGER_*`, `ledgerRead` … `ledgerAttachments`, `limits.features` in `GET /web/me`)
+> no longer exist: every feature described here is always on. Where the sections below say "legacy record", "shadow write",
+> "authoritative", "with the flag" or "fallback", they describe the migration period, not the current code. The current
+> rules are in "Implementation notes (single record)" at the end.
+
 - Status: accepted; phases 1–3 implemented behind flags (see "Implementation notes"); phases 4–7 decided and
   specified (sections 15–19); phase 8 (Durable Objects) later
 - Date: 2026-11-05; phases 3–7 decisions 2026-11-06
@@ -2428,3 +2435,35 @@ Phase 7 is implemented in `src/service/managed.ts` (switches, gated paths, toggl
     `--access-token-file`/`CF_ACCESS_TOKEN[_FILE]`, then `cloudflared access token -app=<origin>` (header
     `cf-access-token`), plus `Origin` of the service for the edge CSRF guard. Owner commands (agents, channels, gateway) use
     it; `logout` removes the edge profile.
+
+## Implementation notes (single record)
+
+The ledger tables are the only record of what an agent receives and sends (`AGENT_LEDGER_V5`).
+
+1. **Received messages.** `ledger_ingress` keeps the message itself: `source` (the `ChannelMessage` as the adapter
+   delivered it), `session_key` and, for a provider topic, `fork_from` (the parent execution context pinned at
+   receipt). `CommunicationCore.input(turnId)` and every other reader build their view from the claim and its pending
+   input. A tombstoned claim keeps its hash and routing facts, not its content; a redacted message keeps everything
+   but its text.
+2. **Receipt is one unit.** Claim, conversation, event, platform index and pending input are written in one
+   transaction (a savepoint inside the adapter's own transaction). When that fails, an adapter with `strictReceipt`
+   (web, room) gets the error and its caller retries. Every other channel acknowledges the message, and it is kept
+   with the error in `ledger_ingress_failures` (`status().receiptFailures`), so one message that cannot be recorded
+   never stops a channel cursor or the messages behind it. A redelivery is tried again and clears the failure.
+3. **Dispatch** reads only `ledger_pending_inputs`. Reactions, edits and redactions are events without a pending
+   input. A pending input whose claim is gone is `dropped` (`input_missing`).
+4. **Deliveries.** `ledger_deliveries` is the send queue and carries what is sent: `text`, `content`, `turn_id` (the
+   turn a reply, notice or activity marker belongs to), `origin_turn_id` (the turn a content send came from) and
+   `activity`. Owner notifications and pairing replies are deliveries without an event; a pairing reply has an empty
+   `conversation_id`, because a stranger gets no conversation. A send that was in flight when the process stopped
+   (`sending`) is queued again on a retry-safe connection and `unknown` otherwise. The connection whose event is its
+   delivery (web) still gets no delivery row; the state of a content send there is read from its event.
+5. **Final reply once.** A turn's result is published when the turn has no `final_event_id` and no reply delivery.
+6. **Execution-side notes** (turn states and cards written by the Host worker) are guarded writes: an error rolls back
+   only the note and is kept in `ledger.lastError`; the run continues.
+7. **Upgrade.** Migration 5 copies each inbox record's message, session and fork parent onto its claim and each outbox
+   record's text, turn and activity onto its delivery, turns outbox records that never had a delivery row (owner
+   notifications, pairing replies; not the web connection's) into delivery rows, then deletes the `communication_inbox`,
+   `communication_outbox` and `communication_threads` documents. An inbox record that never had a claim is not kept.
+8. **Switches.** `AGENT_LEDGER_READ`, `_SEND`, `_CARDS`, `_CONTROL`, `_GROUPS`, `_IDENTITY` and `_ATTACHMENTS` are
+   ignored, and `GET /web/me` has no `limits.features`: there is nothing to advertise.

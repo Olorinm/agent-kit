@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { ChannelHttpError } from "../http.js";
-import type { CommunicationCore, InboxRecord, OutboxRecord } from "../communication/core.js";
+import type { ChannelInput, CommunicationCore } from "../communication/core.js";
 import { interaction } from "../communication/interaction.js";
 import type { DurableStore } from "../communication/store.js";
 import type { HostCall, HostPort } from "../execution/host.js";
@@ -9,7 +9,6 @@ import type { RunObservation } from "../execution/observation.js";
 import { digest, key } from "../execution/protocol.js";
 import { WorkError, type CliWork } from "../execution/work.js";
 import { RETRY_CALL_PREFIX, type AgentLedger, type CardKind, type CardRecord, type CardStatus, type CardSurface, type LedgerEvent } from "./ledger.js";
-import { shadowOutbox } from "./shadow.js";
 
 /** ADR 0005 16.1: the private browser link of a handoff card is never stored in the transcript. */
 export const HANDOFF_LINK = "[私密链接，仅在卡片待处理时显示]";
@@ -64,8 +63,6 @@ export class LedgerControl {
   constructor(readonly deps: ControlDependencies) {}
   private get ledger() { return this.deps.ledger; }
   private tx<T>(work: () => T): T { return this.deps.store.db.isTransaction ? work() : this.deps.store.transaction(work); }
-  get cards() { return this.ledger.authoritative && this.ledger.features.cards; }
-  get resets() { return this.ledger.authoritative && this.ledger.features.reset; }
 
   card(cardId: string): CardRecord | undefined { return this.ledger.cardRecord(cardId); }
   /** The API `Card`: stored body, current status. A pending handoff card shows the live text (with its private link). */
@@ -197,34 +194,21 @@ export class LedgerControl {
       throw new WorkError("card_answer_pending", 503).with({ retryAfterMs: 1000 });
     }
   }
-  /**
-   * Answers from the run API and Mau's call endpoint (ADR 16.1 "one record"): plan, resolve, commit. Without the
-   * `cards` feature the answer is only recorded after the Host accepted it.
-   */
+  /** Answers from the run API and Mau's call endpoint (ADR 16.1 "one record"): plan, resolve, commit. */
   async record(runId: string, callId: string, input: { by: string | null; surface: CardSurface; result: unknown }, resolve: () => Promise<void>): Promise<"accepted" | "stale"> {
     const card = this.ledger.cardByCall(runId, callId);
     if (!card) { await resolve(); return "accepted"; }
     const key = `${input.surface}:${randomUUID()}`;
-    if (this.cards) {
-      const planned = this.tx(() => this.ledger.planAnswer(card.cardId, { key, result: input.result, by: input.by, surface: input.surface }));
-      if (planned !== "planned") return "stale";
-      try { await resolve(); } catch (error) { this.tx(() => this.ledger.unplanAnswer(card.cardId, key)); throw error; }
-      this.commit(this.card(card.cardId)!, input.result, { by: input.by, surface: input.surface });
-      return "accepted";
-    }
-    await resolve();
-    // Shadow mode: the Host accepted the answer; a ledger error must not turn that into a failure.
-    try { this.commit(card, input.result, { by: input.by, surface: input.surface }); } catch { this.ledger.lastError = "card_record_failed"; }
+    const planned = this.tx(() => this.ledger.planAnswer(card.cardId, { key, result: input.result, by: input.by, surface: input.surface }));
+    if (planned !== "planned") return "stale";
+    try { await resolve(); } catch (error) { this.tx(() => this.ledger.unplanAnswer(card.cardId, key)); throw error; }
+    this.commit(this.card(card.cardId)!, input.result, { by: input.by, surface: input.surface });
     return "accepted";
   }
-  /**
-   * Chat answers (HostWorker.handleInput): plan before the Host call. `stale` when another surface answered first.
-   * Without the `cards` feature, nothing is gated.
-   */
+  /** Chat answers (HostWorker.handleInput): plan before the Host call. `stale` when another surface answered first. */
   planChat(call: Pick<HostCall, "id" | "runId">, input: { inputId: string; by: string | null; result: unknown; summary?: string }): "planned" | "stale" | "untracked" {
     const card = this.ledger.cardByCall(call.runId, call.id);
     if (!card) return "untracked";
-    if (!this.cards) return card.status === "pending" ? "planned" : "untracked";
     const planned = this.tx(() => this.ledger.planAnswer(card.cardId, { key: `channel:${input.inputId}`, result: input.result, by: input.by, surface: "channel",
       ...(input.summary ? { summary: input.summary } : {}) }));
     return planned === "planned" || planned === "same" ? "planned" : "stale";
@@ -235,7 +219,6 @@ export class LedgerControl {
   }
   /** Worker tick: planned answers whose resolve did not complete (crash or Host failure) are resolved again once more. */
   async reresolve(now = Date.now(), graceMs = this.replanGraceMs): Promise<void> {
-    if (!this.cards) return;
     for (const card of this.ledger.plannedCards()) {
       if (card.updatedAt > now - graceMs) continue;
       try { if ((await this.deliver(card, card.result)) === "done") this.commit(this.card(card.cardId) ?? card, card.result); }
@@ -245,7 +228,6 @@ export class LedgerControl {
 
   /** ADR 6.2.4: an unknown turn gets a "重新执行 / 不用了" card. It is never replayed automatically. */
   unknownTurn(binding: Pick<RunBinding, "claimId" | "taskId" | "contextId">): void {
-    if (!this.cards) return;
     const ledger = this.ledger, turn = ledger.turn(binding.taskId); if (!turn) return;
     const callId = `${RETRY_CALL_PREFIX}${binding.taskId}`, runId = `router:${binding.claimId}`;
     const cardId = `cd_${digest(key(runId, callId)).slice(0, 40)}`;
@@ -266,8 +248,7 @@ export class LedgerControl {
       if (external) {
         const body = `${text}\n${nativeButtons ? "可点击选项，或直接回复“重新执行”或“不用了”。" : "请回复“重新执行”或“不用了”。"}`;
         const noticeId = this.deps.core.notice(input!, body, `question:${callId}`, { text: body, ...(nativeButtons ? { buttons: labels.map((label, index) => ({ label, token: tokens[index]! })) } : {}) });
-        const notice = this.deps.store.get<OutboxRecord>("communication_outbox", noticeId);
-        if (notice) shadowOutbox(ledger, this.deps.core.shadowContext, input!, notice, "card", null, event.eventId);
+        ledger.attachDelivery(noticeId, event.eventId);
       }
     });
   }
@@ -336,11 +317,7 @@ export class LedgerControl {
     if (!cancelActive) throw new WorkError("session_busy", 409).with({ activeTurns: busy.activeTurns, queuedInputs: busy.queuedInputs.length });
     for (const turnId of busy.activeTurns) await this.deps.work.cancel(turnId).catch(() => undefined);
     this.tx(() => {
-      for (const inputId of busy.queuedInputs) {
-        this.ledger.updateInput(inputId, "dropped", { reason });
-        const legacy = this.deps.store.get<InboxRecord>("communication_inbox", inputId);
-        if (legacy?.state === "received") this.deps.store.set("communication_inbox", inputId, { ...legacy, state: "done", reason: `dropped_by_${reason}` } satisfies InboxRecord);
-      }
+      for (const inputId of busy.queuedInputs) this.ledger.updateInput(inputId, "dropped", { reason });
     });
   }
   /** ADR 16.3 reset of the shared session: every owner channel continues in the new window. */
@@ -350,27 +327,15 @@ export class LedgerControl {
     return this.tx(() => this.ledger.reset(sessionKey));
   }
   /**
-   * ADR 16.4 purge: the transcript is deleted, claims are tombstoned and the chat continues in a new window. The legacy
-   * inbox and settled outbox copies of the session's messages lose their text too (hashes and ids are kept).
+   * ADR 16.4 purge: the transcript is deleted, claims are tombstoned without their content (hashes and ids are kept)
+   * and the chat continues in a new window. Media read for the model from the session's messages goes too.
    */
   async purge(sessionKey: string, options: { cancelActive?: boolean } = {}): Promise<{ generation: number; purgedEvents: number; window: number }> {
     if (!this.ledger.session(sessionKey)) throw new WorkError("chat_not_found", 404);
     await this.clear(sessionKey, "purge", Boolean(options.cancelActive));
     const result = this.tx(() => {
       const purged = this.ledger.purge(sessionKey);
-      const store = this.deps.store, tasks = new Set<string>();
-      for (const { id, value } of store.entries<InboxRecord>("communication_inbox")) {
-        if (value.conversationId !== sessionKey) continue;
-        if (value.taskId) tasks.add(value.taskId);
-        const { attachments: _attachments, quoted: _quoted, ...source } = value.source;
-        store.set("communication_inbox", id, { ...value, source: { ...source, text: "" } } satisfies InboxRecord);
-        store.delete("communication_media", id);
-      }
-      for (const { id, value } of store.entries<OutboxRecord>("communication_outbox")) {
-        if (value.state === "queued" || value.state === "submitting" || !tasks.has(value.taskId ?? value.originTaskId ?? "")) continue;
-        const { content: _content, ...rest } = value;
-        store.set("communication_outbox", id, { ...rest, text: "" } satisfies OutboxRecord);
-      }
+      for (const inputId of purged.inputIds) this.deps.store.delete("communication_media", inputId);
       return { generation: purged.generation, purgedEvents: purged.purgedEvents, window: purged.window, attachmentIds: purged.attachmentIds };
     });
     // ADR 16.4: the purged rows' blob references go too (the hub is another file, so after the agent transaction; the
@@ -383,9 +348,9 @@ export class LedgerControl {
    * Control commands from any owner channel (ADR 16.3): `/new`, `/reset`, `新对话`. The reply goes to that conversation
    * only. Also answers to the retry card by its button or its exact label.
    */
-  async command(input: InboxRecord): Promise<boolean> {
+  async command(input: ChannelInput): Promise<boolean> {
     const text = input.source.text.trim(), core = this.deps.core;
-    if (this.resets && /^(\/(?:new|reset)(?:@\w+)?|新对话)$/i.test(text) && core.isOwnerInput(input) && this.ledger.session(input.conversationId)?.kind === "owner_main") {
+    if (/^(\/(?:new|reset)(?:@\w+)?|新对话)$/i.test(text) && core.isOwnerInput(input) && this.ledger.session(input.conversationId)?.kind === "owner_main") {
       try { await this.reset(input.conversationId); core.notice(input, "已开始新对话。", "reset"); }
       catch (error) {
         if (!(error instanceof WorkError) || error.message !== "session_busy") throw error;
@@ -393,7 +358,7 @@ export class LedgerControl {
       }
       return true;
     }
-    if (!this.cards || !core.isOwnerInput(input)) return false;
+    if (!core.isOwnerInput(input)) return false;
     const token = input.source.action ? this.ledger.cardToken(input.source.action.token) : undefined;
     const cards = this.ledger.openCards({ sessionKey: input.conversationId }).filter((card) => card.source === "router");
     const card = token ? cards.find((item) => item.cardId === token.card_id) : cards.length === 1 ? cards[0] : undefined;

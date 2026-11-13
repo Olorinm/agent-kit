@@ -153,3 +153,51 @@ export const OWNER_HUB_IDENTITY_V1 = `
 CREATE TABLE hub_pairing_failures(sender_key TEXT PRIMARY KEY, failures INTEGER NOT NULL, window_start INTEGER NOT NULL,
   locked_until INTEGER);
 CREATE INDEX hub_pairing_pending ON hub_pairing_codes(person_id) WHERE consumed_at IS NULL;`;
+
+/**
+ * The ledger is the only record of channel messages. `ledger_ingress` keeps the received message (`source`), its
+ * session and, for a topic, the context it forks from; `ledger_deliveries` keeps what is sent (`text`, `content`,
+ * the turn it answers or was sent from, an activity marker). A receipt that could not be recorded is kept in
+ * `ledger_ingress_failures`, so the channel still acknowledges it.
+ *
+ * The inbox and outbox documents of earlier releases are folded into those rows and then deleted: a claim takes its
+ * message from its inbox record, a delivery its text and turn from its outbox record, and an outbox record that never
+ * had a delivery row (owner notifications, pairing replies) becomes one. Records of the web connection had no
+ * delivery row by design (the event is the delivery) and get none.
+ */
+export const AGENT_LEDGER_V5 = `
+ALTER TABLE ledger_ingress ADD COLUMN source TEXT;
+ALTER TABLE ledger_ingress ADD COLUMN session_key TEXT;
+ALTER TABLE ledger_ingress ADD COLUMN fork_from TEXT;
+ALTER TABLE ledger_deliveries ADD COLUMN text TEXT NOT NULL DEFAULT '';
+ALTER TABLE ledger_deliveries ADD COLUMN turn_id TEXT;
+ALTER TABLE ledger_deliveries ADD COLUMN origin_turn_id TEXT;
+ALTER TABLE ledger_deliveries ADD COLUMN activity TEXT;
+CREATE INDEX ledger_deliveries_sending ON ledger_deliveries(connection_id) WHERE status = 'sending';
+CREATE INDEX ledger_deliveries_turn ON ledger_deliveries(turn_id) WHERE turn_id IS NOT NULL;
+CREATE TABLE ledger_ingress_failures(
+  connection_id TEXT NOT NULL, external_id TEXT NOT NULL, input_id TEXT NOT NULL, hash TEXT NOT NULL, source TEXT NOT NULL,
+  error TEXT NOT NULL, received_at INTEGER NOT NULL, PRIMARY KEY(connection_id, external_id));
+UPDATE ledger_ingress SET (source, session_key, fork_from) = (
+  SELECT CASE WHEN ledger_ingress.state = 'tombstone' THEN NULL ELSE json_extract(d.value, '$.source') END,
+    json_extract(d.value, '$.conversationId'), json_extract(d.value, '$.forkFromContextId')
+  FROM documents d WHERE d.collection = 'communication_inbox' AND d.id = ledger_ingress.input_id)
+  WHERE input_id IN (SELECT id FROM documents WHERE collection = 'communication_inbox');
+UPDATE ledger_deliveries SET (text, content, turn_id, origin_turn_id, activity) = (
+  SELECT COALESCE(json_extract(d.value, '$.text'), ''), COALESCE(ledger_deliveries.content, json_extract(d.value, '$.content')),
+    json_extract(d.value, '$.taskId'), json_extract(d.value, '$.originTaskId'), json_extract(d.value, '$.activity')
+  FROM documents d WHERE d.collection = 'communication_outbox' AND d.id = ledger_deliveries.delivery_id)
+  WHERE delivery_id IN (SELECT id FROM documents WHERE collection = 'communication_outbox');
+INSERT OR IGNORE INTO ledger_deliveries(delivery_id, event_id, conversation_id, connection_id, route, purpose, status, content, attempts, next_at,
+  platform_message_id, error, created_at, updated_at, text, turn_id, origin_turn_id, activity)
+  SELECT d.id, NULL, '', json_extract(d.value, '$.route.connectionId'), json_extract(d.value, '$.route'),
+    CASE WHEN json_extract(d.value, '$.activity') IS NOT NULL THEN 'activity' WHEN json_extract(d.value, '$.originTaskId') IS NOT NULL THEN 'content'
+      WHEN json_extract(d.value, '$.final') THEN 'reply' ELSE 'notice' END,
+    CASE json_extract(d.value, '$.state') WHEN 'queued' THEN 'queued' WHEN 'submitting' THEN 'sending' WHEN 'accepted' THEN 'sent'
+      WHEN 'failed' THEN 'rejected' ELSE 'unknown' END,
+    json_extract(d.value, '$.content'), COALESCE(json_extract(d.value, '$.attempts'), 0), COALESCE(json_extract(d.value, '$.nextAt'), 0),
+    json_extract(d.value, '$.externalId'), json_extract(d.value, '$.error'), CAST(unixepoch('subsec') * 1000 AS INTEGER), CAST(unixepoch('subsec') * 1000 AS INTEGER),
+    COALESCE(json_extract(d.value, '$.text'), ''), json_extract(d.value, '$.taskId'), json_extract(d.value, '$.originTaskId'), json_extract(d.value, '$.activity')
+  FROM documents d WHERE d.collection = 'communication_outbox' AND json_extract(d.value, '$.route.connectionId') IS NOT NULL
+    AND json_extract(d.value, '$.route.connectionId') <> 'web';
+DELETE FROM documents WHERE collection IN ('communication_inbox','communication_outbox','communication_threads');`;

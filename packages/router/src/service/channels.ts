@@ -14,7 +14,6 @@ import { key } from "../execution/protocol.js";
 import { ChannelTools } from "../communication/tools.js";
 import { personId, type IdentityProvider, type PersonRegistry } from "../ledger/registry.js";
 import { mailPairingCommand, pairingCommand, REPLIES, senderIdentities, type Identities } from "../ledger/identity.js";
-import { AgentLedger } from "../ledger/ledger.js";
 import { LedgerControl } from "../ledger/control.js";
 import { ROOM_CONNECTION, WEB_CONNECTION } from "../ledger/surfaces.js";
 import type { HubRooms } from "../ledger/rooms.js";
@@ -127,15 +126,14 @@ export async function createChannelRuntime(agent: ManagedAgent, runtime: AgentRu
     const { adapter } = channel, ownerAddresses = channel.ownerAddresses ?? definition.ownerAddresses, namespace = channel.namespace ?? "";
     namespaces.set(definition.id, { provider: definition.kind, namespace });
     if (channel.mailPairing) mailPairing.add(definition.id);
-    // Identity seeding is shadow data: a registry error never blocks the channel.
+    // A registry error while seeding identities never blocks the channel.
     try { for (const address of ownerAddresses) options.persons?.link(owner, definition.kind, namespace, address, "config"); } catch { /* Seeded again on the next start. */ }
     core.register({ id: definition.id, ownerAddresses, peerAddresses: definition.peerAddresses, groupIds: definition.groupIds,
       ...(channel.notify ? { notify: channel.notify } : {}) }, adapter, channel.reload ?? (() => adapter));
   }
-  // Owner web messages (ADR 0005 phase 3, `ledgerSend`): replies to it are recorded, not sent. Without the flag the
-  // connection is not registered, so channel status and dispatch are unchanged.
-  const web = AgentLedger.attached(runtime.store)?.authoritative ? new WebChannel(core, agent.owner, options.attachments) : undefined;
-  if (web) core.register({ id: WEB_CONNECTION, ownerAddresses: [owner] }, web);
+  // Owner web messages: replies to it are recorded, not sent.
+  const web = new WebChannel(core, agent.owner, options.attachments);
+  core.register({ id: WEB_CONNECTION, ownerAddresses: [owner] }, web);
   // Hub rooms (ADR 0005 phase 5). Only the owner's addressed room messages arrive here, through the fan-out worker.
   const room = options.rooms ? new RoomChannel(core, agent.id, agent.owner, options.rooms) : undefined;
   if (room) core.register({ id: ROOM_CONNECTION, ownerAddresses: [agent.owner] }, room);
@@ -159,11 +157,11 @@ export async function createChannelRuntime(agent: ManagedAgent, runtime: AgentRu
   }
   const observation = worker ? new RunObservation(runtime.store, runtime.work, worker.host) : undefined;
   // Phase 4 (ADR 0005 section 16): one card record for every answer surface, and owner control over the session.
-  const control = core.ledger ? new LedgerControl({ agentId: agent.id, ownerPersonId: owner, store: runtime.store, ledger: core.ledger, core,
+  const control = new LedgerControl({ agentId: agent.id, ownerPersonId: owner, store: runtime.store, ledger: core.ledger, core,
     work: runtime.work, observation, host: worker?.host, ...(worker ? { closeUnknown: (claimId: string) => worker!.closeUnknown(claimId) } : {}),
-    ...(options.attachments ? { releaseAttachments: (ids: string[]) => options.attachments!.releaseAgent(agent.owner, agent.id, ids) } : {}) }) : undefined;
+    ...(options.attachments ? { releaseAttachments: (ids: string[]) => options.attachments!.releaseAgent(agent.owner, agent.id, ids) } : {}) });
   if (worker) worker.control = control;
-  if (worker || control) core.control = async (input) => Boolean(await control?.command(input)) || Boolean(await worker?.handleInput(input));
+  core.control = async (input) => Boolean(await control.command(input)) || Boolean(await worker?.handleInput(input));
   const sessions = worker ? new WorkSessions(agent.id, agent.owner, config.host!.runtimeId, worker.instanceId,
     runtime.store, runtime.work, worker.host, core, () => runtime.assertLease(), input => worker!.dependencyWait(input)) : undefined;
   if (worker && sessions) worker.prepareSession = (contextId, taskId) => sessions.prepareChannelSession(contextId, taskId);
@@ -182,13 +180,13 @@ export async function createChannelRuntime(agent: ManagedAgent, runtime: AgentRu
     status: () => {
       return { ...core.status(), host: worker?.status() ?? null };
     },
-    communication: core, ...(web ? { web } : {}), ...(control ? { control } : {}), ...(room ? { room } : {}),
+    communication: core, web, control, ...(room ? { room } : {}),
     ...(observation ? { observation } : {}),
     ...(sessions ? { sessions } : {}),
     resolve: async (callId, result) => {
       if (!worker) throw new Error("host_not_configured");
       const call = worker.status().calls.find((item) => item.id === callId);
-      if (!control || !call) { await worker.resolve(callId, result); return "accepted"; }
+      if (!call) { await worker.resolve(callId, result); return "accepted"; }
       return control.record(call.runId, callId, { by: owner, surface: "run-api", result }, () => worker!.resolve(callId, result));
     },
     reconcile: async (claimId, runId) => { if (!worker) throw new Error("host_not_configured"); await worker.reconcile(claimId, runId); },

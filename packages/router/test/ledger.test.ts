@@ -62,7 +62,7 @@ async function complete(h: ReturnType<typeof harness>) { await h.core.dispatch()
 const ownerMain = legacySession("agent", "owner-main");
 const kinds = (h: ReturnType<typeof harness>, session = ownerMain) => h.ledger.events(session, { limit: 200 }).map((event) => event.kind);
 
-describe("shadow ledger ingress", () => {
+describe("ledger ingress", () => {
   it("records every owner channel in one owner-main session with one conversation per channel and gapless seq", async () => {
     const h = harness(); await h.core.start();
     const first = h.core.receive("feishu", message("one"));
@@ -128,24 +128,33 @@ describe("shadow ledger ingress", () => {
     const row = h.store.db.prepare("SELECT kind, peer_id, thread_id FROM ledger_conversations WHERE session_key=?").get(group.conversationId);
     expect({ ...row }).toEqual({ kind: "group", peer_id: "group", thread_id: "group:root" });
   });
-  it("leaves legacy behavior intact when a ledger write fails, including inside a provider transaction", async () => {
+  it("acknowledges a receipt that cannot be recorded and keeps it aside, also inside a provider transaction", async () => {
     const h = harness(); await h.core.start();
-    h.store.db.exec("DROP TABLE ledger_events");
-    expect(h.store.transaction(() => h.core.receive("matrix", message("one", "owner-matrix"))).state).toBe("received");
-    expect(h.core.receive("feishu", message("two")).state).toBe("received");
-    expect(h.ledger.lastError).toBe("ledger_write_failed");
+    h.store.db.exec("ALTER TABLE ledger_events RENAME TO ledger_events_away");
+    // The provider's own writes of the same transaction (its cursor) commit; only the receipt is rolled back.
+    const one = h.store.transaction(() => { h.store.set("provider", "cursor", 7); return h.core.receive("matrix", message("one", "owner-matrix")); });
+    expect(one).toMatchObject({ state: "ignored", reason: "receipt_not_recorded" });
+    expect(h.store.get("provider", "cursor")).toBe(7);
+    expect(h.core.receive("feishu", message("two")).state).toBe("ignored");
     expect(h.ledger.claimFor("matrix", "one")).toBeUndefined();
+    expect(h.ledger.ingressFailures().map((item) => [item.connectionId, item.externalId]).sort()).toEqual([["feishu", "two"], ["matrix", "one"]]);
     await complete(h);
+    expect(h.host.starts).toHaveLength(0);
+    // Once the ledger can be written again, a redelivery is recorded and runs.
+    h.store.db.exec("ALTER TABLE ledger_events_away RENAME TO ledger_events");
+    expect(h.core.receive("matrix", message("one", "owner-matrix")).state).toBe("received");
+    await complete(h);
+    expect(h.ledger.ingressFailures().map((item) => item.externalId)).toEqual(["two"]);
     expect(h.host.starts).toHaveLength(1); expect(h.matrix.sent).toHaveLength(1);
   });
 });
 
-describe("shadow ledger turns and deliveries", () => {
+describe("ledger turns and deliveries", () => {
   it("records queued, running and completed turns, the final reply and its delivery with platform ids", async () => {
     const h = harness(); await h.core.start();
     const input = h.core.receive("matrix", message("$in", "owner-matrix"));
     await complete(h);
-    const task = h.store.get<{ taskId: string }>("communication_inbox", input.id)!.taskId;
+    const task = h.core.inputById(input.id)!.taskId!;
     expect(h.ledger.turn(task)).toMatchObject({ state: "completed", admission: "owner", sessionKey: ownerMain, originConversationId: expect.stringMatching(/^cv_/) });
     expect(kinds(h)).toEqual(["message", "turn", "turn", "message", "turn", "delivery"]);
     const events = h.ledger.events(ownerMain);

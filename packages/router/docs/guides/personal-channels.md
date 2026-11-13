@@ -147,7 +147,7 @@ When a Feishu or Telegram user id is not yet known, leave `ownerAddresses` empty
 message from an unbound identity is stored as `ignored`: it does not start a model, and it is not run later when the
 binding changes.
 
-With `AGENT_LEDGER_IDENTITY=1` the owner can create a pairing code through the web API and send `/link <code>` to the
+The owner can create a pairing code through the web API and send `/link <code>` to the
 agent in a private chat on a new channel to link that account. Email is excluded unless the connection has
 `pairing: true` and the mail service marks the sender as verified.
 

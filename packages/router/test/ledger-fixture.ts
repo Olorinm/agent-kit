@@ -66,7 +66,7 @@ export async function setup(cleanup: Array<() => void | Promise<void>>, override
   cleanup.push(() => rmSync(stateDir, { recursive: true, force: true }));
   const host = new Host(), extensions = new Map<string, ServiceExtension>();
   const service: ManagedService = new ManagedService({ serverName: "example.test", publicUrl: "https://example.test/_agent-router/v1",
-    stateDir, ledgerRead: true, ledgerSend: true, ledgerCards: true, ledgerControl: true, ...overrides }, {
+    stateDir, ...overrides }, {
     authenticate: async (token) => { if (token === "alice") return owner; if (token === "bob") return other; throw new Error("bad_credentials"); },
     configure: async (agent, runtime) => {
       const config = channelConfigSchema.parse({ agents: [{ agentId: agent.id, connections, host: { binding: "fixture", runtimeId: "fixture" } }] }).agents[0]!;
@@ -90,7 +90,7 @@ export async function setup(cleanup: Array<() => void | Promise<void>>, override
     return { status: response.status, data: response.status === 204 ? null : await response.json() as any };
   }
   const agent = await service.create(owner, "helper");
-  const ledger = AgentLedger.attached((await service.runtime(agent.id)).store)!;
+  const ledger = AgentLedger.open((await service.runtime(agent.id)).store);
   const chatId = `dm:${agent.id}`, chat = `${root}/web/chats/${enc(chatId)}`;
   const send = (body: Record<string, unknown>, token = "alice") => api(`${chat}/messages`, token, "POST", body);
   const events = async () => (await api(`${chat}/events?limit=200`)).data.events as any[];

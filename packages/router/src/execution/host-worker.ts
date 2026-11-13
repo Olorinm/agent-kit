@@ -1,6 +1,6 @@
 import { interaction } from "../communication/interaction.js";
 import { archiveRun } from "./run-archive.js";
-import type { CommunicationCore, InboxRecord } from "../communication/core.js";
+import type { ChannelInput, CommunicationCore } from "../communication/core.js";
 import { Message } from "@a2a-js/sdk";
 import { ChannelHttpError } from "../http.js";
 import { DurableStore } from "../communication/store.js";
@@ -11,7 +11,6 @@ import { runtimeWorkingDirectory } from "./host.js";
 import type { HostTools, HostToolResult } from "./tools.js";
 import type { WorkDependencyWait } from "./sessions.js";
 import { AgentLedger, type TurnState } from "../ledger/ledger.js";
-import { shadowOutbox } from "../ledger/shadow.js";
 import { cardBody, cardKind, type LedgerControl } from "../ledger/control.js";
 
 interface ToolReceipt { hash: string; phase: "executing" | "completed" | "uncertain"; result?: HostToolResult; }
@@ -111,7 +110,8 @@ export class HostWorker {
     finally { this.busy = false; }
   }
   /** Shadow ledger writes (ADR 0005 phase 1); a ledger failure never changes run handling. */
-  private ledger(work: (ledger: AgentLedger) => void) { const ledger = AgentLedger.attached(this.store); if (ledger) ledger.shadow(() => work(ledger)); }
+  /** Transcript notes of the run (turn states, cards); the run does not depend on them (`AgentLedger.guarded`). */
+  private ledger(work: (ledger: AgentLedger) => void) { const ledger = AgentLedger.open(this.store); ledger.guarded(() => work(ledger)); }
   private turn(taskId: string, state: TurnState, error?: string) { this.ledger((ledger) => ledger.turnState(taskId, state, { agentId: this.agentId, ...(error ? { error } : {}) })); }
   /** Owner work and schedules have no channel input, so their final transcript entry is written here. */
   private finishWork(taskId: string, state: TurnState, answer?: string) {
@@ -377,8 +377,8 @@ export class HostWorker {
     } else if (fallback) text = fallback;
     if (text && text !== prior.text) {
       try {
-        const ledger = AgentLedger.attached(this.store);
-        ledger?.stream(ledger.sessionForContext(binding.contextId) ?? binding.contextId, binding.taskId, text);
+        const ledger = AgentLedger.open(this.store);
+        ledger.stream(ledger.sessionForContext(binding.contextId) ?? binding.contextId, binding.taskId, text);
       } catch { /* Streams are best effort and never delay progress. */ }
       await this.communication.progress(binding.taskId, text);
     }
@@ -410,17 +410,16 @@ export class HostWorker {
       ledger.addCard({ cardId, callId: call.id, runId: call.runId, claimId: binding.claimId, turnId: binding.taskId, sessionKey, eventId: event.eventId,
         kind, deadlineAt: Number.isFinite(deadline) ? deadline : null });
       buttons.forEach((button, index) => ledger.addCardToken(button.token, cardId, String(index), view.choices[index]!.result));
-      const notice = this.store.get<import("../communication/core.js").OutboxRecord>("communication_outbox", noticeId);
-      if (notice) shadowOutbox(ledger, core.shadowContext, input, notice, "card", null, event.eventId);
+      ledger.attachDelivery(noticeId, event.eventId);
     });
   }
   /** Execution contexts of later windows (`<key>.w<n>`) belong to the same session (ADR 16.3). */
-  private sessionOf(contextId: string): string { return AgentLedger.attached(this.store)?.sessionForContext(contextId) ?? contextId; }
-  private answerer(input: InboxRecord): string | null {
+  private sessionOf(contextId: string): string { return AgentLedger.open(this.store).sessionForContext(contextId) ?? contextId; }
+  private answerer(input: ChannelInput): string | null {
     const core = this.communication;
     return core?.isOwnerInput(input) ? core.ownerPersonId ?? null : core?.persons?.(input.connectionId, input.source.sender) ?? null;
   }
-  async handleInput(input: InboxRecord): Promise<boolean> {
+  async handleInput(input: ChannelInput): Promise<boolean> {
     const core = this.communication; if (!core) return false;
     const text = input.source.text.trim();
     const receipt = this.store.get<{ runId: string; callId: string; result: unknown; complete: boolean }>("communication_control_receipts", input.id);
@@ -452,7 +451,7 @@ export class HostWorker {
     if (input.source.action) action = this.store.get("communication_actions", input.source.action.token);
     const candidates = this.store.entries<any>("communication_questions").map(({ value }) => value).filter((item) =>
       !item.closed && this.sessionOf(item.conversationId) === input.conversationId && (item.connectionId === input.connectionId && item.source.sender === input.source.sender || core.isOwnerInput(input) && core.isOwnerTask(item.conversationId, item.taskId)) &&
-      (!input.source.quoted?.messageId || this.store.get<any>("communication_outbox", item.noticeId)?.externalId?.split(",").includes(input.source.quoted.messageId)) &&
+      (!input.source.quoted?.messageId || AgentLedger.open(this.store).delivery(item.noticeId)?.platformMessageId?.split(",").includes(input.source.quoted.messageId)) &&
       (!action || item.call.id === action.callId) && Date.parse(item.call.deadlineAt) > Date.now());
     if (!candidates.length) return false;
     if (candidates.length !== 1) { core.notice(input, "有多个问题等待回答，请点击对应问题的选项。", "ambiguous-question"); return true; }

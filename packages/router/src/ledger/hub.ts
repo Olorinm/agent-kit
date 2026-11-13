@@ -30,8 +30,6 @@ export interface HubDirectory {
   agentName(agentId: string): string;
   ledger(agentId: string): AgentLedger | undefined;
   personName(personId: string): string | undefined;
-  /** ADR 0005 `groups` (phase 5): room commands are accepted; without it room chats are read-only. */
-  groups?: boolean | undefined;
 }
 /** A connected event socket as the hub sees it: a send function and per-chat cursors. */
 export interface HubSocket {

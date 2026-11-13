@@ -19,8 +19,8 @@ export function createRouter(config: ServiceConfig, options: {
   let closed = false;
   return {
     service, connections, app: createManagedApp(service, routes.router),
-    /** Event socket upgrade (ADR 0005 8.4); true when handled. Only active with `ledgerRead`. */
-    upgrade: (req: IncomingMessage, socket: Duplex, head: Buffer) => service.web?.upgrade(req, socket, head) ?? false,
+    /** Event socket upgrade (ADR 0005 8.4); true when handled. */
+    upgrade: (req: IncomingMessage, socket: Duplex, head: Buffer) => service.web.upgrade(req, socket, head),
     start: () => {
       if (closed) return Promise.reject(new Error("router_closed"));
       return starting ??= service.start();

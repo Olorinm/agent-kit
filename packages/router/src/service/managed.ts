@@ -36,22 +36,8 @@ export interface ServiceConfig {
   /** The account namespace: owner ids are `@name:<serverName>` (`MATRIX_SERVER_NAME`). */
   serverName: string; publicUrl: string; stateDir: string;
   trustedProxies?: string[];
-  /** ADR 0005 `ledger_read`: serve the web history API and event socket from the owner ledger. Needs `ledgerSend`. */
-  ledgerRead?: boolean;
-  /** ADR 0005 `send` (phase 3, needs `ledgerRead`): owner web messages through the web channel; dispatch and flush read the ledger. */
-  ledgerSend?: boolean;
-  /** ADR 0005 `cards` (phase 4, `AGENT_LEDGER_CARDS`, needs `ledgerSend`): card answers over HTTP; first answer wins. */
-  ledgerCards?: boolean;
-  /** ADR 0005 `reset` (phase 4, `AGENT_LEDGER_CONTROL`, needs `ledgerSend`): cancel, steer, reset ("新对话") and purge. */
-  ledgerControl?: boolean;
-  /** ADR 0005 `groups` (phase 5, `AGENT_LEDGER_GROUPS`, needs `ledgerSend`): native hub rooms, fan-out to agents and room commands. */
-  ledgerGroups?: boolean;
   /** ADR 0005 18.2: verify the Cloudflare Access JWT and map its email (or service token) to an owner. */
   edgeIdentity?: EdgeIdentityConfig;
-  /** ADR 0005 `identity` (phase 6, `AGENT_LEDGER_IDENTITY`): owner resolution by person, `/link` pairing and the identity routes (with `ledgerRead`). */
-  ledgerIdentity?: boolean;
-  /** ADR 0005 `attachments` (phase 4, `AGENT_LEDGER_ATTACHMENTS`, needs `ledgerSend`): upload/download routes, attachments on send and `features.attachments`. */
-  ledgerAttachments?: boolean;
   /** Blob store for attachments; default `LocalBlobStore` under `<stateDir>/blobs`. R2 credentials are read from files. */
   blobStore?: BlobStoreConfig;
   /** Per-owner quota over distinct blobs; default 5 GiB. */
@@ -104,15 +90,15 @@ export class ManagedService {
   readonly store: DurableStore;
   readonly persons: PersonRegistry;
   readonly hubs: OwnerHubs;
-  readonly identity: Identities | undefined;
-  readonly web: ReturnType<typeof createWebLedger> | undefined;
+  readonly identity: Identities;
+  readonly web: ReturnType<typeof createWebLedger>;
   readonly edgeIdentity: CloudflareAccessAuthenticator | undefined;
   private readonly owners: CompositeAuthenticator;
-  /** Attachments and blob store (ADR 0005 16.5); only with `ledgerSend` and `ledgerAttachments`. */
-  readonly attachments: OwnerAttachments | undefined;
+  /** Attachments and blob store (ADR 0005 16.5). */
+  readonly attachments: OwnerAttachments;
   private readonly ledgers = new Map<string, AgentLedger>();
-  /** The hub room fan-out worker (phase 5); present with `ledgerGroups`. */
-  readonly fanout: RoomFanout | undefined;
+  /** The hub room fan-out worker (ADR 0005 section 17.2). */
+  readonly fanout: RoomFanout;
   private runtimes = new Map<string, Promise<AgentRuntime>>();
   private configurations = new Map<string, Promise<void>>();
   private deleteGuards: Array<(agentId: string) => void> = [];
@@ -120,8 +106,6 @@ export class ManagedService {
     if (!/^[a-zA-Z0-9.-]+(?::[0-9]+)?$/.test(config.serverName)) throw new Error("invalid_server_name");
     const url = new URL(config.publicUrl);
     if (!["http:", "https:"].includes(url.protocol) || url.username || url.password || url.search || url.hash) throw new Error("invalid_service_url");
-    // The console can only send through the ledger (ADR 0005 15.3).
-    if (config.ledgerRead && !config.ledgerSend) throw new Error("ledger_read_requires_ledger_send");
     this.store = new DurableStore(join(config.stateDir, "registry.sqlite"), config.serverName);
     // The legacy visitor channel ledger (`ChannelRouter`, AgentMail entries) was removed; its records go with it.
     this.store.migrate(1, `DELETE FROM documents WHERE collection IN (${LEGACY_CHANNEL_COLLECTIONS.map((name) => `'${name}'`).join(",")})`, "legacy_channels_removed");
@@ -131,13 +115,12 @@ export class ManagedService {
       agentName: (agentId) => this.store.get<ManagedAgent>("agents", agentId)?.name ?? agentId,
       ledger: (agentId) => this.ledgers.get(agentId),
       personName: (id) => this.persons.person(id)?.displayName,
-      groups: Boolean(config.ledgerRead && config.ledgerSend && config.ledgerGroups),
     });
-    this.identity = config.ledgerIdentity ? new Identities(this.persons, this.hubs) : undefined;
-    this.fanout = config.ledgerRead && config.ledgerSend && config.ledgerGroups ? new RoomFanout(this.hubs, {
+    this.identity = new Identities(this.persons, this.hubs);
+    this.fanout = new RoomFanout(this.hubs, {
       owners: () => [...new Set(this.agents().filter((agent) => agent.status === "active").map((agent) => agent.owner))],
       channel: async (agentId) => this.agent(agentId).status === "active" ? (await this.runtime(agentId)).extension?.room : undefined,
-    }) : undefined;
+    });
     if (config.edgeIdentity) assertEdgeOwners(config.edgeIdentity, config.serverName);
     this.edgeIdentity = config.edgeIdentity ? new CloudflareAccessAuthenticator(config.edgeIdentity, { persons: this.persons, origins: [new URL(config.publicUrl).origin],
       ...(dependencies.edgeIdentityCerts ? { certsUrl: dependencies.edgeIdentityCerts } : {}) }) : undefined;
@@ -145,7 +128,7 @@ export class ManagedService {
       const ownerId = await this.authenticate(token);
       return { personId: personId(ownerId), ownerId, via: "bearer" };
     }, this.edgeIdentity);
-    this.attachments = config.ledgerRead && config.ledgerSend && config.ledgerAttachments ? new OwnerAttachments({ hubs: this.hubs,
+    this.attachments = new OwnerAttachments({ hubs: this.hubs,
       store: dependencies.blobStore ?? createBlobStore(config.blobStore, config.stateDir), quotaBytes: config.attachmentQuotaBytes,
       tempDir: join(config.stateDir, "tmp", "uploads"), owned: (owner) => this.agents(owner).filter((agent) => agent.status === "active"),
       open: async (agentId) => { await this.runtime(agentId); }, ledger: (agentId) => this.ledgers.get(agentId),
@@ -153,19 +136,18 @@ export class ManagedService {
         const read = (await this.runtime(agentId)).extension?.readAttachment;
         if (!read) throw new Error("channel_attachment_read_unsupported");
         return read(inputId, reference);
-      } }) : undefined;
-    this.attachments?.startSweeper();
-    this.web = config.ledgerRead ? createWebLedger({ hubs: this.hubs, persons: this.persons, identity: this.identity, authenticator: this.owners,
-      send: config.ledgerSend, channel: async (agentId) => (await this.runtime(agentId)).extension?.web,
-      cards: Boolean(config.ledgerSend && config.ledgerCards), reset: Boolean(config.ledgerSend && config.ledgerControl),
+      } });
+    this.attachments.startSweeper();
+    this.web = createWebLedger({ hubs: this.hubs, persons: this.persons, identity: this.identity, authenticator: this.owners,
+      channel: async (agentId) => (await this.runtime(agentId)).extension?.web,
       control: async (agentId) => (await this.runtime(agentId)).extension?.control,
-      groups: Boolean(config.ledgerSend && config.ledgerGroups), kick: () => this.fanout?.kick(),
+      kick: () => this.fanout.kick(),
       open: async (agentId) => { await this.runtime(agentId); }, owned: (owner) => this.agents(owner).filter((agent) => agent.status === "active"),
-      attachments: this.attachments }) : undefined;
+      attachments: this.attachments });
   }
-  /** Channel runtime options for hub rooms (phase 5). Without `groups` the room connection is not registered. */
+  /** Channel runtime options for hub rooms (ADR 0005 section 17): the `room` connection reads the owner's rooms. */
   roomOptions(agent: ManagedAgent) {
-    return this.fanout ? { rooms: () => this.hubs.hub(agent.owner).rooms } : {};
+    return { rooms: () => this.hubs.hub(agent.owner).rooms };
   }
   /** The agent as the API returns it. A record written by an earlier release may carry a `matrix` state, which is not served. */
   publicAgent(agent: ManagedAgent): ManagedAgent {
@@ -248,19 +230,17 @@ export class ManagedService {
   }
   private async open(agent: ManagedAgent): Promise<AgentRuntime> {
     const store = new DurableStore(join(this.config.stateDir, "agents", `${agent.id}.sqlite`), agent.matrixId);
-    // The agent ledger is created before the channel runtime so its core writes into it.
-    // A ledger that cannot open (migration or registry error) leaves the agent on the legacy records only.
+    // The agent ledger is the record of the agent's messages: an agent whose ledger cannot open does not start.
+    let ledger: AgentLedger;
+    try { ledger = AgentLedger.open(store); } catch (error) { store.close(); throw error; }
+    this.ledgers.set(agent.id, ledger);
+    ledger.listen((sessionKey) => { if (this.ledgers.get(agent.id) === ledger) this.hubs.hub(agent.owner).publish(agent.id, sessionKey); });
+    ledger.listenStream((sessionKey, turnId, text) => { if (this.ledgers.get(agent.id) === ledger) this.hubs.hub(agent.owner).stream(agent.id, sessionKey, turnId, text); });
     try {
-      const ledger = AgentLedger.open(store);
-      ledger.authoritative = Boolean(this.config.ledgerRead && this.config.ledgerSend);
-      ledger.features = { cards: ledger.authoritative && Boolean(this.config.ledgerCards), reset: ledger.authoritative && Boolean(this.config.ledgerControl) };
-      this.ledgers.set(agent.id, ledger);
-      ledger.listen((sessionKey) => { if (this.ledgers.get(agent.id) === ledger) this.hubs.hub(agent.owner).publish(agent.id, sessionKey); });
-      ledger.listenStream((sessionKey, turnId, text) => { if (this.ledgers.get(agent.id) === ledger) this.hubs.hub(agent.owner).stream(agent.id, sessionKey, turnId, text); });
       this.persons.ensurePerson(agent.owner, agent.owner.slice(1, agent.owner.indexOf(":")));
       // The owner's account id is an identity of the owner; the provider keeps the name it has in stored records.
       this.persons.link(personId(agent.owner), "matrix", this.config.serverName, agent.owner, "config");
-    } catch { /* The runtime starts regardless. */ }
+    } catch { /* Identity seeding is repeated on the next start. */ }
     const runtime = new AgentRuntime(agent.matrixId, store);
     try {
       runtime.extension = await this.dependencies.configure?.(agent, runtime);
@@ -354,12 +334,12 @@ export class ManagedService {
   }
   async start(): Promise<void> { for (const agent of this.agents()) if (agent.status !== "deleting") await this.runtime(agent.id); }
   async close(): Promise<void> {
-    await this.fanout?.stop();
+    await this.fanout.stop();
     await Promise.allSettled(this.configurations.values());
     for (const pending of this.runtimes.values()) {
       try { const runtime = await pending; await runtime.extension?.stop(); runtime.stop(); runtime.store.close(); } catch { /* Failed initialization already closed its store. */ }
     }
-    this.runtimes.clear(); this.ledgers.clear(); this.attachments?.stop(); this.web?.close(); this.hubs.close(); this.store.close();
+    this.runtimes.clear(); this.ledgers.clear(); this.attachments.stop(); this.web.close(); this.hubs.close(); this.store.close();
   }
 }
 
@@ -379,7 +359,7 @@ export function createManagedApp(service: ManagedService, setup?: express.Router
   app.use(root, rateLimit({ windowMs: 60_000, limit: 1200, standardHeaders: "draft-8", legacyHeaders: false,
     keyGenerator: (req) => ipKeyGenerator(req.ip ?? req.socket.remoteAddress ?? "unknown"),
     message: { error: "rate_limit_exceeded" } }));
-  if (service.web) app.use(`${root}/web`, service.web.router);
+  app.use(`${root}/web`, service.web.router);
   app.use(root, async (req, res, next) => {
     const principal = await service.authenticateRequest(req);
     res.locals.principal = principal; res.locals.owner = principal.ownerId; next();

@@ -2,7 +2,7 @@ import { randomBytes } from "node:crypto";
 import type { SQLInputValue } from "node:sqlite";
 import type { DurableStore } from "../communication/store.js";
 import { digest, key } from "../execution/protocol.js";
-import { AGENT_LEDGER_V1, AGENT_LEDGER_V2, AGENT_LEDGER_V3, AGENT_LEDGER_V4 } from "./schema.js";
+import { AGENT_LEDGER_V1, AGENT_LEDGER_V2, AGENT_LEDGER_V3, AGENT_LEDGER_V4, AGENT_LEDGER_V5 } from "./schema.js";
 
 export type SessionKind = "owner_main" | "peer" | "group" | "room" | "schedule" | "work" | "delegation";
 export type Admission = "owner" | "peer" | "group" | "schedule" | "work" | "delegation";
@@ -45,6 +45,8 @@ export interface ConversationInput {
 export interface Claim {
   connectionId: string; externalId: string; inputId: string; hash: string; state: "accepted" | "ignored" | "tombstone";
   reason: string | null; eventId: string | null; conversationId: string | null; receivedAt: number; expiresAt: number | null;
+  /** The received channel message as the adapter delivered it; null once it was removed (tombstone). */
+  source: unknown; sessionKey: string | null; forkFrom: string | null;
 }
 export interface Turn {
   turnId: string; sessionKey: string; window: number; admission: Admission; originConversationId: string | null;
@@ -55,7 +57,14 @@ export interface Delivery {
   deliveryId: string; eventId: string | null; conversationId: string; connectionId: string; route: unknown;
   purpose: DeliveryPurpose; status: DeliveryStatus; attempts: number; nextAt: number; platformMessageId: string | null;
   error: string | null; createdAt: number; updatedAt: number;
+  /** What is sent: plain text, or native content when the channel supports it. */
+  text: string; content: unknown;
+  /** The turn this delivery answers (final reply, notices, activity), or the turn a content send came from. */
+  turnId: string | null; originTurnId: string | null;
+  /** A working marker on the input message (`key` is the input id). */
+  activity: { key: string; active: boolean } | null;
 }
+export interface IngressFailure { connectionId: string; externalId: string; inputId: string; hash: string; source: unknown; error: string; receivedAt: number }
 type Row = Record<string, SQLInputValue>;
 const TOMBSTONE_MS = 30 * 24 * 3600_000, MAX_BODY = 256 * 1024;
 const crockford = "0123456789ABCDEFGHJKMNPQRSTVWXYZ";
@@ -78,21 +87,18 @@ const terminalTurn = new Set<TurnState>(["completed", "failed", "canceled"]);
  */
 export class AgentLedger {
   private static readonly ledgers = new WeakMap<DurableStore, AgentLedger>();
-  /** Create the tables (once) and attach the ledger to this store; channel cores then shadow-write into it. */
+  /** The store's ledger; the tables are created or migrated on first use. */
   static open(store: DurableStore): AgentLedger {
     let ledger = this.ledgers.get(store);
-    if (!ledger) { store.migrate(1, AGENT_LEDGER_V1); store.migrate(2, AGENT_LEDGER_V2); store.migrate(3, AGENT_LEDGER_V3); store.migrate(4, AGENT_LEDGER_V4); ledger = new AgentLedger(store); this.ledgers.set(store, ledger); }
+    if (!ledger) {
+      store.migrate(1, AGENT_LEDGER_V1); store.migrate(2, AGENT_LEDGER_V2); store.migrate(3, AGENT_LEDGER_V3); store.migrate(4, AGENT_LEDGER_V4);
+      store.migrate(5, AGENT_LEDGER_V5);
+      ledger = new AgentLedger(store); this.ledgers.set(store, ledger);
+    }
     return ledger;
   }
-  static attached(store: DurableStore): AgentLedger | undefined { return this.ledgers.get(store); }
+  /** The last error of a guarded write (`guarded`). */
   lastError = "";
-  /**
-   * Phase 3 (`AGENT_LEDGER_SEND`): the dispatcher and flush read the ledger, and ledger writes on the channel path
-   * are no longer shadow writes. A failed ledger write then fails the receipt or transition it belongs to.
-   */
-  authoritative = false;
-  /** Phase 4 features (`AGENT_LEDGER_CARDS`, `AGENT_LEDGER_CONTROL`); both need `authoritative`. */
-  features = { cards: false, reset: false };
   private readonly listeners = new Set<(sessionKey: string) => void>();
   private readonly streams = new Set<(sessionKey: string, turnId: string, text: string) => void>();
   private dirty = new Set<string>();
@@ -116,19 +122,24 @@ export class AgentLedger {
       for (const sessionKey of keys) for (const listener of this.listeners) try { listener(sessionKey); } catch { /* The hub catches up later. */ }
     });
   }
+  /** One transaction for the work, or the caller's when there is one. */
+  atomic<T>(work: () => T): T { return this.db.isTransaction ? work() : this.store.transaction(work); }
+  /** The work as a unit that rolls back alone: its own transaction, or a savepoint inside the caller's. */
+  unit<T>(work: () => T): T {
+    if (!this.db.isTransaction) return this.store.transaction(work);
+    this.db.exec("SAVEPOINT ledger_unit");
+    try { const result = work(); this.db.exec("RELEASE ledger_unit"); return result; }
+    catch (error) { if (this.db.isTransaction) { this.db.exec("ROLLBACK TO ledger_unit"); this.db.exec("RELEASE ledger_unit"); } throw error; }
+  }
   /**
-   * Shadow write: a ledger failure never changes the legacy path. Inside an outer transaction the work runs
-   * in a savepoint, so a ledger error rolls back only the ledger rows. When SQLite itself ended the outer transaction
-   * (SQLITE_IOERR, SQLITE_FULL), the legacy writes are gone as well: the error propagates instead of being swallowed.
+   * A transcript note beside execution work (turn states and cards written by the Host worker). The run does not depend
+   * on it: an error rolls back only the note and is kept in `lastError`. When SQLite itself ended the caller's
+   * transaction (SQLITE_IOERR, SQLITE_FULL), the caller's writes are gone as well, so the error propagates.
    */
-  shadow<T>(work: () => T): T | undefined {
+  guarded<T>(work: () => T): T | undefined {
     const outer = this.db.isTransaction;
-    try {
-      if (!outer) return this.store.transaction(work);
-      this.db.exec("SAVEPOINT ledger_shadow");
-      try { const result = work(); this.db.exec("RELEASE ledger_shadow"); return result; }
-      catch (error) { if (this.db.isTransaction) { this.db.exec("ROLLBACK TO ledger_shadow"); this.db.exec("RELEASE ledger_shadow"); } throw error; }
-    } catch (error) {
+    try { return this.unit(work); }
+    catch (error) {
       if (outer && !this.db.isTransaction) throw error;
       this.lastError = error instanceof Error && /^[a-z0-9_:-]+$/.test(error.message) ? error.message : "ledger_write_failed";
       return undefined;
@@ -244,15 +255,19 @@ export class AgentLedger {
     this.touch(sessionKey);
   }
 
-  /** Durable ingress claim. Same hash: the stored claim (duplicate). Different hash: rejected, as the legacy inbox does. */
-  claim(input: { connectionId: string; externalId: string; inputId: string; hash: string; at?: number }): { claim: Claim; duplicate: boolean } {
+  /**
+   * Durable ingress claim with the received message. Same hash: the stored claim (duplicate). Different hash: rejected.
+   */
+  claim(input: { connectionId: string; externalId: string; inputId: string; hash: string; at?: number;
+    source?: unknown; sessionKey?: string | undefined; forkFrom?: string | undefined }): { claim: Claim; duplicate: boolean } {
     const prior = this.claimFor(input.connectionId, input.externalId);
     if (prior) {
       if (prior.hash !== input.hash) throw new Error("channel_event_id_reused_with_different_payload");
       return { claim: prior, duplicate: true };
     }
-    this.run(`INSERT INTO ledger_ingress(connection_id,external_id,input_id,hash,state,received_at) VALUES(?,?,?,?,'accepted',?)`,
-      input.connectionId, input.externalId, input.inputId, input.hash, input.at ?? Date.now());
+    this.run(`INSERT INTO ledger_ingress(connection_id,external_id,input_id,hash,state,received_at,source,session_key,fork_from) VALUES(?,?,?,?,'accepted',?,?,?,?)`,
+      input.connectionId, input.externalId, input.inputId, input.hash, input.at ?? Date.now(),
+      input.source === undefined ? null : JSON.stringify(input.source), input.sessionKey ?? null, input.forkFrom ?? null);
     return { claim: this.claimFor(input.connectionId, input.externalId)!, duplicate: false };
   }
   claimFor(connectionId: string, externalId: string): Claim | undefined {
@@ -269,8 +284,30 @@ export class AgentLedger {
   }
   /** Keep only the hash so redelivery is still recognised; the row expires after 30 days. */
   tombstone(connectionId: string, externalId: string, at = Date.now()): void {
-    this.run("UPDATE ledger_ingress SET state='tombstone', event_id=NULL, expires_at=? WHERE connection_id=? AND external_id=?",
+    this.run("UPDATE ledger_ingress SET state='tombstone', event_id=NULL, source=NULL, expires_at=? WHERE connection_id=? AND external_id=?",
       at + TOMBSTONE_MS, connectionId, externalId);
+  }
+  /** Redaction: the received message loses its text and keeps its routing facts, attachment references and hash. */
+  clearText(inputId: string): void {
+    this.run(`UPDATE ledger_ingress SET source=json_set(source,'$.text','') WHERE input_id=? AND source IS NOT NULL`, inputId);
+  }
+  /** Received messages, newest last (status views). */
+  recentClaims(limit = 100): Claim[] {
+    return this.rows("SELECT * FROM (SELECT rowid AS position, * FROM ledger_ingress ORDER BY rowid DESC LIMIT ?) ORDER BY position", limit).map(claimRow);
+  }
+  /** A receipt that could not be recorded: kept with its message so the channel can acknowledge it. */
+  failIngress(input: { connectionId: string; externalId: string; inputId: string; hash: string; source: unknown; error: string; at?: number }): void {
+    this.run(`INSERT INTO ledger_ingress_failures(connection_id,external_id,input_id,hash,source,error,received_at) VALUES(?,?,?,?,?,?,?)
+      ON CONFLICT(connection_id,external_id) DO UPDATE SET error=excluded.error`, input.connectionId, input.externalId, input.inputId, input.hash,
+      JSON.stringify(input.source), input.error, input.at ?? Date.now());
+  }
+  clearIngressFailure(connectionId: string, externalId: string): void {
+    this.run("DELETE FROM ledger_ingress_failures WHERE connection_id=? AND external_id=?", connectionId, externalId);
+  }
+  ingressFailures(limit = 20): IngressFailure[] {
+    return this.rows("SELECT * FROM ledger_ingress_failures ORDER BY received_at DESC, rowid DESC LIMIT ?", limit).map((row) => ({
+      connectionId: row.connection_id as string, externalId: row.external_id as string, inputId: row.input_id as string, hash: row.hash as string,
+      source: JSON.parse(row.source as string), error: row.error as string, receivedAt: Number(row.received_at) }));
   }
   pruneTombstones(at = Date.now()): number {
     return Number(this.run("DELETE FROM ledger_ingress WHERE state='tombstone' AND expires_at<=?", at).changes);
@@ -309,6 +346,30 @@ export class AgentLedger {
   startedInputs(sessionKey: string, limit = 50): Array<{ inputId: string; turnId: string }> {
     return this.rows(`SELECT input_id, turn_id FROM ledger_pending_inputs WHERE session_key=? AND turn_id IS NOT NULL
       ORDER BY created_at DESC, rowid DESC LIMIT ?`, sessionKey, limit).map((row) => ({ inputId: row.input_id as string, turnId: row.turn_id as string }));
+  }
+  /** Channel messages of one session that became turns, newest first. Work submissions have no claim and are left out. */
+  startedClaims(sessionKey: string, limit = 200): Claim[] {
+    return this.rows(`SELECT i.* FROM ledger_pending_inputs p JOIN ledger_ingress i ON i.input_id=p.input_id
+      WHERE p.session_key=? AND p.turn_id IS NOT NULL ORDER BY p.created_at DESC, p.rowid DESC LIMIT ?`, sessionKey, limit).map(claimRow);
+  }
+  /**
+   * The first received message of each channel turn (its origin, also for a resumed turn), newest first.
+   * `before` is a turn id: only origins received before that turn's origin.
+   */
+  turnOrigins(filter: { connectionId?: string | undefined; sessionKey?: string | undefined; target?: string | undefined; before?: string | undefined; limit: number }): Array<{ turnId: string; claim: Claim }> | undefined {
+    const origin = `(SELECT MIN(q.rowid) FROM ledger_pending_inputs q JOIN ledger_ingress j ON j.input_id=q.input_id WHERE q.turn_id=p.turn_id)`;
+    let before: number | undefined;
+    if (filter.before !== undefined) {
+      const row = this.row(`SELECT MIN(q.rowid) AS position FROM ledger_pending_inputs q JOIN ledger_ingress j ON j.input_id=q.input_id WHERE q.turn_id=?`, filter.before);
+      if (row?.position === null || row?.position === undefined) return undefined;
+      before = Number(row.position);
+    }
+    return this.rows(`SELECT p.turn_id AS origin_turn_id, i.* FROM ledger_pending_inputs p JOIN ledger_ingress i ON i.input_id=p.input_id
+      WHERE p.turn_id IS NOT NULL AND p.rowid=${origin} AND (? IS NULL OR i.connection_id=?) AND (? IS NULL OR i.session_key=?)
+      AND (? IS NULL OR json_extract(i.source,'$.reply.target')=?) AND (? IS NULL OR p.rowid<?) ORDER BY p.rowid DESC LIMIT ?`,
+      filter.connectionId ?? null, filter.connectionId ?? null, filter.sessionKey ?? null, filter.sessionKey ?? null,
+      filter.target ?? null, filter.target ?? null, before ?? null, before ?? null, filter.limit)
+      .map((row) => ({ turnId: row.origin_turn_id as string, claim: claimRow(row) }));
   }
   turnInputs(turnId: string): string[] {
     return this.rows("SELECT event_id FROM ledger_pending_inputs WHERE turn_id=? ORDER BY created_at", turnId).map((row) => row.event_id as string);
@@ -353,13 +414,16 @@ export class AgentLedger {
     return Number(this.row("SELECT COUNT(*) AS n FROM ledger_turns WHERE session_key=? AND state IN ('queued','running','waiting')", sessionKey)!.n);
   }
 
+  /** Queue a delivery. Returns false when the id was already recorded. */
   createDelivery(input: { deliveryId: string; eventId: string | null; conversationId: string; connectionId: string; route: unknown;
-    purpose: DeliveryPurpose; status?: DeliveryStatus; content?: unknown; at?: number; platformMessageId?: string }): void {
+    purpose: DeliveryPurpose; status?: DeliveryStatus; text?: string; content?: unknown; turnId?: string | null | undefined; originTurnId?: string | null | undefined;
+    activity?: { key: string; active: boolean } | undefined; at?: number; platformMessageId?: string }): boolean {
     const at = input.at ?? Date.now();
-    this.run(`INSERT OR IGNORE INTO ledger_deliveries(delivery_id,event_id,conversation_id,connection_id,route,purpose,status,content,
-      platform_message_id,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)`, input.deliveryId, input.eventId, input.conversationId,
+    return this.run(`INSERT OR IGNORE INTO ledger_deliveries(delivery_id,event_id,conversation_id,connection_id,route,purpose,status,content,
+      platform_message_id,created_at,updated_at,text,turn_id,origin_turn_id,activity) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, input.deliveryId, input.eventId, input.conversationId,
       input.connectionId, JSON.stringify(input.route), input.purpose, input.status ?? "queued",
-      input.content === undefined ? null : JSON.stringify(input.content), input.platformMessageId ?? null, at, at);
+      input.content === undefined ? null : JSON.stringify(input.content), input.platformMessageId ?? null, at, at,
+      input.text ?? "", input.turnId ?? null, input.originTurnId ?? null, input.activity ? JSON.stringify(input.activity) : null).changes === 1;
   }
   /** Flush order (ADR 6.4): queued deliveries that are due. */
   dueDeliveries(now = Date.now(), limit = 500): string[] {
@@ -372,6 +436,22 @@ export class AgentLedger {
   }
   deliveriesFor(eventId: string): Delivery[] {
     return this.rows("SELECT * FROM ledger_deliveries WHERE event_id=? ORDER BY created_at", eventId).map(deliveryRow);
+  }
+  /** Bind a queued delivery to the event it carries (a question notice and its `card` event). */
+  attachDelivery(deliveryId: string, eventId: string): void {
+    this.run("UPDATE ledger_deliveries SET event_id=? WHERE delivery_id=? AND event_id IS NULL", eventId, deliveryId);
+  }
+  /** Deliveries that answer a turn (its reply and notices; activity markers excluded), oldest first. */
+  turnDeliveries(turnId: string): Delivery[] {
+    return this.rows("SELECT * FROM ledger_deliveries WHERE turn_id=? AND purpose<>'activity' ORDER BY created_at, rowid", turnId).map(deliveryRow);
+  }
+  /** Sends that were in flight when the process stopped. */
+  sendingDeliveries(connectionId: string): Delivery[] {
+    return this.rows("SELECT * FROM ledger_deliveries WHERE connection_id=? AND status='sending' ORDER BY rowid", connectionId).map(deliveryRow);
+  }
+  /** Deliveries, newest last (status views). */
+  recentDeliveries(limit = 100): Delivery[] {
+    return this.rows("SELECT * FROM (SELECT rowid AS position, * FROM ledger_deliveries ORDER BY rowid DESC LIMIT ?) ORDER BY position", limit).map(deliveryRow);
   }
   /** Track a delivery; reaching sent/unknown/rejected appends a `delivery` event and indexes platform ids. */
   deliveryStatus(deliveryId: string, status: DeliveryStatus, fields: { attempts?: number; nextAt?: number; platformMessageId?: string; error?: string } = {}, at = Date.now()): void {
@@ -485,10 +565,15 @@ export class AgentLedger {
     this.run(`DELETE FROM ledger_attachments WHERE event_id IN (${events})`, sessionKey);
     this.run(`DELETE FROM ledger_deliveries WHERE event_id IN (${events}) AND status<>'queued' AND status<>'sending'`, sessionKey);
     this.run(`UPDATE ledger_deliveries SET event_id=NULL WHERE event_id IN (${events})`, sessionKey);
+    // Settled sends of the session's conversations that had no event (owner notifications) lose their content too.
+    this.run(`UPDATE ledger_deliveries SET text='', content=NULL WHERE status NOT IN ('queued','sending') AND conversation_id IN
+      (SELECT conversation_id FROM ledger_conversations WHERE session_key=?)`, sessionKey);
     this.run("DELETE FROM ledger_card_tokens WHERE card_id IN (SELECT card_id FROM ledger_cards WHERE session_key=?)", sessionKey);
     this.run("DELETE FROM ledger_cards WHERE session_key=?", sessionKey);
     this.run("DELETE FROM ledger_events WHERE session_key=?", sessionKey);
-    this.run(`UPDATE ledger_ingress SET state='tombstone', event_id=NULL, reason='purged', expires_at=? WHERE conversation_id IN
+    // The received messages lose their content; routing facts stay for replies of turns that are still running.
+    this.run(`UPDATE ledger_ingress SET state='tombstone', event_id=NULL, reason='purged', expires_at=?,
+      source=json_set(json_remove(source,'$.attachments','$.quoted'),'$.text','') WHERE conversation_id IN
       (SELECT conversation_id FROM ledger_conversations WHERE session_key=?)`, at + TOMBSTONE_MS, sessionKey);
     const inputIds = this.rows("SELECT input_id FROM ledger_pending_inputs WHERE session_key=?", sessionKey).map((row) => row.input_id as string);
     this.run("UPDATE ledger_pending_inputs SET state='dropped', reason='purged', updated_at=? WHERE session_key=? AND state='queued'", at, sessionKey);
@@ -543,7 +628,8 @@ function eventRow(row: Row): LedgerEvent {
 function claimRow(row: Row): Claim {
   return { connectionId: row.connection_id as string, externalId: row.external_id as string, inputId: row.input_id as string,
     hash: row.hash as string, state: row.state as Claim["state"], reason: nullable(row.reason), eventId: nullable(row.event_id),
-    conversationId: nullable(row.conversation_id), receivedAt: Number(row.received_at), expiresAt: row.expires_at === null ? null : Number(row.expires_at) };
+    conversationId: nullable(row.conversation_id), receivedAt: Number(row.received_at), expiresAt: row.expires_at === null ? null : Number(row.expires_at),
+    source: row.source === null || row.source === undefined ? null : JSON.parse(row.source as string), sessionKey: nullable(row.session_key), forkFrom: nullable(row.fork_from) };
 }
 function turnRow(row: Row): Turn {
   return { turnId: row.turn_id as string, sessionKey: row.session_key as string, window: Number(row.window), admission: row.admission as Admission,
@@ -564,5 +650,8 @@ function deliveryRow(row: Row): Delivery {
   return { deliveryId: row.delivery_id as string, eventId: nullable(row.event_id), conversationId: row.conversation_id as string,
     connectionId: row.connection_id as string, route: JSON.parse(row.route as string), purpose: row.purpose as DeliveryPurpose,
     status: row.status as DeliveryStatus, attempts: Number(row.attempts), nextAt: Number(row.next_at),
-    platformMessageId: nullable(row.platform_message_id), error: nullable(row.error), createdAt: Number(row.created_at), updatedAt: Number(row.updated_at) };
+    platformMessageId: nullable(row.platform_message_id), error: nullable(row.error), createdAt: Number(row.created_at), updatedAt: Number(row.updated_at),
+    text: String(row.text ?? ""), content: row.content === null || row.content === undefined ? null : JSON.parse(row.content as string),
+    turnId: nullable(row.turn_id), originTurnId: nullable(row.origin_turn_id),
+    activity: row.activity === null || row.activity === undefined ? null : JSON.parse(row.activity as string) as { key: string; active: boolean } };
 }

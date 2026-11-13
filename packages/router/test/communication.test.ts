@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { SendMessageRequest, TaskState } from "@a2a-js/sdk";
-import { CommunicationCore, type InboxRecord, type OutboxRecord } from "../src/communication/core.js";
+import { CommunicationCore } from "../src/communication/core.js";
 import { WorkSessions } from "../src/execution/sessions.js";
 import { DurableStore } from "../src/communication/store.js";
 import { CliWork, WorkError } from "../src/execution/work.js";
@@ -70,7 +70,7 @@ describe("communication receipt and routing", () => {
     const h = harness(); await h.core.start();
     h.core.receive("feishu", message("older")); await complete(h);
     h.core.receive("matrix", message("newest", "owner-matrix")); await complete(h);
-    const owner = h.store.entries<{ conversationId: string }>("communication_inbox")[0]!.value.conversationId;
+    const owner = h.core.status().inbox[0]!.conversationId;
     const session = h.store.get("execution_sessions", owner);
     await h.core.stop();
 
@@ -122,7 +122,7 @@ describe("communication receipt and routing", () => {
     expect(h.core.status().outbox).toHaveLength(0);
     expect(h.core.status().inbox).toHaveLength(4);
     expect(h.core.status().inbox.every((item) => item.state === "done" && item.taskId === null && item.reason === "reaction_recorded_without_execution")).toBe(true);
-    expect(h.store.entries<InboxRecord>("communication_inbox").map(({ value }) => value.source.event!.data.action)).toEqual(["added", "removed", "added", "removed"]);
+    expect(h.core.ledger.recentClaims().map((claim) => (claim.source as ChannelMessage).event!.data.action)).toEqual(["added", "removed", "added", "removed"]);
     h.core.receive(channel, message("next", `owner-${channel}`)); await complete(h);
     expect(h.host.starts).toHaveLength(1); expect(h[channel].sent).toHaveLength(1);
   });
@@ -218,17 +218,18 @@ describe("communication receipt and routing", () => {
     h.telegram.error = undefined; await h.core.flush(Date.now() + 100_000);
     expect(h.telegram.sent).toHaveLength(2);
   });
-  it("recovers an interrupted outbox according to provider idempotency", () => {
-    const h = harness();
-    const row: OutboxRecord = { id: "out", taskId: "task", route: { connectionId: "feishu", target: "chat", messageId: "one", data: {} },
-      text: "answer", state: "submitting", attempts: 1, nextAt: 0 };
-    h.store.set("communication_outbox", row.id, row);
+  it("recovers an interrupted send according to provider idempotency", () => {
+    const h = harness(), ledger = h.core.ledger;
+    // Two sends were in flight when the process stopped.
+    for (const connectionId of ["feishu", "matrix"]) ledger.createDelivery({ deliveryId: `out-${connectionId}`, eventId: null, conversationId: "", connectionId,
+      route: { connectionId, target: "chat", messageId: "one", data: {} }, purpose: "reply", text: "answer", status: "sending" });
     const recovered = new CommunicationCore("agent", h.store, h.work);
     recovered.register({ id: "feishu", ownerAddresses: ["owner-feishu"] }, h.feishu);
-    expect(h.store.get<OutboxRecord>("communication_outbox", "out")!.state).toBe("uncertain");
-    h.store.set("communication_outbox", "out2", { ...row, id: "out2", route: { ...row.route, connectionId: "matrix" } });
     recovered.register({ id: "matrix", ownerAddresses: ["owner-matrix"] }, h.matrix);
-    expect(h.store.get<OutboxRecord>("communication_outbox", "out2")!.state).toBe("queued");
+    // Feishu cannot tell whether the message went out; the retry-safe connection sends it again.
+    expect(ledger.delivery("out-feishu")).toMatchObject({ status: "unknown", error: "send_interrupted" });
+    expect(ledger.delivery("out-matrix")).toMatchObject({ status: "queued", error: "send_interrupted" });
+    expect(recovered.status().outbox.map((row) => row.state)).toEqual(["uncertain", "queued"]);
   });
   it("resumes acknowledged chunks without resending them", async () => {
     const h = harness(), context = h.core.context("telegram"), sent: string[] = [];

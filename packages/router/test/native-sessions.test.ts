@@ -209,7 +209,7 @@ describe("native session coordination", () => {
     await h.core.dispatch(); await h.worker.tick();
     const notify = { eventId: "notice", targetSessionId: message.conversationId, text: "A result" }, save = h.store.set.bind(h.store);
     h.store.set = (collection, id, value) => { if (collection === "work_session_deliveries") throw new Error("disk_failure"); save(collection, id, value); };
-    expect(() => h.sessions.deliver(notify)).toThrow("disk_failure"); expect(h.store.entries("communication_outbox")).toHaveLength(0);
+    expect(() => h.sessions.deliver(notify)).toThrow("disk_failure"); expect(h.core.ledger.recentDeliveries()).toHaveLength(0);
     h.store.set = save;
     const first = h.sessions.deliver(notify); expect(h.sessions.deliver(notify)).toEqual(first);
     expect(() => h.sessions.deliver({ ...notify, text: "changed" })).toThrow("delivery_event_id_reused");

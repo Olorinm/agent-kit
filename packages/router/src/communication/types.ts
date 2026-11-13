@@ -73,10 +73,16 @@ export interface ChannelAdapter {
   /** A stable send key can be safely resubmitted, including after a lost response. */
   readonly retrySafe: boolean;
   /**
-   * The ledger event is the delivery (the owner's web surface, ADR 0005 phase 3): ingress is recorded in the ledger
-   * authoritatively, replies are settled once recorded and `/link` pairing does not apply.
+   * The ledger event is the delivery (the owner's web surface): a reply is delivered by being recorded, so it gets no
+   * delivery row, and `/link` pairing does not apply.
    */
   readonly ledgerDelivery?: boolean;
+  /**
+   * A receipt that cannot be recorded is thrown to the caller, which retries it (an HTTP client, the room fan-out).
+   * Other channels acknowledge the message and keep it in `ledger_ingress_failures`, so one message never stops the
+   * channel's cursor.
+   */
+  readonly strictReceipt?: boolean;
   readonly capabilities?: ChannelCapabilities;
   capabilitiesFor?(route: ReplyRoute): ChannelCapabilities;
   /** Whether a shared conversation accepts all senders or uses the configured group/peer lists. */

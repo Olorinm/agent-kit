@@ -104,7 +104,7 @@ class HubPairing {
 }
 
 /**
- * Persons, owner resolution and pairing (ADR 0005 phase 6, `features.identity`). Owner resolution is
+ * Persons, owner resolution and pairing (ADR 0005 phase 6). Owner resolution is
  * `resolve(provider, namespace, sender) === personId(agent.owner)`; configured `ownerAddresses` stay seeded as
  * `config` identities and are still honored directly for one release (section 18.1).
  */

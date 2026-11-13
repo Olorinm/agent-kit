@@ -137,7 +137,7 @@ async function service(edge: Partial<EdgeIdentityConfig> | undefined, overrides:
   const stateDir = mkdtempSync(join(tmpdir(), "edge-service-"));
   cleanup.push(() => rmSync(stateDir, { recursive: true, force: true }));
   const managed = new ManagedService({ serverName: "example.test", publicUrl: "https://example.test/_agent-router/v1",
-    stateDir, ledgerRead: true, ledgerSend: true, ...(edge ? { edgeIdentity: config(edge) } : {}), ...overrides }, {
+    stateDir, ...(edge ? { edgeIdentity: config(edge) } : {}), ...overrides }, {
     authenticate: async (token) => { if (token === "owner") return owner; if (token === "second") return second; throw new Error("bad_credentials"); },
     edgeIdentityCerts: jwks.url });
   cleanup.push(() => managed.close());
@@ -248,8 +248,8 @@ describe("owner API with edge identity", () => {
     expect((await configured.api(`${root}/agents`, { ...edge, Origin: "https://example.test" }, "POST", { name: "other" })).status).toBe(403);
   });
 
-  it("refuses to unlink the Access identity of the current edge login (identity_in_use), with the identity flag", async () => {
-    const t = await service({}, { ledgerIdentity: true });
+  it("refuses to unlink the Access identity of the current edge login (identity_in_use)", async () => {
+    const t = await service({}, { });
     const edge = { "cf-access-jwt-assertion": await t.sign(), Origin: "https://example.test" };
     const list = async (headers: Record<string, string>) => (await t.api(`${root}/web/identities`, headers)).data.data as any[];
     const login = (await list(edge)).find((item) => item.provider === "cloudflare-access")!;
@@ -267,14 +267,10 @@ describe("owner API with edge identity", () => {
     expect(await remove(other.identityId, edge)).toEqual({ status: 204, data: null });
     // A bearer principal carries no email, so no Access identity is "in use" for it.
     expect((await list({ Authorization: "Bearer owner" })).find((item) => item.identityId === login.identityId)).toMatchObject({ removable: true });
-    // The flag off: no identity routes and features.identity false.
-    const off = await service({});
-    expect((await off.api(`${root}/web/me`, { Authorization: "Bearer owner" })).data.limits.features.identity).toBe(false);
-    expect((await off.api(`${root}/web/identities`, { Authorization: "Bearer owner" })).status).toBe(404);
   });
 
   it("lets an edge principal upload a file of a simple type (X-File-Name forces a preflight) and keeps the guard otherwise", async () => {
-    const t = await service({}, { ledgerAttachments: true });
+    const t = await service({}, { });
     const jwt = { "cf-access-jwt-assertion": await t.sign(), Origin: "https://example.test" };
     const upload = async (headers: Record<string, string>) => {
       const response = await fetch(`http://127.0.0.1:${t.port}${root}/web/attachments`, { method: "POST", body: "plain notes", headers });
