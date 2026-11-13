@@ -5,6 +5,17 @@ tag publishes a GitHub Release whose notes are this file's section for that vers
 section in the version-bump commit before tagging. Changes up to the versions listed under
 0.8.0-alpha.1 are in each package's own `CHANGELOG.md`.
 
+## [0.10.0-alpha.2] - 2026-11-13
+
+- **Host:** a runtime's `allowedSettings` list is no longer part of its configuration key. Adding,
+  changing or removing the values an owner lets callers select (model, effort and the other
+  per-run settings) used to make every existing session of that runtime fail with
+  `409 session_configuration_conflict`; those sessions now continue, and a selected value is still
+  checked against the current list on each run. The key of a runtime that has no list is unchanged,
+  so upgrading keeps existing sessions.
+- Dependency updates across the packages; Environment builds with TypeScript 7. `@larksuite/cli`
+  in Connectors stays at 1.0.97.
+
 ## [0.10.0-alpha.1] - 2026-11-13
 
 - **Router:** the owner ledger is the only record of channel messages. The inbox and outbox

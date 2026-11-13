@@ -230,7 +230,7 @@ console.log(result.status, result.answer);
 
 Native question and permission replies use the formats documented in [the adapter API](api.md#tools-and-interactions). The service does not treat every interaction as a yes/no prompt. A client may instead poll calls and resolve them using its own UI. The HTTP example uses the common `onInteraction` helper for approvals, questions, JSON forms and URL elicitations, with a raw native response escape hatch. It never solicits native sudo secrets. See the [common API](common-api.md).
 
-Session runtime, stable instructions, tool definitions and server configuration are bound on the first task. A mismatch returns `409 session_configuration_conflict`. Mutable product state goes in per-turn `context`. There is one active task per session. Hermes additionally permits one active task per profile. Native sessions and transcript storage stay with the selected adapter/Kernel.
+Session runtime, stable instructions, tool definitions and server configuration are bound on the first task. A mismatch returns `409 session_configuration_conflict`. The owner's `allowedSettings` list and `nativeAccess` policy are not part of that binding: changing them keeps existing sessions, and a selected value is checked on each task. Mutable product state goes in per-turn `context`. There is one active task per session. Hermes additionally permits one active task per profile. Native sessions and transcript storage stay with the selected adapter/Kernel.
 
 ## HTTP operations
 
