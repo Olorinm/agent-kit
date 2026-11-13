@@ -67,7 +67,7 @@
     "@googleapis/gmail": "^22.0.2",
     "@googleapis/sheets": "^18.1.2",
     "@googleapis/slides": "^10.1.1",
-    "@larksuite/cli": "1.0.99",
+    "@larksuite/cli": "1.0.97",
     "@modelcontextprotocol/sdk": "^1.32.2",
     "agent-browser": "0.41.2",
     "gaxios": "^8.3.2",

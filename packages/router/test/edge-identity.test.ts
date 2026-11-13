@@ -63,7 +63,8 @@ describe("CloudflareAccessAuthenticator", () => {
       await sign(signer, {}, { aud: "b".repeat(64) }),
       await sign(signer, {}, { iss: "https://other-team.cloudflareaccess.com" }),
       await sign(signer, {}, { exp: now() - 61, iat: now() - 100 }),
-      await sign(signer, {}, { nbf: now() + 61 }),
+      // A few seconds past the skew: the tokens are verified up to a second or two after they are signed.
+      await sign(signer, {}, { nbf: now() + 65 }),
       await sign(signer, { type: "org" }),
       await sign(forger),
       await new SignJWT({ email: "owner@example.test" }).setProtectedHeader({ alg: "HS256", kid: "k1" }).setIssuer(team).setAudience(aud)
