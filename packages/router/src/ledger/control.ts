@@ -310,9 +310,13 @@ export class LedgerControl {
       idempotencyKey, body: { text: input.text, steer: true, channel: "web" } }).event);
     return { status: "accepted", event };
   }
-  /** Cancel active turns and drop queued inputs (reset or purge with `cancelActive`). */
-  private async clear(sessionKey: string, reason: string, cancelActive: boolean): Promise<void> {
-    const busy = this.ledger.busy(sessionKey);
+  /**
+   * Cancel active turns and drop inputs that are not turns yet (reset or purge with `cancelActive`). `except` is the
+   * input that carries the command itself, which the dispatcher holds while it runs.
+   */
+  private async clear(sessionKey: string, reason: string, cancelActive: boolean, except?: string): Promise<void> {
+    const pending = this.ledger.busy(sessionKey);
+    const busy = { activeTurns: pending.activeTurns, queuedInputs: pending.queuedInputs.filter((inputId) => inputId !== except) };
     if (!busy.activeTurns.length && !busy.queuedInputs.length) return;
     if (!cancelActive) throw new WorkError("session_busy", 409).with({ activeTurns: busy.activeTurns, queuedInputs: busy.queuedInputs.length });
     for (const turnId of busy.activeTurns) await this.deps.work.cancel(turnId).catch(() => undefined);
@@ -321,9 +325,9 @@ export class LedgerControl {
     });
   }
   /** ADR 16.3 reset of the shared session: every owner channel continues in the new window. */
-  async reset(sessionKey: string, options: { cancelActive?: boolean } = {}): Promise<{ window: number; event: LedgerEvent }> {
+  async reset(sessionKey: string, options: { cancelActive?: boolean; commandInput?: string } = {}): Promise<{ window: number; event: LedgerEvent }> {
     if (!this.ledger.session(sessionKey)) throw new WorkError("chat_not_found", 404);
-    await this.clear(sessionKey, "reset", Boolean(options.cancelActive));
+    await this.clear(sessionKey, "reset", Boolean(options.cancelActive), options.commandInput);
     return this.tx(() => this.ledger.reset(sessionKey));
   }
   /**
@@ -351,7 +355,7 @@ export class LedgerControl {
   async command(input: ChannelInput): Promise<boolean> {
     const text = input.source.text.trim(), core = this.deps.core;
     if (/^(\/(?:new|reset)(?:@\w+)?|新对话)$/i.test(text) && core.isOwnerInput(input) && this.ledger.session(input.conversationId)?.kind === "owner_main") {
-      try { await this.reset(input.conversationId); core.notice(input, "已开始新对话。", "reset"); }
+      try { await this.reset(input.conversationId, { commandInput: input.id }); core.notice(input, "已开始新对话。", "reset"); }
       catch (error) {
         if (!(error instanceof WorkError) || error.message !== "session_busy") throw error;
         core.notice(input, "当前任务进行中，请先停止。", "reset-busy");

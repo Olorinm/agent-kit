@@ -115,7 +115,7 @@ export class CommunicationCore {
     const claim = this.ledger.claimByInput(inputId);
     return claim ? this.view(claim) : undefined;
   }
-  /** The session's messages that became turns, newest first. */
+  /** The newest message that became a turn for each connection and sender of the session, newest first. */
   sessionInputs(sessionKey: string): ChannelInput[] {
     return this.ledger.startedClaims(sessionKey).flatMap((claim) => this.view(claim) ?? []);
   }
@@ -312,7 +312,9 @@ export class CommunicationCore {
           if (target && target.sessionKey === value.conversationId && typeof target.body.text === "string" && !target.body.redacted) quote = target.body.text;
         }
         if (!quote && value.source.quoted?.messageId) {
-          try { quote = await this.connection(value.connectionId).adapter.readQuote?.(value.source); }
+          // The platform's id of a message this connection received in the same chat, then the platform itself.
+          const original = ledger.claimByMessage(value.connectionId, value.replyRoute.target, value.source.quoted.messageId)?.source as ChannelMessage | null | undefined;
+          try { quote = original?.text || await this.connection(value.connectionId).adapter.readQuote?.(value.source); }
           catch { this.connection(value.connectionId).lastError = "quoted_message_unavailable"; }
         }
         const prepared = this.connection(value.connectionId).adapter.turnContext?.(value.source);
@@ -330,10 +332,22 @@ export class CommunicationCore {
         const request = SendMessageRequest.fromJSON({ message: { messageId: `channel-${id}`, contextId,
           ...(resume ? { taskId: previous!.id } : {}), role: "ROLE_USER",
           parts: [{ text }, { text: `Channel context (provider routing IDs): ${JSON.stringify(channelContext)}` }] }, configuration: { returnImmediately: true } });
-        // Both steps are independently durable. The stable message ID closes the restart window.
-        const task = await this.work.send(request, { sender: resume ? this.work.inspect(previous!.id).from : key("channel", value.connectionId, value.source.sender),
-          room: value.conversationId, approved: true });
-        ledger.atomic(() => recordStart(ledger, this.facts, value, task.id, this.isOwnerInput(value)));
+        // A reset or purge that ran during the awaits above dropped this input; it must not start now.
+        if (!["queued", "starting"].includes(String(ledger.input(id)?.state))) continue;
+        // Both steps are independently durable. The stable message ID closes the restart window: after a crash between
+        // them the same message id returns the task that exists. What the message says may differ by then (a redaction,
+        // other group context), which the work ledger refuses; the task that was created stands.
+        let task;
+        try {
+          task = await this.work.send(request, { sender: resume ? this.work.inspect(previous!.id).from : key("channel", value.connectionId, value.source.sender),
+            room: value.conversationId, approved: true });
+        } catch (error) {
+          const sent = error instanceof Error && error.message === "work_message_id_reused" ? this.work.taskForMessage(`channel-${id}`) : undefined;
+          if (!sent) throw error;
+          task = sent;
+        }
+        const taskId = task.id;
+        ledger.atomic(() => recordStart(ledger, this.facts, value, taskId, this.isOwnerInput(value)));
         prepared?.commit();
       }
       this.publishResults();
@@ -516,7 +530,8 @@ export class CommunicationCore {
     const row = this.ledger.delivery(id);
     if (row) return { row };
     const event = this.ledger.eventByKey(input.conversationId, eventKey);
-    return event ? { eventId: event.eventId } : undefined;
+    // A content event belongs to the turn that sent it; a schedule notice (its own key) has no turn.
+    return event && (!event.turnId || event.turnId === input.taskId) ? { eventId: event.eventId } : undefined;
   }
   /**
    * `queueContent` for the channel tool. On a transcript channel (web) the media is stored first (ADR 0005 16.5) and the

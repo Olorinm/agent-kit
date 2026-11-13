@@ -342,7 +342,12 @@ export class WorkSessions {
     if (!prior) return null;
     if (prior.push) return this.communication.notification(prior.push);
     if (prior.state) return { id: prior.deliveryId, state: prior.state, externalId: null, error: prior.error ?? null };
-    return this.communication.delivery(prior.taskId, prior.deliveryId, `schedule:${eventId}`);
+    try { return this.communication.delivery(prior.taskId, prior.deliveryId, `schedule:${eventId}`); }
+    catch (error) {
+      // The notice was recorded on a transcript (its delivery) that was purged since.
+      if (!(error instanceof Error) || error.message !== "channel_delivery_not_found") throw error;
+      return { id: prior.deliveryId, state: "accepted", externalId: null, error: null };
+    }
   }
 
 }

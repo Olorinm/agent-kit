@@ -108,23 +108,27 @@ export function recordReceipt(ledger: AgentLedger, ctx: ChannelFacts, record: Ch
     idempotencyKey: `${connectionId}:${source.externalId}`,
     body: { ...input.body, channel, ...(attachments.length ? { attachments } : {}) } });
   if (!web) ledger.attachEvent(attachments.map((item) => item.attachmentId), event.eventId);
-  // Quotes, reactions and edits name the platform's message id, which may differ from the delivery's event id.
-  ledger.indexPlatform(connectionId, [...new Set([source.externalId, source.reply.messageId])], event.eventId);
+  ledger.indexPlatform(connectionId, [source.externalId], event.eventId);
   const state = type && lifecycle.has(type);
   if (!state) ledger.queueInput(record.id, record.conversationId, event.eventId, at);
   ledger.settleClaim(connectionId, source.externalId, "accepted", { eventId: event.eventId, conversationId,
     ...(state ? { reason: type === "message-edit" ? "edit_recorded_without_reexecution" : `${type}_recorded_without_execution` } : {}) });
 }
 
-/** Dispatch (ADR 6.2): the pending input became a turn. A resumed task reuses its turn. */
+/**
+ * Dispatch (ADR 6.2): the pending input became a turn. A resumed task reuses its turn. The input always leaves the
+ * dispatch queue here, also when its event is gone (the chat was purged while the task was being created): the task
+ * exists, so its turn is recorded without an origin event.
+ */
 export function recordStart(ledger: AgentLedger, ctx: ChannelFacts, record: ChannelInput, taskId: string, owner: boolean, at = Date.now()): void {
   const claim = ledger.claimByInput(record.id), pending = ledger.input(record.id);
-  if (!claim?.eventId || !pending) return;
+  if (!pending) return;
   ledger.updateInput(record.id, "started", { turnId: taskId }, at);
-  ledger.annotate(claim.eventId, { turnId: taskId });
+  if (claim?.eventId) ledger.annotate(claim.eventId, { turnId: taskId });
+  if (!ledger.session(record.conversationId)) return;
   const admission = record.source.scope === "group" ? "group" : owner ? "owner" : "peer";
-  const turn = ledger.ensureTurn({ turnId: taskId, sessionKey: record.conversationId, admission, originConversationId: claim.conversationId,
-    originEventId: claim.eventId, replyRoute: record.replyRoute, at });
+  const turn = ledger.ensureTurn({ turnId: taskId, sessionKey: record.conversationId, admission, originConversationId: claim?.conversationId ?? null,
+    originEventId: claim?.eventId ?? null, replyRoute: record.replyRoute, at });
   ledger.append(record.conversationId, { kind: "turn", role: "system", senderType: "system", senderId: "router", turnId: taskId,
     idempotencyKey: `turn:${taskId}:input:${record.id}`, createdAt: at,
     body: { agentId: ctx.agentId, state: turn.state, inputEventIds: ledger.turnInputs(taskId) } });

@@ -342,15 +342,20 @@ export class AgentLedger {
     return this.row("SELECT input_id FROM ledger_pending_inputs WHERE turn_id=? ORDER BY created_at DESC, rowid DESC LIMIT 1", turnId)?.input_id as string | undefined;
   }
   inputForEvent(eventId: string) { return this.row("SELECT * FROM ledger_pending_inputs WHERE event_id=?", eventId); }
-  /** Inputs of one session that became turns, newest first (resume lookup). */
-  startedInputs(sessionKey: string, limit = 50): Array<{ inputId: string; turnId: string }> {
-    return this.rows(`SELECT input_id, turn_id FROM ledger_pending_inputs WHERE session_key=? AND turn_id IS NOT NULL
-      ORDER BY created_at DESC, rowid DESC LIMIT ?`, sessionKey, limit).map((row) => ({ inputId: row.input_id as string, turnId: row.turn_id as string }));
+  /**
+   * The newest channel message that became a turn, for each connection and sender of one session, newest first.
+   * Work submissions have no claim and are left out. Used to resume a waiting turn and to pick a reply route.
+   */
+  startedClaims(sessionKey: string): Claim[] {
+    return this.rows(`SELECT i.* FROM (SELECT MAX(p.rowid) AS position FROM ledger_pending_inputs p JOIN ledger_ingress j ON j.input_id=p.input_id
+      WHERE p.session_key=? AND p.turn_id IS NOT NULL GROUP BY j.connection_id, json_extract(j.source,'$.sender')) latest
+      JOIN ledger_pending_inputs q ON q.rowid=latest.position JOIN ledger_ingress i ON i.input_id=q.input_id ORDER BY q.rowid DESC`, sessionKey).map(claimRow);
   }
-  /** Channel messages of one session that became turns, newest first. Work submissions have no claim and are left out. */
-  startedClaims(sessionKey: string, limit = 200): Claim[] {
-    return this.rows(`SELECT i.* FROM ledger_pending_inputs p JOIN ledger_ingress i ON i.input_id=p.input_id
-      WHERE p.session_key=? AND p.turn_id IS NOT NULL ORDER BY p.created_at DESC, p.rowid DESC LIMIT ?`, sessionKey, limit).map(claimRow);
+  /** The stored message with a platform message id in a chat of a connection (a quote names that id). */
+  claimByMessage(connectionId: string, target: string, messageId: string): Claim | undefined {
+    const row = this.row(`SELECT * FROM ledger_ingress WHERE connection_id=? AND json_extract(source,'$.reply.messageId')=?
+      AND json_extract(source,'$.reply.target')=? ORDER BY rowid LIMIT 1`, connectionId, messageId, target);
+    return row ? claimRow(row) : undefined;
   }
   /**
    * The first received message of each channel turn (its origin, also for a resumed turn), newest first.
@@ -531,10 +536,13 @@ export class AgentLedger {
     return (this.row(`SELECT w.context_id FROM ledger_sessions s JOIN ledger_session_windows w ON w.session_key=s.session_key AND w.window=s.window
       WHERE s.session_key=?`, sessionKey)?.context_id as string | undefined) ?? sessionKey;
   }
-  /** Turns that still run in the session, and inputs not yet taken by the dispatcher (reset busy check, ADR 16.3). */
+  /**
+   * Turns that still run in the session, and inputs that are not turns yet (reset busy check, ADR 16.3). An input the
+   * dispatcher has taken (`starting`) counts: its task may not exist yet, and it must not outlive a reset or purge.
+   */
   busy(sessionKey: string): { activeTurns: string[]; queuedInputs: string[] } {
     return { activeTurns: this.rows("SELECT turn_id FROM ledger_turns WHERE session_key=? AND state IN ('queued','running','waiting') ORDER BY created_at", sessionKey).map((row) => row.turn_id as string),
-      queuedInputs: this.rows("SELECT input_id FROM ledger_pending_inputs WHERE session_key=? AND state='queued' ORDER BY created_at", sessionKey).map((row) => row.input_id as string) };
+      queuedInputs: this.rows("SELECT input_id FROM ledger_pending_inputs WHERE session_key=? AND state IN ('queued','starting') ORDER BY created_at", sessionKey).map((row) => row.input_id as string) };
   }
   /**
    * Reset (ADR 6.8/16.3): close the window, open `<key>.w<n+1>`, and append the `window` event. Seq continues, so the
@@ -563,9 +571,9 @@ export class AgentLedger {
     // The caller releases their blob references (ADR 16.4) after the transaction.
     const attachmentIds = this.rows(`SELECT attachment_id FROM ledger_attachments WHERE event_id IN (${events})`, sessionKey).map((row) => row.attachment_id as string);
     this.run(`DELETE FROM ledger_attachments WHERE event_id IN (${events})`, sessionKey);
-    this.run(`DELETE FROM ledger_deliveries WHERE event_id IN (${events}) AND status<>'queued' AND status<>'sending'`, sessionKey);
+    // Deliveries lose their event. A settled one also loses what it sent and stays as a receipt (its state can still be
+    // read); one that is queued or being sent is still delivered.
     this.run(`UPDATE ledger_deliveries SET event_id=NULL WHERE event_id IN (${events})`, sessionKey);
-    // Settled sends of the session's conversations that had no event (owner notifications) lose their content too.
     this.run(`UPDATE ledger_deliveries SET text='', content=NULL WHERE status NOT IN ('queued','sending') AND conversation_id IN
       (SELECT conversation_id FROM ledger_conversations WHERE session_key=?)`, sessionKey);
     this.run("DELETE FROM ledger_card_tokens WHERE card_id IN (SELECT card_id FROM ledger_cards WHERE session_key=?)", sessionKey);
@@ -576,7 +584,7 @@ export class AgentLedger {
       source=json_set(json_remove(source,'$.attachments','$.quoted'),'$.text','') WHERE conversation_id IN
       (SELECT conversation_id FROM ledger_conversations WHERE session_key=?)`, at + TOMBSTONE_MS, sessionKey);
     const inputIds = this.rows("SELECT input_id FROM ledger_pending_inputs WHERE session_key=?", sessionKey).map((row) => row.input_id as string);
-    this.run("UPDATE ledger_pending_inputs SET state='dropped', reason='purged', updated_at=? WHERE session_key=? AND state='queued'", at, sessionKey);
+    this.run("UPDATE ledger_pending_inputs SET state='dropped', reason='purged', updated_at=? WHERE session_key=? AND state IN ('queued','starting')", at, sessionKey);
     this.run("UPDATE ledger_sessions SET last_seq=0, published_seq=0, generation=generation+1, updated_at=MAX(updated_at,?) WHERE session_key=?", at, sessionKey);
     const { window } = this.reset(sessionKey, "reset", at);
     return { generation: this.session(sessionKey)!.generation, purgedEvents, window, inputIds, attachmentIds };

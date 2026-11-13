@@ -2452,18 +2452,23 @@ The ledger tables are the only record of what an agent receives and sends (`AGEN
    never stops a channel cursor or the messages behind it. A redelivery is tried again and clears the failure.
 3. **Dispatch** reads only `ledger_pending_inputs`. Reactions, edits and redactions are events without a pending
    input. A pending input whose claim is gone is `dropped` (`input_missing`).
+   An input the dispatcher has taken (`starting`) counts as busy for reset and purge and is dropped by them; the
+   dispatcher checks again before it creates the task. When a retry after a crash finds that the message no longer
+   reads the same (a redaction, other group context), the task its message id already created is used.
 4. **Deliveries.** `ledger_deliveries` is the send queue and carries what is sent: `text`, `content`, `turn_id` (the
    turn a reply, notice or activity marker belongs to), `origin_turn_id` (the turn a content send came from) and
    `activity`. Owner notifications and pairing replies are deliveries without an event; a pairing reply has an empty
    `conversation_id`, because a stranger gets no conversation. A send that was in flight when the process stopped
    (`sending`) is queued again on a retry-safe connection and `unknown` otherwise. The connection whose event is its
-   delivery (web) still gets no delivery row; the state of a content send there is read from its event.
+   delivery (web) still gets no delivery row; the state of a content send there is read from its event. Purge keeps
+   settled deliveries as receipts without their content.
 5. **Final reply once.** A turn's result is published when the turn has no `final_event_id` and no reply delivery.
 6. **Execution-side notes** (turn states and cards written by the Host worker) are guarded writes: an error rolls back
    only the note and is kept in `ledger.lastError`; the run continues.
 7. **Upgrade.** Migration 5 copies each inbox record's message, session and fork parent onto its claim and each outbox
    record's text, turn and activity onto its delivery, turns outbox records that never had a delivery row (owner
    notifications, pairing replies; not the web connection's) into delivery rows, then deletes the `communication_inbox`,
-   `communication_outbox` and `communication_threads` documents. An inbox record that never had a claim is not kept.
+   `communication_outbox` and `communication_threads` documents. An inbox record that never had a claim is not kept,
+   and a waiting delivery that never had an outbox record is settled as `suppressed`.
 8. **Switches.** `AGENT_LEDGER_READ`, `_SEND`, `_CARDS`, `_CONTROL`, `_GROUPS`, `_IDENTITY` and `_ATTACHMENTS` are
    ignored, and `GET /web/me` has no `limits.features`: there is nothing to advertise.

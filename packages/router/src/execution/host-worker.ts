@@ -109,7 +109,6 @@ export class HostWorker {
     } catch (error) { await this.recordFailure(error); }
     finally { this.busy = false; }
   }
-  /** Shadow ledger writes (ADR 0005 phase 1); a ledger failure never changes run handling. */
   /** Transcript notes of the run (turn states, cards); the run does not depend on them (`AgentLedger.guarded`). */
   private ledger(work: (ledger: AgentLedger) => void) { const ledger = AgentLedger.open(this.store); ledger.guarded(() => work(ledger)); }
   private turn(taskId: string, state: TurnState, error?: string) { this.ledger((ledger) => ledger.turnState(taskId, state, { agentId: this.agentId, ...(error ? { error } : {}) })); }

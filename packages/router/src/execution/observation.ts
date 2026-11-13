@@ -52,8 +52,9 @@ export class RunObservation {
     const data = origins.slice(0, limit).flatMap(({ turnId, claim }): CommunicationTask[] => {
       const source = claim.source as ChannelMessage | null; if (!source) return [];
       const task = this.work.inspect(turnId), sent = ledger.turnDeliveries(turnId);
-      // On a connection where the event is the delivery (web), the reply is named by its event.
-      const recorded = sent.length ? [] : ledger.turnEvents(turnId).filter((event) => event.role !== "user" &&
+      // On a connection where the event is the delivery (web), a reply or notice without a delivery is named by its event.
+      const delivered = new Set(sent.map((item) => item.eventId));
+      const recorded = ledger.turnEvents(turnId).filter((event) => !delivered.has(event.eventId)).filter((event) => event.role !== "user" &&
         (event.kind === "message" && event.body.final === true || event.kind === "notice" && Boolean(event.idempotencyKey?.startsWith("notice:")))).map((event) => event.eventId);
       return [{ id: turnId, conversationId: claim.sessionKey ?? "", receivedAt: new Date(claim.receivedAt).toISOString(),
         source: { connectionId: claim.connectionId, messageId: source.externalId, target: source.reply.target, sender: source.sender, scope: source.scope },
@@ -63,7 +64,7 @@ export class RunObservation {
           ...sent.flatMap((item) => ids(item.platformMessageId)), ...recorded])],
         interactionMessageIds: questions.filter((question) => question.taskId === turnId).flatMap((question) => ids(ledger.delivery(question.noticeId)?.platformMessageId)) }];
     });
-    return { data, next: origins.length > limit ? data.at(-1)?.id ?? null : null };
+    return { data, next: origins.length > limit ? origins[limit - 1]!.turnId : null };
   }
   private binding(claimId: string): RunBinding {
     const binding = this.store.get<RunBinding>("communication_runs", claimId);

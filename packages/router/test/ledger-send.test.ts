@@ -143,6 +143,32 @@ describe("web channel ingress and the ledger queue", () => {
     expect(h.core.status().inbox.at(-1)).toMatchObject({ connectionId: "feishu", state: "submitted" });
     expect(h.work.list().map((item) => item.id)).toHaveLength(2);
   });
+  it("survives a purge or a changed message while an input is being dispatched", async () => {
+    const h = await harness();
+    // The chat is purged while the dispatcher holds the input (here: inside its control hook).
+    const first = h.core.receive("feishu", feishuMessage("f1"));
+    let purged = false;
+    h.core.control = async (input) => { if (!purged) { purged = true; h.store.transaction(() => h.ledger.purge(input.conversationId)); } return false; };
+    await h.core.dispatch();
+    expect(h.ledger.input(first.id)).toMatchObject({ state: "dropped", reason: "purged" });
+    expect(h.work.list()).toHaveLength(0);
+    // After a crash between creating the task and recording its turn, the retry finds the task even though the
+    // message no longer reads the same (its text was removed since).
+    const second = h.core.receive("feishu", feishuMessage("f2"));
+    const record = h.ledger.atomic.bind(h.ledger);
+    h.ledger.atomic = () => { h.ledger.atomic = record; throw new Error("crash_before_turn_recorded"); };
+    await expect(h.core.dispatch()).rejects.toThrow("crash_before_turn_recorded");
+    expect(h.ledger.input(second.id)).toMatchObject({ state: "starting", turn_id: null });
+    h.ledger.clearText(second.id);
+    h.core.receive("feishu", feishuMessage("f3"));
+    await h.complete(); await h.complete();
+    const [task] = h.work.list(true);
+    expect(h.ledger.input(second.id)).toMatchObject({ state: "started", turn_id: task!.id });
+    expect(h.core.status().error).toBeNull();
+    // Nothing behind it is held up, and each input ran once.
+    expect(h.host.starts.map((start) => start.input.split("\n")[0])).toEqual(["飞书-f2", "飞书-f3"]);
+    expect(h.feishu.sent.map((item) => item.text)).toEqual(["回答-1", "回答-2"]);
+  });
   it("never wedges a channel on a receipt that cannot be recorded: the channel acknowledges it and keeps it aside, a web send fails", async () => {
     const h = await harness(), append = h.ledger.append.bind(h.ledger);
     let failing = true;

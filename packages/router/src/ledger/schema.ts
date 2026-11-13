@@ -162,8 +162,9 @@ CREATE INDEX hub_pairing_pending ON hub_pairing_codes(person_id) WHERE consumed_
  *
  * The inbox and outbox documents of earlier releases are folded into those rows and then deleted: a claim takes its
  * message from its inbox record, a delivery its text and turn from its outbox record, and an outbox record that never
- * had a delivery row (owner notifications, pairing replies) becomes one. Records of the web connection had no
- * delivery row by design (the event is the delivery) and get none.
+ * had a delivery row (owner notifications, pairing replies) becomes one, in the order it was queued. Records of the
+ * web connection had no delivery row by design (the event is the delivery) and get none. A delivery row that waited
+ * without an outbox record was never sent before and has nothing to send: it is settled as `suppressed`.
  */
 export const AGENT_LEDGER_V5 = `
 ALTER TABLE ledger_ingress ADD COLUMN source TEXT;
@@ -179,8 +180,7 @@ CREATE TABLE ledger_ingress_failures(
   connection_id TEXT NOT NULL, external_id TEXT NOT NULL, input_id TEXT NOT NULL, hash TEXT NOT NULL, source TEXT NOT NULL,
   error TEXT NOT NULL, received_at INTEGER NOT NULL, PRIMARY KEY(connection_id, external_id));
 UPDATE ledger_ingress SET (source, session_key, fork_from) = (
-  SELECT CASE WHEN ledger_ingress.state = 'tombstone' THEN NULL ELSE json_extract(d.value, '$.source') END,
-    json_extract(d.value, '$.conversationId'), json_extract(d.value, '$.forkFromContextId')
+  SELECT json_extract(d.value, '$.source'), json_extract(d.value, '$.conversationId'), json_extract(d.value, '$.forkFromContextId')
   FROM documents d WHERE d.collection = 'communication_inbox' AND d.id = ledger_ingress.input_id)
   WHERE input_id IN (SELECT id FROM documents WHERE collection = 'communication_inbox');
 UPDATE ledger_deliveries SET (text, content, turn_id, origin_turn_id, activity) = (
@@ -199,5 +199,7 @@ INSERT OR IGNORE INTO ledger_deliveries(delivery_id, event_id, conversation_id, 
     json_extract(d.value, '$.externalId'), json_extract(d.value, '$.error'), CAST(unixepoch('subsec') * 1000 AS INTEGER), CAST(unixepoch('subsec') * 1000 AS INTEGER),
     COALESCE(json_extract(d.value, '$.text'), ''), json_extract(d.value, '$.taskId'), json_extract(d.value, '$.originTaskId'), json_extract(d.value, '$.activity')
   FROM documents d WHERE d.collection = 'communication_outbox' AND json_extract(d.value, '$.route.connectionId') IS NOT NULL
-    AND json_extract(d.value, '$.route.connectionId') <> 'web';
+    AND json_extract(d.value, '$.route.connectionId') <> 'web' ORDER BY d.rowid;
+UPDATE ledger_deliveries SET status = 'suppressed', error = 'delivery_without_content' WHERE status IN ('created','queued','sending')
+  AND delivery_id NOT IN (SELECT id FROM documents WHERE collection = 'communication_outbox');
 DELETE FROM documents WHERE collection IN ('communication_inbox','communication_outbox','communication_threads');`;
