@@ -54,12 +54,12 @@ async function boot(stateDir: string, overrides: Partial<ServiceConfig> = {}) {
   // and the homeserver variables belonged to the removed Matrix switch and no longer mean anything.
   const env = { MATRIX_SERVER_NAME: "example.test", AGENT_SERVICE_URL: `${origin}/_agent-router/v1`, AGENT_SERVICE_STATE: stateDir, AGENT_MATRIX: "off",
     MATRIX_HOMESERVER_URL: "https://matrix.example.test", MATRIX_AS_TOKEN_FILE: join(stateDir, "missing-as-token"),
+    // The ledger switches of earlier releases are still set there; every ledger feature is always on, so they are ignored.
     AGENT_LEDGER_READ: "1", AGENT_LEDGER_SEND: "1", AGENT_LEDGER_CARDS: "1", AGENT_LEDGER_CONTROL: "1", AGENT_LEDGER_GROUPS: "1",
     AGENT_LEDGER_ATTACHMENTS: "1", AGENT_LEDGER_IDENTITY: "1", AGENT_EDGE_IDENTITY_FILE: edgeFile };
   const loaded = loadServiceConfig(env);
-  expect(Object.keys(loaded).sort()).toEqual(["attachmentQuotaBytes", "blobStore", "edgeIdentity", "ledgerAttachments", "ledgerCards", "ledgerControl", "ledgerGroups",
-    "ledgerIdentity", "ledgerRead", "ledgerSend", "publicUrl", "serverName", "stateDir"].filter((key) => key in loaded));
-  expect(loaded).toMatchObject({ serverName: "example.test", ledgerRead: true, ledgerSend: true });
+  expect(Object.keys(loaded).sort()).toEqual(["attachmentQuotaBytes", "blobStore", "edgeIdentity", "publicUrl", "serverName", "stateDir"].filter((key) => key in loaded));
+  expect(loaded).toMatchObject({ serverName: "example.test" });
   // A product built against the previous release still passes the Matrix switch; it is an unknown key and has no effect.
   const config = { ...loaded, matrix: { enabled: false }, ...overrides } as ServiceConfig;
   const host = new Host();
@@ -103,7 +103,8 @@ describe("the Router service", () => {
     expect((await fetch(`${t.base}/health/live`).then((r) => r.json()))).toEqual({ status: "ok", component: "agent-service" });
     const me = (await t.api(`${root}/web/me`)).data;
     expect(me).toMatchObject({ ownerId: owner, auth: { via: "edge", email: "owner@example.test" } });
-    expect(me.limits.features).toEqual({ history: true, send: true, cards: true, attachments: true, reset: true, groups: true, identity: true });
+    // The retired switches change nothing: there is no feature list to switch.
+    expect(me.limits.features).toBeUndefined();
     expect((await t.api(`${root}/account`)).data).toEqual({ owner, personId: expect.stringMatching(/^prs_/), via: "edge", email: "owner@example.test" });
 
     const created = await t.api(`${root}/agents`, "POST", { name: "helper" });
@@ -256,6 +257,10 @@ describe("a store written by a release with Matrix", () => {
     const seed = agentStore(stateDir, prior);
     const [{ value: done }] = seed.entries<Record<string, any>>("communication_inbox") as [{ value: Record<string, any> }];
     seed.set("communication_inbox", "late", { ...done, id: "late", state: "received", taskId: undefined, source: { ...done.source, externalId: "$late", text: "切换瞬间的消息" } });
+    seed.db.exec(`INSERT INTO ledger_ingress(connection_id,external_id,input_id,hash,state,event_id,conversation_id,received_at)
+      SELECT connection_id,'$late','late','late-hash',state,event_id,conversation_id,received_at+1 FROM ledger_ingress;
+      INSERT INTO ledger_pending_inputs(input_id,session_key,event_id,state,created_at,updated_at)
+      SELECT 'late',session_key,event_id,'queued',created_at+1,updated_at+1 FROM ledger_pending_inputs`);
     seed.set("cli_work_events", "unpublished", seed.get<{ task: unknown }>("cli_work", String(done.taskId))!.task);
     // Records only the Matrix adapter read: a queued event and a request waiting for approval. Nothing reads them now.
     seed.set("outbox", "matrix-envelope", { room: "!dm:example.test", type: "m.room.message", content: { body: "never sent" }, status: "queued", attempts: 0, nextAt: 0 });
@@ -264,9 +269,13 @@ describe("a store written by a release with Matrix", () => {
     seed.close();
     const t = await boot(stateDir);
     const runtime = await t.router.service.runtime(prior.agent.id);
-    const records = () => runtime.store.entries<{ state: string; reason?: string }>("communication_inbox");
-    await until(records, (items) => items.find(({ id }) => id === "late")?.value.state === "ignored");
-    expect(records().find(({ id }) => id === "late")!.value.reason).toBe("connection_removed");
+    // The upgrade folded the inbox and outbox documents of that release into the ledger and removed them.
+    const core = runtime.extension!.communication!;
+    expect(runtime.store.entries("communication_inbox")).toEqual([]); expect(runtime.store.entries("communication_outbox")).toEqual([]);
+    expect(core.inputById(String(done.id))).toMatchObject({ state: "done", taskId: done.taskId, conversationId: prior.session, source: { text: "Matrix 上的消息" } });
+    expect(core.ledger.recentDeliveries()).toMatchObject([{ status: "sent", purpose: "reply", text: "回答-1", turnId: done.taskId, platformMessageId: "$e" }]);
+    await until(() => core.inputById("late"), (item) => item?.state === "ignored");
+    expect(core.inputById("late")).toMatchObject({ reason: "connection_removed", source: { text: "切换瞬间的消息" } });
     await until(() => runtime.store.entries("cli_work_events").filter(({ id }) => id === "unpublished").length, (n) => n === 0);
     expect(t.host.starts).toEqual([]);
     expect(runtime.store.get("outbox", "matrix-envelope")).toMatchObject({ status: "queued" });
@@ -280,7 +289,8 @@ describe("a store written by a release with Matrix", () => {
     await t.api(`${root}/web/chats/${enc(chatId)}/messages`, "POST", { idempotencyKey: ik(), text: "网页上的消息" });
     await until(() => t.events(chatId), (items) => items.filter((event) => event.role === "assistant" && event.final).length === 2);
     expect(sessions.deliver({ eventId: "rule-2", targetSessionId: prior.session, text: "第二条通知" })).toMatchObject({ state: "accepted" });
-    const delivered = runtime.store.entries<{ route: { connectionId: string }; text: string }>("communication_outbox").find(({ value }) => value.text === "第二条通知")!;
-    expect(delivered.value.route.connectionId).toBe("web");
+    // The web is that route: the notice is recorded on the chat and nothing is queued for a connection.
+    await until(() => t.events(chatId), (items) => items.some((event) => event.kind === "notice" && event.text === "第二条通知"));
+    expect(core.ledger.recentDeliveries().map((row) => row.text)).toEqual(["回答-1"]);
   }, 60_000);
 });

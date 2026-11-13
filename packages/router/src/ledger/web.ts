@@ -25,21 +25,16 @@ export interface WebLedgerDependencies {
   /** Opens the agent runtime (and so its ledger) when a chat names an agent that is not running yet. */
   open(agentId: string): Promise<void>;
   owned(ownerId: string): Array<{ id: string; name: string }>;
-  /** ADR 0005 `send` (phase 3, `AGENT_LEDGER_SEND`): owner messages and redactions through the web channel. */
-  send?: boolean | undefined;
-  /** The agent's web channel; undefined when the agent has no channel runtime. */
-  channel?(agentId: string): Promise<WebIngress | undefined>;
-  /** ADR 0005 `cards` and `reset` (phase 4); both need `send`. */
-  cards?: boolean | undefined;
-  reset?: boolean | undefined;
+  /** The agent's web channel (owner messages and redactions); undefined when the agent has no channel runtime. */
+  channel(agentId: string): Promise<WebIngress | undefined>;
   /** The agent's card and control ledger; undefined when the agent has no channel runtime. */
-  control?(agentId: string): Promise<LedgerControl | undefined>;
-  /** ADR 0005 `groups` (phase 5, `AGENT_LEDGER_GROUPS`, needs `send`): native hub rooms. */
-  groups?: boolean | undefined;
+  control(agentId: string): Promise<LedgerControl | undefined>;
   /** Wakes the room fan-out worker after a room message. */
-  kick?(): void;
-  /** ADR 0005 `identity` (phase 6, `AGENT_LEDGER_IDENTITY`): the identity page and pairing codes. */
-  identity?: Identities | undefined;
+  kick(): void;
+  /** The identity page and pairing codes (ADR 0005 section 18). */
+  identity: Identities;
+  /** Attachments (ADR 0005 16.5). */
+  attachments: OwnerAttachments;
 }
 /** The request's credentials, kept in memory with a socket ticket so the socket can be re-checked. */
 const credentials = (req: IncomingMessage): OwnerRequest => ({ headers: Object.fromEntries(["authorization", "cf-access-jwt-assertion"]
@@ -57,9 +52,6 @@ const historyQuery = z.object({ before: seq.optional(), after: seq.optional(), g
   limit: z.coerce.number().int().min(1).max(LIMITS.pageEvents).default(50), strict: z.enum(["true", "false"]).optional() }).strict()
   .refine((query) => query.before === undefined || query.after === undefined, "before_and_after_are_exclusive");
 const agentOf = (chatId: string) => /^(?:dm|obs):([^:]+)/.exec(chatId)?.[1];
-
-/** Phase 4 attachments (ADR 0005 16.5); present only while the `attachments` feature is on. */
-export interface WebLedgerDependencies { attachments?: OwnerAttachments | undefined }
 
 /** Single-use socket tickets (60 s), kept in memory only. */
 class Tickets {
@@ -79,16 +71,12 @@ class Tickets {
 }
 
 /**
- * Read-only web channel API (ADR 0005 phase 2): chat index, history, read markers, turn detail and the event socket.
- * Sending (phase 3) and attachments (phase 4) are flag-gated; reset, cards and groups arrive in later phases, and `GET /me`
- * reports every feature that is off as disabled.
+ * The web channel API (ADR 0005 section 8): chat index, history, read markers, turn detail, sending, cards, control,
+ * groups, identities, attachments and the event socket. Every part is always served.
  */
 export function createWebLedger(dependencies: WebLedgerDependencies) {
   const { hubs, persons, authenticator } = dependencies, tickets = new Tickets(), epoch = `ep_${randomBytes(8).toString("hex")}`;
-  const send = Boolean(dependencies.send && dependencies.channel);
-  const cards = send && Boolean(dependencies.cards && dependencies.control), reset = send && Boolean(dependencies.reset && dependencies.control);
-  const groups = send && Boolean(dependencies.groups);
-  const limits = { ...baseLimits, features: { history: true, send, cards, attachments: Boolean(dependencies.attachments), reset, groups, identity: Boolean(dependencies.identity) } };
+  const limits = baseLimits;
   const router = express.Router();
   // Its own bound before authentication; the service-wide 1200/min also applies.
   router.use(rateLimit({ windowMs: 60_000, limit: 600, standardHeaders: "draft-8", legacyHeaders: false,
@@ -113,7 +101,7 @@ export function createWebLedger(dependencies: WebLedgerDependencies) {
   router.get("/me", (_req, res) => {
     const { personId: id, ownerId, via, email, expiresAt } = principal(res);
     res.json({ person: { id, name: persons.person(id)?.displayName ?? ownerId }, ownerId, identities: persons.identities(id),
-      limits: { ...limits, ...(dependencies.attachments ? { attachmentQuotaBytes: dependencies.attachments.quotaBytes } : {}) },
+      limits: { ...limits, attachmentQuotaBytes: dependencies.attachments.quotaBytes },
       auth: { via, ...(email ? { email } : {}), ...(expiresAt ? { expiresAt: new Date(expiresAt).toISOString() } : {}) } });
   });
   router.post("/socket-tickets", (req, res) => {
@@ -151,156 +139,145 @@ export function createWebLedger(dependencies: WebLedgerDependencies) {
     res.json((await chat(res, req.params.chatId)).read(req.params.chatId, principal(res).personId, body.seq));
   });
   router.get("/chats/:chatId/turns/:turnId", async (req, res) => res.json((await chat(res, req.params.chatId)).turn(req.params.chatId, req.params.turnId)));
-  if (send) {
-    // Per person, after authentication: each send may start a turn.
-    const sends = rateLimit({ windowMs: 60_000, limit: baseLimits.sendsPerMinute, standardHeaders: "draft-8", legacyHeaders: false,
-      keyGenerator: (_req, res) => `person:${principal(res).personId}`,
-      handler: (req, res) => {
-        const reset = (req as express.Request & { rateLimit?: { resetTime?: Date } }).rateLimit?.resetTime;
-        res.status(429).json({ error: "rate_limit_exceeded", retryAfterMs: Math.max(0, (reset?.getTime() ?? Date.now() + 60_000) - Date.now()) });
-      } });
-    /** The writable chat behind a chat id, and the agent's web channel. Observed chats are read-only. */
-    const writable = async (res: express.Response, chatId: string) => {
-      const target = await chat(res, chatId), resolved = target.resolve(chatId);
-      if (resolved.kind !== "dm") throw new WorkError("chat_read_only", 403);
-      const channel = await dependencies.channel!(resolved.agentId);
-      if (!channel) throw new WorkError("agent_channels_not_configured", 409);
-      return { target, resolved, channel };
-    };
-    const rendered = (target: ReturnType<typeof hubs.hub>, chatId: string, resolved: ReturnType<ReturnType<typeof hubs.hub>["resolve"]>, event: import("./ledger.js").LedgerEvent) =>
-      target.render(chatId, resolved.agentId, resolved.ledger, resolved.ledger.session(resolved.sessionKey)?.generation ?? 1, event, true);
-    router.post("/chats/:chatId/messages", sends, async (req, res) => {
-      const body = sendRequest.parse(req.body), chatId = req.params.chatId as string;
-      if (isRoomChat(chatId)) {
-        // Room send (17.1): same validation order as a DM; the hub fans out to the addressed member agents.
-        const target = await chat(res, chatId), roomId = target.rooms.roomOf(chatId);
-        if (!groups) throw new WorkError("feature_disabled", 403);
-        if (target.rooms.room(roomId)!.archived) throw new WorkError("chat_read_only", 403);
-        if (Buffer.byteLength(body.text) > baseLimits.textBytes) throw new WorkError("message_too_large", 413);
-        if (body.attachments?.length) throw new WorkError("attachments_unsupported", 422);
-        if (!body.text.trim()) throw new WorkError("message_empty", 422);
-        const result = target.rooms.send(roomId, principal(res).personId, body);
-        dependencies.kick?.();
-        res.json({ status: result.duplicate ? "duplicate" : "accepted", event: result.event, addressed: result.addressed });
-        return;
-      }
-      const { target, resolved, channel } = await writable(res, chatId);
+  // Per person, after authentication: each send may start a turn.
+  const sends = rateLimit({ windowMs: 60_000, limit: baseLimits.sendsPerMinute, standardHeaders: "draft-8", legacyHeaders: false,
+    keyGenerator: (_req, res) => `person:${principal(res).personId}`,
+    handler: (req, res) => {
+      const reset = (req as express.Request & { rateLimit?: { resetTime?: Date } }).rateLimit?.resetTime;
+      res.status(429).json({ error: "rate_limit_exceeded", retryAfterMs: Math.max(0, (reset?.getTime() ?? Date.now() + 60_000) - Date.now()) });
+    } });
+  /** The writable chat behind a chat id, and the agent's web channel. Observed chats are read-only. */
+  const writable = async (res: express.Response, chatId: string) => {
+    const target = await chat(res, chatId), resolved = target.resolve(chatId);
+    if (resolved.kind !== "dm") throw new WorkError("chat_read_only", 403);
+    const channel = await dependencies.channel(resolved.agentId);
+    if (!channel) throw new WorkError("agent_channels_not_configured", 409);
+    return { target, resolved, channel };
+  };
+  const rendered = (target: ReturnType<typeof hubs.hub>, chatId: string, resolved: ReturnType<ReturnType<typeof hubs.hub>["resolve"]>, event: import("./ledger.js").LedgerEvent) =>
+    target.render(chatId, resolved.agentId, resolved.ledger, resolved.ledger.session(resolved.sessionKey)?.generation ?? 1, event, true);
+  router.post("/chats/:chatId/messages", sends, async (req, res) => {
+    const body = sendRequest.parse(req.body), chatId = req.params.chatId as string;
+    if (isRoomChat(chatId)) {
+      // Room send (17.1): same validation order as a DM; the hub fans out to the addressed member agents.
+      const target = await chat(res, chatId), roomId = target.rooms.roomOf(chatId);
+      if (target.rooms.room(roomId)!.archived) throw new WorkError("chat_read_only", 403);
       if (Buffer.byteLength(body.text) > baseLimits.textBytes) throw new WorkError("message_too_large", 413);
-      // Attachments need the `attachments` feature (phase 4); the channel binds them to the message (ADR 16.5).
-      const attachmentIds = body.attachments ?? [];
-      if (attachmentIds.length && !dependencies.attachments) throw new WorkError("attachments_unsupported", 422);
-      if (body.mentions && body.mentions.agentIds.some((id) => id !== resolved.agentId)) throw new WorkError("mention_not_member", 422);
-      if (!body.text.trim() && !attachmentIds.length) throw new WorkError("message_empty", 422);
-      if (body.replyTo && resolved.ledger.event(body.replyTo)?.sessionKey !== resolved.sessionKey) throw new WorkError("reply_target_not_found", 422);
-      const result = channel.submit({ personId: principal(res).personId, idempotencyKey: body.idempotencyKey, text: body.text, replyTo: body.replyTo,
-        ...(attachmentIds.length ? { attachments: attachmentIds } : {}) });
-      res.json({ status: result.duplicate ? "duplicate" : "accepted", event: rendered(target, chatId, resolved, result.event),
-        addressed: [{ agentId: resolved.agentId, state: result.inputState === "control" ? "control" : "queued" }] });
-    });
-    router.post("/chats/:chatId/events/:eventId/redact", sends, async (req, res) => {
-      const body = z.object({ idempotencyKey: sendRequest.shape.idempotencyKey }).strict().parse(req.body ?? {});
-      const chatId = req.params.chatId as string, { target, resolved, channel } = await writable(res, chatId);
-      const result = channel.redact(principal(res).personId, resolved.sessionKey, req.params.eventId as string, body.idempotencyKey);
-      res.json({ status: result.duplicate ? "duplicate" : "accepted", event: rendered(target, chatId, resolved, result.event), dropped: result.dropped });
-    });
-  }
-  if (cards || reset) {
-    const key = sendRequest.shape.idempotencyKey;
-    const sends = rateLimit({ windowMs: 60_000, limit: baseLimits.sendsPerMinute, standardHeaders: "draft-8", legacyHeaders: false,
-      keyGenerator: (_req, res) => `control:${principal(res).personId}`,
-      handler: (req, res) => {
-        const reset = (req as express.Request & { rateLimit?: { resetTime?: Date } }).rateLimit?.resetTime;
-        res.status(429).json({ error: "rate_limit_exceeded", retryAfterMs: Math.max(0, (reset?.getTime() ?? Date.now() + 60_000) - Date.now()) });
-      } });
-    /** The chat, its agent's control ledger and whether it may be written (observed chats are read-only). */
-    const controlled = async (res: express.Response, chatId: string, write: boolean) => {
-      const target = await chat(res, chatId), resolved = target.resolve(chatId);
-      if (write && resolved.kind !== "dm") throw new WorkError("chat_read_only", 403);
-      const control = await dependencies.control!(resolved.agentId);
-      if (!control) throw new WorkError("agent_channels_not_configured", 409);
-      const render = (event: import("./ledger.js").LedgerEvent) =>
-        target.render(chatId, resolved.agentId, resolved.ledger, resolved.ledger.session(resolved.sessionKey)?.generation ?? 1, event, true);
-      return { target, resolved, control, render };
-    };
-    /**
-     * `hub_commands` idempotency: the same key and request return the stored response; another request is 409. The row
-     * is written before the work runs, so a retry after a crash runs it again (each step is itself idempotent).
-     */
-    const once = async (res: express.Response, target: ReturnType<typeof hubs.hub>, idempotencyKey: string, request: unknown,
-      run: () => Promise<Record<string, unknown>>, options: { keep?: (response: Record<string, unknown>) => boolean; duplicate?: (stored: Record<string, unknown>) => Promise<Record<string, unknown>> | Record<string, unknown> } = {}) => {
-      const person = principal(res).personId, hash = digest(["web-command", request]), prior = target.command(person, idempotencyKey);
-      if (prior && prior.hash !== hash) throw new WorkError("idempotency_key_reused", 409);
-      if (prior && !prior.response.planned) return options.duplicate ? options.duplicate(prior.response) : prior.response;
-      if (!prior) target.saveCommand(person, idempotencyKey, hash, { planned: true });
-      const response = await run();
-      if (options.keep?.(response) ?? true) target.saveCommand(person, idempotencyKey, hash, response);
-      return response;
-    };
-    if (cards) {
-      const answerRequest = z.object({ idempotencyKey: key, choiceId: z.string().min(1).max(16).optional(), text: z.string().min(1).max(24_000).optional(),
-        result: z.json().optional() }).strict().refine((body) => [body.choiceId !== undefined, body.text !== undefined, "result" in body].filter(Boolean).length <= 1, "one_answer_form");
-      const scoped = (control: LedgerControl, cardId: string, sessionKey: string) => {
-        const card = control.card(cardId);
-        if (!card || card.sessionKey !== sessionKey) throw new WorkError("card_not_found", 404);
-        return card;
-      };
-      router.get("/chats/:chatId/cards/:cardId", async (req, res) => {
-        const { resolved, control } = await controlled(res, req.params.chatId, false);
-        scoped(control, req.params.cardId, resolved.sessionKey);
-        res.set("Cache-Control", "no-store").json(await control.view(req.params.cardId, true));
-      });
-      router.post("/chats/:chatId/cards/:cardId/answer", sends, async (req, res) => {
-        const body = answerRequest.parse(req.body ?? {}), chatId = req.params.chatId as string, cardId = req.params.cardId as string;
-        const { target, resolved, control } = await controlled(res, chatId, true);
-        scoped(control, cardId, resolved.sessionKey);
-        const { idempotencyKey, ...answer } = body, person = principal(res).personId;
-        res.json(await once(res, target, idempotencyKey, ["card.answer", chatId, cardId, answer], async () => control.answer(cardId, {
-          key: `web:${person}:${idempotencyKey}`, by: person, surface: "web", choiceId: answer.choiceId, text: answer.text,
-          ...("result" in answer ? { result: answer.result, hasResult: true } : {}) }) as unknown as Record<string, unknown>, {
-          keep: (response) => response.status === "accepted",
-          duplicate: async () => ({ status: "duplicate", card: await control.view(cardId) }) }));
-      });
+      if (body.attachments?.length) throw new WorkError("attachments_unsupported", 422);
+      if (!body.text.trim()) throw new WorkError("message_empty", 422);
+      const result = target.rooms.send(roomId, principal(res).personId, body);
+      dependencies.kick();
+      res.json({ status: result.duplicate ? "duplicate" : "accepted", event: result.event, addressed: result.addressed });
+      return;
     }
-    if (reset) {
-      router.post("/chats/:chatId/turns/:turnId/cancel", sends, async (req, res) => {
-        z.object({}).strict().parse(req.body ?? {});
-        const { resolved, control } = await controlled(res, req.params.chatId as string, true);
-        res.json(await control.cancel(resolved.sessionKey, req.params.turnId as string));
-      });
-      router.post("/chats/:chatId/turns/:turnId/steer", sends, async (req, res) => {
-        const body = z.object({ idempotencyKey: key, text: z.string().min(1).max(baseLimits.textBytes) }).strict().parse(req.body ?? {});
-        if (Buffer.byteLength(body.text) > baseLimits.textBytes) throw new WorkError("message_too_large", 413);
-        if (!body.text.trim()) throw new WorkError("message_empty", 422);
-        const chatId = req.params.chatId as string, turnId = req.params.turnId as string, { target, resolved, control, render } = await controlled(res, chatId, true);
-        res.json(await once(res, target, body.idempotencyKey, ["turn.steer", chatId, turnId, body.text], async () => {
-          const result = await control.steer(resolved.sessionKey, turnId, { personId: principal(res).personId, idempotencyKey: body.idempotencyKey, text: body.text });
-          return result.status === "accepted" ? { status: "accepted", event: render(result.event) } : result;
-        }, { keep: (response) => response.status === "accepted" }));
-      });
-      router.post("/chats/:chatId/reset", sends, async (req, res) => {
-        const body = z.object({ idempotencyKey: key, cancelActive: z.boolean().optional() }).strict().parse(req.body ?? {});
-        const chatId = req.params.chatId as string, { target, resolved, control, render } = await controlled(res, chatId, true);
-        res.json(await once(res, target, body.idempotencyKey, ["chat.reset", chatId, Boolean(body.cancelActive)], async () => {
-          const result = await control.reset(resolved.sessionKey, { cancelActive: Boolean(body.cancelActive) });
-          return { window: result.window, event: render(result.event) };
-        }));
-      });
-      router.post("/chats/:chatId/purge", sends, async (req, res) => {
-        const body = z.object({ idempotencyKey: key, confirm: z.string().max(512), cancelActive: z.boolean().optional() }).strict().parse(req.body ?? {});
-        const chatId = req.params.chatId as string;
-        if (body.confirm !== chatId) throw new WorkError("purge_confirmation_required", 422);
-        const { target, resolved, control } = await controlled(res, chatId, true);
-        res.json(await once(res, target, body.idempotencyKey, ["chat.purge", chatId, Boolean(body.cancelActive)], async () => {
-          const result = await control.purge(resolved.sessionKey, { cancelActive: Boolean(body.cancelActive) });
-          target.clearRead(chatId);
-          return result;
-        }));
-      });
-    }
-  }
-  mountRoomRoutes(router, { principal, hub, owned: dependencies.owned, open: dependencies.open, enabled: groups, kick: () => dependencies.kick?.() });
-  if (dependencies.identity) identityRoutes(router, dependencies.identity, principal);
-  // ---- Phase 4: attachments (ADR 0005 16.5), routes in src/ledger/blobs-web.ts ----
+    const { target, resolved, channel } = await writable(res, chatId);
+    if (Buffer.byteLength(body.text) > baseLimits.textBytes) throw new WorkError("message_too_large", 413);
+    // The channel binds attachments to the message (ADR 16.5).
+    const attachmentIds = body.attachments ?? [];
+    if (body.mentions && body.mentions.agentIds.some((id) => id !== resolved.agentId)) throw new WorkError("mention_not_member", 422);
+    if (!body.text.trim() && !attachmentIds.length) throw new WorkError("message_empty", 422);
+    if (body.replyTo && resolved.ledger.event(body.replyTo)?.sessionKey !== resolved.sessionKey) throw new WorkError("reply_target_not_found", 422);
+    const result = channel.submit({ personId: principal(res).personId, idempotencyKey: body.idempotencyKey, text: body.text, replyTo: body.replyTo,
+      ...(attachmentIds.length ? { attachments: attachmentIds } : {}) });
+    res.json({ status: result.duplicate ? "duplicate" : "accepted", event: rendered(target, chatId, resolved, result.event),
+      addressed: [{ agentId: resolved.agentId, state: result.inputState === "control" ? "control" : "queued" }] });
+  });
+  router.post("/chats/:chatId/events/:eventId/redact", sends, async (req, res) => {
+    const body = z.object({ idempotencyKey: sendRequest.shape.idempotencyKey }).strict().parse(req.body ?? {});
+    const chatId = req.params.chatId as string, { target, resolved, channel } = await writable(res, chatId);
+    const result = channel.redact(principal(res).personId, resolved.sessionKey, req.params.eventId as string, body.idempotencyKey);
+    res.json({ status: result.duplicate ? "duplicate" : "accepted", event: rendered(target, chatId, resolved, result.event), dropped: result.dropped });
+  });
+  const key = sendRequest.shape.idempotencyKey;
+  const commands = rateLimit({ windowMs: 60_000, limit: baseLimits.sendsPerMinute, standardHeaders: "draft-8", legacyHeaders: false,
+    keyGenerator: (_req, res) => `control:${principal(res).personId}`,
+    handler: (req, res) => {
+      const reset = (req as express.Request & { rateLimit?: { resetTime?: Date } }).rateLimit?.resetTime;
+      res.status(429).json({ error: "rate_limit_exceeded", retryAfterMs: Math.max(0, (reset?.getTime() ?? Date.now() + 60_000) - Date.now()) });
+    } });
+  /** The chat, its agent's control ledger and whether it may be written (observed chats are read-only). */
+  const controlled = async (res: express.Response, chatId: string, write: boolean) => {
+    const target = await chat(res, chatId), resolved = target.resolve(chatId);
+    if (write && resolved.kind !== "dm") throw new WorkError("chat_read_only", 403);
+    const control = await dependencies.control(resolved.agentId);
+    if (!control) throw new WorkError("agent_channels_not_configured", 409);
+    const render = (event: import("./ledger.js").LedgerEvent) =>
+      target.render(chatId, resolved.agentId, resolved.ledger, resolved.ledger.session(resolved.sessionKey)?.generation ?? 1, event, true);
+    return { target, resolved, control, render };
+  };
+  /**
+   * `hub_commands` idempotency: the same key and request return the stored response; another request is 409. The row
+   * is written before the work runs, so a retry after a crash runs it again (each step is itself idempotent).
+   */
+  const once = async (res: express.Response, target: ReturnType<typeof hubs.hub>, idempotencyKey: string, request: unknown,
+    run: () => Promise<Record<string, unknown>>, options: { keep?: (response: Record<string, unknown>) => boolean; duplicate?: (stored: Record<string, unknown>) => Promise<Record<string, unknown>> | Record<string, unknown> } = {}) => {
+    const person = principal(res).personId, hash = digest(["web-command", request]), prior = target.command(person, idempotencyKey);
+    if (prior && prior.hash !== hash) throw new WorkError("idempotency_key_reused", 409);
+    if (prior && !prior.response.planned) return options.duplicate ? options.duplicate(prior.response) : prior.response;
+    if (!prior) target.saveCommand(person, idempotencyKey, hash, { planned: true });
+    const response = await run();
+    if (options.keep?.(response) ?? true) target.saveCommand(person, idempotencyKey, hash, response);
+    return response;
+  };
+  const answerRequest = z.object({ idempotencyKey: key, choiceId: z.string().min(1).max(16).optional(), text: z.string().min(1).max(24_000).optional(),
+    result: z.json().optional() }).strict().refine((body) => [body.choiceId !== undefined, body.text !== undefined, "result" in body].filter(Boolean).length <= 1, "one_answer_form");
+  const scoped = (control: LedgerControl, cardId: string, sessionKey: string) => {
+    const card = control.card(cardId);
+    if (!card || card.sessionKey !== sessionKey) throw new WorkError("card_not_found", 404);
+    return card;
+  };
+  router.get("/chats/:chatId/cards/:cardId", async (req, res) => {
+    const { resolved, control } = await controlled(res, req.params.chatId, false);
+    scoped(control, req.params.cardId, resolved.sessionKey);
+    res.set("Cache-Control", "no-store").json(await control.view(req.params.cardId, true));
+  });
+  router.post("/chats/:chatId/cards/:cardId/answer", commands, async (req, res) => {
+    const body = answerRequest.parse(req.body ?? {}), chatId = req.params.chatId as string, cardId = req.params.cardId as string;
+    const { target, resolved, control } = await controlled(res, chatId, true);
+    scoped(control, cardId, resolved.sessionKey);
+    const { idempotencyKey, ...answer } = body, person = principal(res).personId;
+    res.json(await once(res, target, idempotencyKey, ["card.answer", chatId, cardId, answer], async () => control.answer(cardId, {
+      key: `web:${person}:${idempotencyKey}`, by: person, surface: "web", choiceId: answer.choiceId, text: answer.text,
+      ...("result" in answer ? { result: answer.result, hasResult: true } : {}) }) as unknown as Record<string, unknown>, {
+      keep: (response) => response.status === "accepted",
+      duplicate: async () => ({ status: "duplicate", card: await control.view(cardId) }) }));
+  });
+  router.post("/chats/:chatId/turns/:turnId/cancel", commands, async (req, res) => {
+    z.object({}).strict().parse(req.body ?? {});
+    const { resolved, control } = await controlled(res, req.params.chatId as string, true);
+    res.json(await control.cancel(resolved.sessionKey, req.params.turnId as string));
+  });
+  router.post("/chats/:chatId/turns/:turnId/steer", commands, async (req, res) => {
+    const body = z.object({ idempotencyKey: key, text: z.string().min(1).max(baseLimits.textBytes) }).strict().parse(req.body ?? {});
+    if (Buffer.byteLength(body.text) > baseLimits.textBytes) throw new WorkError("message_too_large", 413);
+    if (!body.text.trim()) throw new WorkError("message_empty", 422);
+    const chatId = req.params.chatId as string, turnId = req.params.turnId as string, { target, resolved, control, render } = await controlled(res, chatId, true);
+    res.json(await once(res, target, body.idempotencyKey, ["turn.steer", chatId, turnId, body.text], async () => {
+      const result = await control.steer(resolved.sessionKey, turnId, { personId: principal(res).personId, idempotencyKey: body.idempotencyKey, text: body.text });
+      return result.status === "accepted" ? { status: "accepted", event: render(result.event) } : result;
+    }, { keep: (response) => response.status === "accepted" }));
+  });
+  router.post("/chats/:chatId/reset", commands, async (req, res) => {
+    const body = z.object({ idempotencyKey: key, cancelActive: z.boolean().optional() }).strict().parse(req.body ?? {});
+    const chatId = req.params.chatId as string, { target, resolved, control, render } = await controlled(res, chatId, true);
+    res.json(await once(res, target, body.idempotencyKey, ["chat.reset", chatId, Boolean(body.cancelActive)], async () => {
+      const result = await control.reset(resolved.sessionKey, { cancelActive: Boolean(body.cancelActive) });
+      return { window: result.window, event: render(result.event) };
+    }));
+  });
+  router.post("/chats/:chatId/purge", commands, async (req, res) => {
+    const body = z.object({ idempotencyKey: key, confirm: z.string().max(512), cancelActive: z.boolean().optional() }).strict().parse(req.body ?? {});
+    const chatId = req.params.chatId as string;
+    if (body.confirm !== chatId) throw new WorkError("purge_confirmation_required", 422);
+    const { target, resolved, control } = await controlled(res, chatId, true);
+    res.json(await once(res, target, body.idempotencyKey, ["chat.purge", chatId, Boolean(body.cancelActive)], async () => {
+      const result = await control.purge(resolved.sessionKey, { cancelActive: Boolean(body.cancelActive) });
+      target.clearRead(chatId);
+      return result;
+    }));
+  });
+  mountRoomRoutes(router, { principal, hub, owned: dependencies.owned, open: dependencies.open, kick: () => dependencies.kick() });
+  identityRoutes(router, dependencies.identity, principal);
   attachmentRoutes(router, dependencies.attachments, principal);
 
   const sockets = new WebSocketServer({ noServer: true, maxPayload: 64 * 1024 });

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { CommunicationCore, type InboxRecord, type OutboxRecord } from "../src/communication/core.js";
+import { CommunicationCore } from "../src/communication/core.js";
 import { DurableStore } from "../src/communication/store.js";
 import { CliWork } from "../src/execution/work.js";
 import { HostWorker } from "../src/execution/host-worker.js";
@@ -38,7 +38,7 @@ class Host implements HostPort {
 const owner = "@owner:example.test", person = personId(owner), ownerMain = legacySession("agent", "owner-main");
 async function harness() {
   const store = new DurableStore(":memory:", "agent"); cleanup.push(() => store.close());
-  const ledger = AgentLedger.open(store); ledger.authoritative = true;
+  const ledger = AgentLedger.open(store);
   const work = new CliWork(store, () => "allow"), core = new CommunicationCore("agent", store, work);
   core.ownerPersonId = person;
   const feishu = new Adapter("feishu"), web = new WebChannel(core, owner);
@@ -54,7 +54,7 @@ const feishuMessage = (id: string, text = `飞书-${id}`): ChannelMessage => ({ 
   reply: { target: "oc_chat", messageId: id, data: {} } });
 const key = (n: number) => `key-${String(n).padStart(16, "0")}`;
 
-describe("web channel ingress and the authoritative ledger queue", () => {
+describe("web channel ingress and the ledger queue", () => {
   it("dispatches web and Feishu owner messages from pending inputs in one owner-main session; web replies are recorded, Feishu replies delivered", async () => {
     const h = await harness();
     const first = h.web.submit({ personId: person, idempotencyKey: key(1), text: "网页消息" });
@@ -67,19 +67,19 @@ describe("web channel ingress and the authoritative ledger queue", () => {
     const events = h.ledger.events(ownerMain);
     const finals = events.filter((event) => event.body.final);
     expect(finals.map((event) => [event.body.text, event.body.channel])).toEqual([["回答-1", "web"], ["回答-2", "feishu"]]);
-    // Web: the transcript is the delivery. The legacy outbox row is settled for compatibility.
+    // Web: the transcript is the delivery, so nothing is queued for it.
     expect(h.ledger.deliveriesFor(finals[0]!.eventId)).toEqual([]);
-    const webOutbox = h.store.entries<OutboxRecord>("communication_outbox").map(({ value }) => value).find((item) => item.route.connectionId === WEB_CONNECTION)!;
-    expect(webOutbox).toMatchObject({ state: "accepted", externalId: finals[0]!.eventId });
-    // Feishu: unchanged delivery through flush, now read from ledger_deliveries.
+    expect(h.core.status().outbox.map((row) => row.connectionId)).toEqual(["feishu"]);
+    // Feishu: delivered through flush from ledger_deliveries.
     expect(h.ledger.deliveriesFor(finals[1]!.eventId)).toMatchObject([{ purpose: "reply", status: "sent", connectionId: "feishu" }]);
     expect(h.feishu.sent.map((item) => item.text)).toEqual(["回答-2"]);
     expect(events.filter((event) => event.kind === "delivery")).toHaveLength(1);
     const conversations = h.store.db.prepare("SELECT channel, peer_id, parent_id, role FROM ledger_conversations c JOIN ledger_session_conversations s USING(conversation_id) ORDER BY channel").all();
     expect(conversations.map((row) => ({ ...row }))).toEqual([{ channel: "feishu", peer_id: "owner-feishu", parent_id: "oc_chat", role: "participant" },
       { channel: "web", peer_id: `person:${person}`, parent_id: "", role: "primary" }]);
-    // Legacy views keep working.
-    expect(h.store.get<InboxRecord>("communication_inbox", h.ledger.claimFor(WEB_CONNECTION, `${person}:${key(1)}`)!.inputId)).toMatchObject({ state: "done", connectionId: "web" });
+    // The received messages are kept with their claims, and the documents of earlier releases are not written.
+    expect(h.core.inputById(h.ledger.claimFor(WEB_CONNECTION, `${person}:${key(1)}`)!.inputId)).toMatchObject({ state: "done", connectionId: "web", source: { text: "网页消息" } });
+    expect(h.store.entries("communication_inbox")).toEqual([]); expect(h.store.entries("communication_outbox")).toEqual([]);
     expect(h.core.isOwnerTask(ownerMain, h.ledger.turns(ownerMain)[0]!.turnId)).toBe(true);
   });
   it("returns the stored event for the same key and body and rejects a different body", async () => {
@@ -98,7 +98,7 @@ describe("web channel ingress and the authoritative ledger queue", () => {
     expect(h.ledger.dueInputs().map((id) => h.ledger.input(id)!.event_id)).toEqual([a.event.eventId, expect.any(String)]);
     expect(h.ledger.events(ownerMain)[1]!.body).toMatchObject({ replyTo: a.event.eventId });
     await h.core.dispatch();
-    expect(h.store.entries<InboxRecord>("communication_inbox").map(({ value }) => value.state)).toEqual(["submitted", "submitted"]);
+    expect(h.core.status().inbox.map((item) => item.state)).toEqual(["submitted", "submitted"]);
     await h.worker.tick();
     expect(h.host.starts[0]!.input).toContain("第一条");
   });
@@ -113,8 +113,8 @@ describe("web channel ingress and the authoritative ledger queue", () => {
     expect(h.host.starts).toHaveLength(0);
     expect(h.ledger.event(sent.event.eventId)!.body).toEqual({ text: "", redacted: true, redactedAt: expect.any(String), channel: "web" });
     expect(h.ledger.input(h.ledger.claimFor(WEB_CONNECTION, `${person}:${key(1)}`)!.inputId)).toMatchObject({ state: "dropped", reason: "redacted" });
-    const legacy = h.store.entries<InboxRecord>("communication_inbox").map(({ value }) => value);
-    expect(legacy.map((item) => [item.state, item.source.text, item.reason ?? null])).toEqual([["done", "", "redacted_before_start"],
+    const stored = h.ledger.recentClaims().map((claim) => h.core.inputById(claim.inputId)!);
+    expect(stored.map((item) => [item.state, item.source.text, item.reason ?? null])).toEqual([["ignored", "", "redacted"],
       ["done", "", "message-redaction_recorded_without_execution"]]);
     // The original send is still recognised after redaction.
     expect(h.web.submit({ personId: person, idempotencyKey: key(1), text: "说错了" })).toMatchObject({ duplicate: true });
@@ -125,7 +125,7 @@ describe("web channel ingress and the authoritative ledger queue", () => {
     const other = h.web.submit({ personId: person, idempotencyKey: key(2), text: "另一条" });
     expect(() => h.web.redact(person, ownerMain, other.event.eventId, key(9))).toThrow("idempotency_key_reused");
   });
-  it("never replays unknown work, reconciles settled inputs and still dispatches receipts that have no pending input", async () => {
+  it("never replays unknown work and drops a pending input whose message is gone", async () => {
     const h = await harness();
     h.web.submit({ personId: person, idempotencyKey: key(1), text: "一" });
     await h.core.dispatch();
@@ -133,33 +133,65 @@ describe("web channel ingress and the authoritative ledger queue", () => {
     h.ledger.turnState(turn, "unknown", { agentId: "agent", error: "host_outcome_unknown" });
     expect(h.ledger.input(h.ledger.inputForTurn(turn)!)).toMatchObject({ state: "unknown" });
     expect(h.ledger.dueInputs()).toEqual([]);
-    // A pending input whose legacy record was already handled is reconciled, not dispatched again.
+    // A pending input without a stored message cannot be dispatched; it must not stall the inputs behind it.
     const second = h.web.submit({ personId: person, idempotencyKey: key(2), text: "二" });
     const secondInput = h.ledger.inputForEvent(second.event.eventId)!.input_id as string;
-    const record = h.store.get<InboxRecord>("communication_inbox", secondInput)!;
-    h.store.set("communication_inbox", secondInput, { ...record, state: "done" });
-    // A receipt from before the cutover has a legacy record only.
-    const legacy = h.core.receive("feishu", feishuMessage("old"));
-    h.store.db.prepare("DELETE FROM ledger_pending_inputs WHERE input_id=?").run(legacy.id);
+    h.store.db.prepare("DELETE FROM ledger_ingress WHERE input_id=?").run(secondInput);
+    h.core.receive("feishu", feishuMessage("after"));
     await h.core.dispatch();
-    expect(h.ledger.input(secondInput)).toMatchObject({ state: "control", reason: "legacy_input_settled" });
-    expect(h.store.get<InboxRecord>("communication_inbox", legacy.id)).toMatchObject({ state: "submitted" });
+    expect(h.ledger.input(secondInput)).toMatchObject({ state: "dropped", reason: "input_missing" });
+    expect(h.core.status().inbox.at(-1)).toMatchObject({ connectionId: "feishu", state: "submitted" });
     expect(h.work.list().map((item) => item.id)).toHaveLength(2);
   });
-  it("never wedges a channel on a failing ledger write: channel receipts degrade to the legacy path, web sends fail", async () => {
+  it("survives a purge or a changed message while an input is being dispatched", async () => {
     const h = await harness();
-    h.store.db.exec("DROP TABLE ledger_events");
-    // A deterministic ledger error must not fail the receipt: Matrix /sync and Feishu redelivery would loop on it forever.
+    // The chat is purged while the dispatcher holds the input (here: inside its control hook).
+    const first = h.core.receive("feishu", feishuMessage("f1"));
+    let purged = false;
+    h.core.control = async (input) => { if (!purged) { purged = true; h.store.transaction(() => h.ledger.purge(input.conversationId)); } return false; };
+    await h.core.dispatch();
+    expect(h.ledger.input(first.id)).toMatchObject({ state: "dropped", reason: "purged" });
+    expect(h.work.list()).toHaveLength(0);
+    // After a crash between creating the task and recording its turn, the retry finds the task even though the
+    // message no longer reads the same (its text was removed since).
+    const second = h.core.receive("feishu", feishuMessage("f2"));
+    const record = h.ledger.atomic.bind(h.ledger);
+    h.ledger.atomic = () => { h.ledger.atomic = record; throw new Error("crash_before_turn_recorded"); };
+    await expect(h.core.dispatch()).rejects.toThrow("crash_before_turn_recorded");
+    expect(h.ledger.input(second.id)).toMatchObject({ state: "starting", turn_id: null });
+    h.ledger.clearText(second.id);
+    h.core.receive("feishu", feishuMessage("f3"));
+    await h.complete(); await h.complete();
+    const [task] = h.work.list(true);
+    expect(h.ledger.input(second.id)).toMatchObject({ state: "started", turn_id: task!.id });
+    expect(h.core.status().error).toBeNull();
+    // Nothing behind it is held up, and each input ran once.
+    expect(h.host.starts.map((start) => start.input.split("\n")[0])).toEqual(["飞书-f2", "飞书-f3"]);
+    expect(h.feishu.sent.map((item) => item.text)).toEqual(["回答-1", "回答-2"]);
+  });
+  it("never wedges a channel on a receipt that cannot be recorded: the channel acknowledges it and keeps it aside, a web send fails", async () => {
+    const h = await harness(), append = h.ledger.append.bind(h.ledger);
+    let failing = true;
+    h.ledger.append = (...args) => { if (failing) throw new Error("ledger_write_refused"); return append(...args); };
+    // A deterministic error must not fail the receipt: a channel cursor or a Feishu redelivery would loop on it forever.
     const record = h.core.receive("feishu", feishuMessage("f1"));
-    expect(h.store.get<InboxRecord>("communication_inbox", record.id)).toMatchObject({ state: "received" });
+    expect(record).toMatchObject({ state: "ignored", reason: "receipt_not_recorded", source: { text: "飞书-f1" } });
     expect(h.ledger.claimFor("feishu", "f1")).toBeUndefined();
-    expect(h.ledger.lastError).not.toBe("");
-    // The receipt has no pending input, so the authoritative dispatcher runs it through its legacy fallback.
-    await h.core.dispatch(); await h.worker.tick(); await h.worker.tick(); await h.core.dispatch(); await h.core.flush();
-    expect(h.host.starts.map((start) => start.input.split("\n")[0])).toEqual(["飞书-f1"]);
-    expect(h.feishu.sent.map((item) => item.text)).toEqual(["回答-1"]);
-    // A web send has no cursor: the error reaches the HTTP client, and nothing is half-recorded.
-    expect(() => h.web.submit({ personId: person, idempotencyKey: key(1), text: "网页" })).toThrow();
-    expect(h.store.entries<InboxRecord>("communication_inbox").filter(({ value }) => value.connectionId === WEB_CONNECTION)).toHaveLength(0);
+    expect(h.ledger.ingressFailures()).toMatchObject([{ connectionId: "feishu", externalId: "f1", error: "ledger_write_refused", source: { text: "飞书-f1" } }]);
+    expect(h.core.status()).toMatchObject({ error: "receipt_not_recorded", receiptFailures: [{ connectionId: "feishu", error: "ledger_write_refused" }] });
+    // Nothing was half-recorded, and nothing runs.
+    expect(h.ledger.counts()).toMatchObject({ events: 0, claims: 0, conversations: 0 });
+    await h.complete();
+    expect(h.host.starts).toHaveLength(0);
+    // A web send has no cursor: the error reaches the HTTP client, which retries, and nothing is kept.
+    expect(() => h.web.submit({ personId: person, idempotencyKey: key(1), text: "网页" })).toThrow("ledger_write_refused");
+    expect(h.ledger.ingressFailures()).toHaveLength(1);
+    // The messages behind it are not held up, and a redelivery of the failed one is recorded and clears the failure.
+    failing = false;
+    h.core.receive("feishu", feishuMessage("f2")); h.core.receive("feishu", feishuMessage("f1"));
+    await h.complete(); await h.complete();
+    expect(h.ledger.ingressFailures()).toEqual([]);
+    expect(h.host.starts.map((start) => start.input.split("\n")[0])).toEqual(["飞书-f2", "飞书-f1"]);
+    expect(h.feishu.sent.map((item) => item.text)).toEqual(["回答-1", "回答-2"]);
   });
 });

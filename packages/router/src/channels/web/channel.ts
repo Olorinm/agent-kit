@@ -1,6 +1,6 @@
 import { bindAccount, type AttachmentReference, type ChannelAdapter, type ChannelContent, type ChannelContext, type ChannelMessage, type MediaContent,
   type RecordedAttachment, type RecordedMedia, type ReplyRoute } from "../api.js";
-import type { CommunicationCore, InboxRecord } from "../../communication/core.js";
+import type { ChannelInput, CommunicationCore } from "../../communication/core.js";
 import { WorkError } from "../../execution/work.js";
 import type { AgentLedger, LedgerEvent } from "../../ledger/ledger.js";
 import type { OwnerAttachments } from "../../ledger/blobs-hub.js";
@@ -8,13 +8,14 @@ import { WEB_CONNECTION, webAccount, webTarget, type WebIngress, type WebSendInp
 
 /**
  * Owner web messages as a channel adapter. A web message enters the same ingress → claim → pending input → turn
- * path as every other channel, in the owner-main session. Its delivery is the ledger event itself, so `send` is
- * never reached for a recorded reply (the core settles web outbox rows when they are recorded).
+ * path as every other channel, in the owner-main session. Its delivery is the ledger event itself, so nothing is
+ * queued for it and `send` is never reached. A receipt that cannot be recorded fails the request, and the client retries.
  */
 export class WebChannel implements ChannelAdapter, WebIngress {
   readonly kind = "web";
   readonly retrySafe = true;
   readonly ledgerDelivery = true;
+  readonly strictReceipt = true;
   readonly capabilities: { receive: string[]; send: string[]; stream: boolean; buttons: boolean; native: string[] };
   /** Agent outbound media (ADR 0005 16.5): stored under the owner's prefix and attached to the content event. */
   readonly recordedMedia: RecordedMedia | undefined;
@@ -36,7 +37,7 @@ export class WebChannel implements ChannelAdapter, WebIngress {
   async start(context: ChannelContext): Promise<void> { bindAccount(context, webAccount(this.ownerId)); this.context = context; }
   async stop(): Promise<void> { this.context = undefined; }
   async send(_route: ReplyRoute, _text: string, sendKey: string) { return { externalId: sendKey }; }
-  /** Never reached for a recorded event (the core settles web rows when they are recorded); present so content is accepted. */
+  /** Never reached (a recorded event has no delivery row); present so content is accepted. */
   async sendContent(_route: ReplyRoute, _content: ChannelContent, sendKey: string) { return { externalId: sendKey }; }
   /** The model reads web attachments from the blob store, like channel media (cap `MAX_MEDIA_BYTES`). */
   async readAttachment(_message: ChannelMessage, attachment: AttachmentReference): Promise<MediaContent> {
@@ -46,14 +47,12 @@ export class WebChannel implements ChannelAdapter, WebIngress {
   }
   private ledger(): AgentLedger {
     if (!this.context) throw new WorkError("web_channel_unavailable", 503);
-    const ledger = this.core.ledger;
-    if (!ledger?.authoritative) throw new WorkError("agent_ledger_unavailable", 503);
-    return ledger;
+    return this.core.ledger;
   }
   private message(personId: string, externalId: string, fields: Partial<ChannelMessage> & Pick<ChannelMessage, "text">): ChannelMessage {
     return { externalId, sender: personId, threadId: webTarget(personId), scope: "direct", reply: { target: webTarget(personId), messageId: externalId, data: {} }, ...fields };
   }
-  private receive(message: ChannelMessage): InboxRecord {
+  private receive(message: ChannelMessage): ChannelInput {
     try { return this.core.receive(WEB_CONNECTION, message); }
     catch (error) {
       // The same key with a different body is a conflict, never a second message.
@@ -75,7 +74,7 @@ export class WebChannel implements ChannelAdapter, WebIngress {
     if (duplicate) {
       // A retry: the uploads are bound by the first send. The same ids reuse its references, so the claim hash compares
       // the request; other ids can only be a conflict.
-      const stored = claimed?.inputId ? this.core.store.get<InboxRecord>("communication_inbox", claimed.inputId)?.source.attachments ?? [] : [];
+      const stored = (claimed?.source as ChannelMessage | null)?.attachments ?? [];
       if (stored.map((item) => item.id).join(",") !== ids.join(",")) throw new WorkError("idempotency_key_reused", 409);
       references = stored;
     } else if (ids.length) {
@@ -85,7 +84,7 @@ export class WebChannel implements ChannelAdapter, WebIngress {
     }
     const message = this.message(input.personId, externalId, { text: input.text, ...(input.replyTo ? { quoted: { messageId: input.replyTo } } : {}),
       ...(references.length ? { attachments: references } : {}) });
-    let record: InboxRecord;
+    let record: ChannelInput;
     try {
       // The body is a pure function of the request, so the claim hash compares request bodies.
       record = this.core.store.transaction(() => {
@@ -105,7 +104,7 @@ export class WebChannel implements ChannelAdapter, WebIngress {
   }
   /**
    * Redact one of the person's own web messages: a `redaction` event through ingress, the target's content removed
-   * from the transcript and the legacy inbox, and its input dropped if no turn has taken it yet. The same key returns
+   * from the transcript and from its stored message, and its input dropped if no turn has taken it yet. The same key returns
    * the stored redaction; the same key for another target is a conflict; another key for a redacted target returns
    * the existing redaction.
    */
@@ -124,12 +123,10 @@ export class WebChannel implements ChannelAdapter, WebIngress {
       this.receive(this.message(personId, externalId, { text: "", event: { type: "message-redaction", data: { redacts: target.idempotencyKey!.slice(WEB_CONNECTION.length + 1) } } }));
       if (duplicate) return;
       const pending = ledger.inputForEvent(eventId), inputId = pending?.input_id as string | undefined;
-      const legacy = inputId ? this.core.store.get<InboxRecord>("communication_inbox", inputId) : undefined;
       dropped = pending?.state === "queued";
       if (dropped) ledger.updateInput(inputId!, "dropped", { reason: "redacted" });
       // The stored hash is kept, so a retry of the original send is still recognised as the same message.
-      if (legacy) this.core.store.set("communication_inbox", inputId!, { ...legacy, source: { ...legacy.source, text: "" },
-        ...(dropped && legacy.state === "received" ? { state: "done", reason: "redacted_before_start" } : {}) } satisfies InboxRecord);
+      if (inputId) ledger.clearText(inputId);
       released = ledger.detachAttachments(eventId);
       ledger.redactBody(eventId);
     });

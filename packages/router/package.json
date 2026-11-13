@@ -1,6 +1,6 @@
 {
   "name": "@agent-router/server",
-  "version": "0.9.0-alpha.1",
+  "version": "0.10.0-alpha.1",
   "private": true,
   "description": "Message router for agents: accounts, channel connections, an owner ledger and task delivery to running agents.",
   "repository": {

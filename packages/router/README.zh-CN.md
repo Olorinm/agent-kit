@@ -59,9 +59,6 @@ npm run agent:service
 | `AGENT_EDGE_IDENTITY_FILE` | 通过 Cloudflare Access 登录所有者；见[账号与 Agent](docs/guides/managed-agents.md)。 |
 | `AGENT_TRUST_PROXY` | 可信代理地址或网段，逗号分隔。未设置时忽略转发头。 |
 | `AGENT_ROUTER_CONNECTIONS_FILE` | 包含 `mailServices` 的 JSON 文件，用于邮件连接；见[渠道连接](docs/guides/connections.zh-CN.md)。 |
-| `AGENT_LEDGER_READ`、`AGENT_LEDGER_SEND` | 设为 `1` 时提供网页历史 API 和事件 socket，并接受所有者的网页消息。`AGENT_LEDGER_READ` 需要同时设置 `AGENT_LEDGER_SEND`。 |
-| `AGENT_LEDGER_CARDS`、`AGENT_LEDGER_CONTROL`、`AGENT_LEDGER_GROUPS`、`AGENT_LEDGER_ATTACHMENTS` | 设为 `1` 时在 Web API 上分别开启卡片回答、取消/补充/重置/清除、群组和附件。每一项都需要 `AGENT_LEDGER_SEND`。 |
-| `AGENT_LEDGER_IDENTITY` | 设为 `1` 时按已关联身份识别所有者，并开启 `/link` 关联。 |
 | `AGENT_BLOB_STORE` | `local`（默认）或 `r2`。 |
 | `AGENT_BLOB_DIR` | 本地 blob 存储目录，默认 `<状态目录>/blobs`。 |
 | `AGENT_R2_BUCKET`、`AGENT_R2_ACCESS_KEY_ID_FILE`、`AGENT_R2_SECRET_ACCESS_KEY_FILE` | `AGENT_BLOB_STORE=r2` 时必填。密钥从文件读取。 |

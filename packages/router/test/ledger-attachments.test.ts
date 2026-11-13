@@ -81,7 +81,7 @@ async function setup(store: "local" | "r2", overrides: Partial<ServiceConfig> = 
   }
   const files: Record<string, Buffer> = {}, adapters = new Map<string, Adapter>(), cores = new Map<string, CommunicationCore>();
   const service = new ManagedService({ serverName: "example.test", publicUrl: "https://example.test/_agent-router/v1",
-    stateDir, ledgerRead: true, ledgerSend: true, ledgerAttachments: true, ...(blobStore ? { blobStore } : {}), ...overrides }, {
+    stateDir, ...(blobStore ? { blobStore } : {}), ...overrides }, {
     authenticate: async (token) => { if (token === "alice") return owner; if (token === "bob") return other; throw new Error("bad_credentials"); },
     configure: async (agent, runtime) => {
       const core = new CommunicationCore(agent.id, runtime.store, runtime.work), adapter = new Adapter(files);
@@ -115,7 +115,7 @@ async function setup(store: "local" | "r2", overrides: Partial<ServiceConfig> = 
   const upload = (bytes: Buffer, headers: Record<string, string> = {}, token = "alice") => http("/web/attachments", { method: "POST", token,
     headers: { "Content-Type": "image/png", "Content-Length": String(bytes.length), ...headers }, body: bytes });
   const agent = await service.create(owner, "helper");
-  const ledger = AgentLedger.attached((await service.runtime(agent.id)).store)!;
+  const ledger = AgentLedger.open((await service.runtime(agent.id)).store);
   return { service, http, upload, agent, ledger, core: cores.get(agent.id)!, adapter: adapters.get(agent.id)!, files, s3, stateDir };
 }
 const objectCount = (t: Awaited<ReturnType<typeof setup>>) => t.s3 ? t.s3.objects.size
@@ -125,7 +125,7 @@ describe.each(["local", "r2"] as const)("attachments over the %s blob store", (k
   it("uploads, dedupes per owner and serves same-origin downloads with Range and safe headers", async () => {
     const t = await setup(kind), png = Buffer.concat([Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]), Buffer.from("pixels")]);
     const me = await t.http("/web/me");
-    expect(me.json.limits).toMatchObject({ attachmentBytes: 25 * 1024 * 1024, attachmentQuotaBytes: 5 * 1024 ** 3, features: { attachments: true } });
+    expect(me.json.limits).toMatchObject({ attachmentBytes: 25 * 1024 * 1024, attachmentQuotaBytes: 5 * 1024 ** 3 });
     const first = await t.upload(png, { "X-File-Name": "UTF-8''%E6%88%AA%E5%9B%BE.png", "X-Sha256": sha(png) });
     expect(first.status).toBe(201);
     expect(first.json).toEqual({ attachmentId: expect.stringMatching(/^at_[0-9A-Z]{26}$/), name: "截图.png", contentType: "image/png", size: png.length,
@@ -249,11 +249,6 @@ describe.each(["local", "r2"] as const)("attachments over the %s blob store", (k
 });
 
 describe("attachments", () => {
-  it("is off without the flag", async () => {
-    const t = await setup("local", { ledgerAttachments: false });
-    expect((await t.http("/web/me")).json.limits.features.attachments).toBe(false);
-    expect((await t.upload(Buffer.from("x"))).json).toEqual({ error: "attachments_disabled" });
-  });
   it("signs R2 requests with SigV4 and sends create-once PUTs with Content-MD5, never the secret", async () => {
     const s3 = await fakeS3(), dir = temp("r2-file-");
     const store = new R2BlobStore({ endpoint: s3.endpoint, bucket: "agent-router-blobs", accessKeyId: "AKIDTEST", secretAccessKey: "s3cr3t-value-never-sent" });

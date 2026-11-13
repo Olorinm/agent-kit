@@ -40,7 +40,7 @@ async function setup(overrides: Partial<ServiceConfig> = {}, existingState?: str
   const hosts = new Map<string, Host>(), extensions = new Map<string, ServiceExtension>();
   const host = (agentId: string) => { let item = hosts.get(agentId); if (!item) { item = new Host(); hosts.set(agentId, item); } return item; };
   const service: ManagedService = new ManagedService({ serverName: "example.test", publicUrl: "https://example.test/_agent-router/v1",
-    stateDir, ledgerRead: true, ledgerSend: true, ledgerGroups: true, ...overrides }, {
+    stateDir, ...overrides }, {
     authenticate: async (token) => { if (token === "alice") return owner; if (token === "bob") return other; throw new Error("bad_credentials"); },
     configure: async (agent, runtime) => {
       const config = channelConfigSchema.parse({ agents: [{ agentId: agent.id, connections: [],
@@ -70,7 +70,7 @@ async function setup(overrides: Partial<ServiceConfig> = {}, existingState?: str
   const events = async (chatId: string) => (await api(`${root}/web/chats/${enc(chatId)}/events?limit=200`)).data.events as any[];
   const rooms = () => service.hubs.hub(owner).rooms;
   return { service, api, agents, host, hosts, port, stateDir, create, send, events, rooms, extension: (id: string) => extensions.get(id)!,
-    ledger: (id: string) => AgentLedger.attached(extensions.get(id)!.communication!.store)! };
+    ledger: (id: string) => AgentLedger.open(extensions.get(id).communication!.store)! };
 }
 type Setup = Awaited<ReturnType<typeof setup>>;
 /** Stop a setup's service and server but keep its state directory (the first cleanup entry). */
@@ -97,7 +97,6 @@ async function connect(t: Setup) {
 describe("native groups (ADR 0005 phase 5)", () => {
   it("creates a group idempotently with membership events, lists it and manages members", async () => {
     const t = await setup(), [helper, writer] = t.agents;
-    expect((await t.api(`${root}/web/me`)).data.limits.features).toMatchObject({ send: true, groups: true });
     const body = { idempotencyKey: key(1), title: "周报小组", agentIds: [helper!.id] };
     const first = await t.create(body);
     expect(first).toMatchObject({ status: 201, data: { chatId: expect.stringMatching(/^room:rm_/), kind: "group", title: "周报小组", agentIds: [helper!.id], readOnly: false,
@@ -177,7 +176,7 @@ describe("native groups (ADR 0005 phase 5)", () => {
   }, 30_000);
 
   it("delivers one agent's rows in order, blocks after a failure and posts a notice after 24 h", async () => {
-    const t = await setup({ ledgerGroups: true }), [helper] = t.agents, chatId = await group(t, [helper!.id]), roomId = chatId.slice(5), rooms = t.rooms();
+    const t = await setup({ }), [helper] = t.agents, chatId = await group(t, [helper!.id]), roomId = chatId.slice(5), rooms = t.rooms();
     await t.service.fanout!.stop();
     const at = Date.now();
     for (const n of [1, 2, 3]) rooms.send(roomId, personId(owner), { idempotencyKey: key(n), text: `第${n}条`, mentions: { agentIds: [helper!.id] } }, at);
@@ -254,21 +253,4 @@ describe("native groups (ADR 0005 phase 5)", () => {
     expect(t.rooms().agentIds(roomId)).toEqual([helper!.id]);
   }, 20_000);
 
-  it("keeps room chats readable with the flag off and refuses commands with 403", async () => {
-    const t = await setup(), chatId = await group(t);
-    await t.send(chatId, { idempotencyKey: key(1), text: "记录" });
-    await stop();
-    const off = await setup({ ledgerGroups: false }, t.stateDir);
-    expect((await off.api(`${root}/web/me`)).data.limits.features.groups).toBe(false);
-    expect((await off.api(`${root}/web/chats`)).data.data[0]).toMatchObject({ chatId, kind: "group", readOnly: true });
-    expect((await off.events(chatId)).map((event) => event.kind)).toContain("message");
-    expect(await off.create({ idempotencyKey: key(2), title: "x", agentIds: [off.agents[0]!.id] })).toEqual({ status: 403, data: { error: "feature_disabled" } });
-    expect(await off.send(chatId, { idempotencyKey: key(3), text: "x" })).toEqual({ status: 403, data: { error: "feature_disabled" } });
-    expect((await off.api(`${root}/web/groups/${chatId.slice(5)}/members/${off.agents[0]!.id}`, "alice", "DELETE")).status).toBe(403);
-    expect(off.service.fanout).toBeUndefined();
-    // Without the flag the room connection is not registered: channel status and dispatch are unchanged.
-    const ids = (off.extension(off.agents[0]!.id).status() as { connections: Array<{ id: string }> }).connections.map((item) => item.id);
-    expect(ids).not.toContain("room");
-    expect(off.extension(off.agents[0]!.id).room).toBeUndefined();
-  }, 20_000);
 });

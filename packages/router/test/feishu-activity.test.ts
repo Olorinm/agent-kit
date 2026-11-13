@@ -3,7 +3,7 @@ import type { LarkChannel } from "@larksuiteoapi/node-sdk";
 import { feishuActivity } from "../src/channels/feishu/index.js";
 import { FEISHU_EMOJIS } from "../src/channels/feishu/index.js";
 import { FeishuChannel } from "../src/channels/feishu/index.js";
-import { CommunicationCore, type OutboxRecord } from "../src/communication/core.js";
+import { CommunicationCore } from "../src/communication/core.js";
 import { DurableStore } from "../src/communication/store.js";
 import { CliWork } from "../src/execution/work.js";
 import type { ChannelContext, ReplyRoute } from "../src/communication/types.js";
@@ -105,14 +105,14 @@ describe("Feishu activity reactions", () => {
       work.update(task.claimId!, "reply", "answer");
       await core.dispatch(); await core.flush();
       expect(f.native.send).toHaveBeenLastCalledWith("group", { text: "answer" }, expect.anything());
-      const stopped = store.entries<OutboxRecord>("communication_outbox").find(r => r.value.activity?.active === false)!;
-      expect(stopped.value.state).toBe("accepted");
+      const stopped = core.ledger.recentDeliveries().find(row => row.activity?.active === false)!;
+      expect(stopped.status).toBe("sent");
       await core.flush(Date.now() + 60_000);
       expect(f.remove).not.toHaveBeenCalled();
       expect(f.reactions.size).toBe(1);
     } finally { await core.stop(); store.close(); }
   });
-  it("recovers an interrupted outbox send and retains the receipt while waiting for user input", async () => {
+  it("recovers an interrupted send and retains the receipt while waiting for user input", async () => {
     const f = fixture(), store = new DurableStore(":memory:", "agent"), work = new CliWork(store, () => "allow");
     const adapter = new FeishuChannel({ appId: "app", appSecret: "fixture" }, f.channel);
     let core = new CommunicationCore("agent", store, work);
@@ -123,14 +123,14 @@ describe("Feishu activity reactions", () => {
         reply: { target: route.target, messageId: route.messageId, data: {} } });
       await core.dispatch(); const task = work.claim("worker")!;
       await core.dispatch(); await core.flush();
-      const pending = store.entries<OutboxRecord>("communication_outbox")[0]!;
-      store.set("communication_outbox", pending.id, { ...pending.value, state: "submitting" });
+      const pending = core.ledger.recentDeliveries()[0]!;
+      core.ledger.deliveryStatus(pending.deliveryId, "sending");
       await core.stop();
       core = new CommunicationCore("agent", store, work);
       core.register({ id: "feishu", ownerAddresses: ["owner"] }, new FeishuChannel({ appId: "app", appSecret: "fixture" }, f.channel));
       await core.start(); await core.flush();
       expect(f.add).toHaveBeenCalledTimes(1);
-      expect(store.get<OutboxRecord>("communication_outbox", pending.id)?.state).toBe("accepted");
+      expect(core.ledger.delivery(pending.deliveryId)?.status).toBe("sent");
       work.update(task.claimId!, "need-input", "Which option?");
       await core.dispatch(); await core.flush();
       expect(f.reactions.size).toBe(1);

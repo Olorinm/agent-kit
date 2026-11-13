@@ -13,6 +13,8 @@ import { ROOM_CONNECTION } from "../../ledger/surfaces.js";
 export class RoomChannel implements ChannelAdapter, RoomDelivery {
   readonly kind = "room";
   readonly retrySafe = true;
+  /** The fan-out worker retries a room message that could not be recorded. */
+  readonly strictReceipt = true;
   readonly capabilities = { receive: ["text", "quote"], send: ["text", "html"], stream: false, buttons: false, native: [] };
   private context: ChannelContext | undefined;
   constructor(readonly core: CommunicationCore, readonly agentId: string, readonly ownerId: string,
@@ -35,7 +37,7 @@ export class RoomChannel implements ChannelAdapter, RoomDelivery {
     return this.rooms()?.context(roomId, this.agentId, seq);
   }
   private post(route: ReplyRoute, content: { text: string; html?: string | undefined }, sendKey: string) {
-    const ledger = this.core.ledger, delivery = ledger?.delivery(sendKey), event = delivery?.eventId ? ledger!.event(delivery.eventId) : undefined;
+    const ledger = this.core.ledger, delivery = ledger.delivery(sendKey), event = delivery?.eventId ? ledger.event(delivery.eventId) : undefined;
     const roomId = route.data.roomId ?? route.target;
     if (!this.hub().room(roomId)) throw new ChannelSendError("failed", "room_not_found");
     const eventId = this.hub().reply(this.agentId, roomId, sendKey, { kind: event?.kind === "notice" ? "notice" : "message", text: content.text, html: content.html,

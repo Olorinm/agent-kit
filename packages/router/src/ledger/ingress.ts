@@ -1,22 +1,21 @@
-import type { InboxRecord, OutboxRecord } from "../communication/core.js";
-import { conversationKey, type AgentLedger, type DeliveryPurpose, type DeliveryStatus, type EventInput, type SessionKind, type TurnState } from "./ledger.js";
+import type { ChannelInput } from "../communication/core.js";
+import { conversationKey, type AgentLedger, type EventInput, type SessionKind } from "./ledger.js";
 
 /** What the channel core knows about a connection, without exposing provider secrets to the ledger. */
-export interface ShadowContext {
+export interface ChannelFacts {
   agentId: string;
   ownerPersonId?: string | undefined;
   channel(connectionId: string): string;
   account(connectionId: string): string;
   person?(connectionId: string, sender: string): string | undefined;
 }
-const legacyStatus: Record<OutboxRecord["state"], DeliveryStatus> = { queued: "queued", submitting: "sending", accepted: "sent", failed: "rejected", uncertain: "unknown" };
 const lifecycle = new Set(["reaction", "message-edit", "message-redaction"]);
 
-function sender(ctx: ShadowContext, record: InboxRecord, owner: boolean): Pick<EventInput, "senderType" | "senderId"> {
+function sender(ctx: ChannelFacts, record: ChannelInput, owner: boolean): Pick<EventInput, "senderType" | "senderId"> {
   const person = owner ? ctx.ownerPersonId ?? ctx.person?.(record.connectionId, record.source.sender) : ctx.person?.(record.connectionId, record.source.sender);
   return person ? { senderType: "person", senderId: person } : { senderType: "external", senderId: record.source.sender };
 }
-function sessionOf(record: InboxRecord, channel: string, owner: boolean): { kind: SessionKind; label: string; roomId?: string } {
+function sessionOf(record: ChannelInput, channel: string, owner: boolean): { kind: SessionKind; label: string; roomId?: string } {
   const source = record.source;
   if (source.scope === "direct") return owner ? { kind: "owner_main", label: "owner-main" } : { kind: "peer", label: `${channel}:direct:${source.sender}` };
   // Hub rooms (phase 5): the agent's side of a native group.
@@ -24,7 +23,7 @@ function sessionOf(record: InboxRecord, channel: string, owner: boolean): { kind
   return { kind: "group", label: `${channel}:group:${source.threadId}` };
 }
 /** Section 5 keying, derived generically from the fields every adapter already emits. */
-function conversationOf(ctx: ShadowContext, record: InboxRecord, personId: string | undefined, at: number) {
+function conversationOf(ctx: ChannelFacts, record: ChannelInput, personId: string | undefined, at: number) {
   const source = record.source, direct = source.scope === "direct";
   // Web DMs (section 5): one conversation per person, independent of the request that carried the message.
   if (ctx.channel(record.connectionId) === "web") return { connectionId: record.connectionId, channel: "web", accountId: ctx.account(record.connectionId),
@@ -43,11 +42,15 @@ function referenced(ledger: AgentLedger, connectionId: string, data: Record<stri
   return { target: external ? ledger.platformEvent(connectionId, external) : undefined, external };
 }
 
-/** Ingress (ADR 6.1): claim, conversation and session, transcript event, platform index and pending input. */
-export function shadowReceive(ledger: AgentLedger, ctx: ShadowContext, record: InboxRecord,
+/**
+ * Ingress (ADR 6.1): the claim with the received message, conversation and session, transcript event, platform index
+ * and pending input. Message state changes (reactions, edits, redactions) are recorded and never become inputs.
+ */
+export function recordReceipt(ledger: AgentLedger, ctx: ChannelFacts, record: ChannelInput,
   facts: { owner: boolean; allowed: boolean; oversized: boolean; noticeId?: string | undefined }, at = Date.now()): void {
   const { source, connectionId } = record;
-  const { duplicate } = ledger.claim({ connectionId, externalId: source.externalId, inputId: record.id, hash: record.hash, at });
+  const { duplicate } = ledger.claim({ connectionId, externalId: source.externalId, inputId: record.id, hash: record.hash, at,
+    source, sessionKey: record.conversationId, forkFrom: record.forkFromContextId });
   if (duplicate) return;
   // Unknown senders are never written to a transcript, and do not create conversations either.
   if (!facts.allowed) { ledger.settleClaim(connectionId, source.externalId, "ignored", { reason: "sender_not_allowed" }); return; }
@@ -65,7 +68,7 @@ export function shadowReceive(ledger: AgentLedger, ctx: ShadowContext, record: I
       const notice = ledger.append(record.conversationId, { kind: "notice", role: "system", senderType: "system", senderId: "router", conversationId,
         idempotencyKey: `notice:${facts.noticeId}`, createdAt: at, body: { text: "这条消息超过当前 24 KB 的文字输入上限，请缩短内容后再发送。", level: "warning", channel } }).event;
       if (channel !== "web") ledger.createDelivery({ deliveryId: facts.noticeId, eventId: notice.eventId, conversationId, connectionId,
-        route: { ...record.replyRoute, channel }, purpose: "notice", at });
+        route: { ...record.replyRoute, channel }, purpose: "notice", text: String(notice.body.text), at });
     }
     return;
   }
@@ -106,53 +109,27 @@ export function shadowReceive(ledger: AgentLedger, ctx: ShadowContext, record: I
     body: { ...input.body, channel, ...(attachments.length ? { attachments } : {}) } });
   if (!web) ledger.attachEvent(attachments.map((item) => item.attachmentId), event.eventId);
   ledger.indexPlatform(connectionId, [source.externalId], event.eventId);
-  if (!type || !lifecycle.has(type)) ledger.queueInput(record.id, record.conversationId, event.eventId, at);
-  ledger.settleClaim(connectionId, source.externalId, "accepted", { eventId: event.eventId, conversationId });
-}
-
-/** Dispatch (ADR 6.2): the pending input became a turn. A resumed task reuses its turn. */
-export function shadowStart(ledger: AgentLedger, ctx: ShadowContext, record: InboxRecord, taskId: string, owner: boolean, at = Date.now()): void {
-  const claim = ledger.claimByInput(record.id), pending = ledger.input(record.id);
-  if (!claim?.eventId || !pending) return;
-  ledger.updateInput(record.id, "started", { turnId: taskId }, at);
-  ledger.annotate(claim.eventId, { turnId: taskId });
-  const admission = record.source.scope === "group" ? "group" : owner ? "owner" : "peer";
-  const turn = ledger.ensureTurn({ turnId: taskId, sessionKey: record.conversationId, admission, originConversationId: claim.conversationId,
-    originEventId: claim.eventId, replyRoute: record.replyRoute, at });
-  ledger.append(record.conversationId, { kind: "turn", role: "system", senderType: "system", senderId: "router", turnId: taskId,
-    idempotencyKey: `turn:${taskId}:input:${record.id}`, createdAt: at,
-    body: { agentId: ctx.agentId, state: turn.state, inputEventIds: ledger.turnInputs(taskId) } });
-}
-export function shadowControl(ledger: AgentLedger, record: InboxRecord, reason: string): void {
-  if (ledger.input(record.id)) ledger.updateInput(record.id, "control", { reason });
-}
-export function shadowTurn(ledger: AgentLedger, agentId: string, taskId: string, state: TurnState, error?: string): void {
-  ledger.turnState(taskId, state, { agentId, ...(error ? { error } : {}) });
+  const state = type && lifecycle.has(type);
+  if (!state) ledger.queueInput(record.id, record.conversationId, event.eventId, at);
+  ledger.settleClaim(connectionId, source.externalId, "accepted", { eventId: event.eventId, conversationId,
+    ...(state ? { reason: type === "message-edit" ? "edit_recorded_without_reexecution" : `${type}_recorded_without_execution` } : {}) });
 }
 
 /**
- * Outbound (ADR 6.3/6.4): record first, then the delivery. `event` is null for activity reactions and for
- * deliveries whose event was written elsewhere (`eventId`). `delivery` false records the event only (a notice whose
- * channel delivery was not requested, ADR 16.6).
+ * Dispatch (ADR 6.2): the pending input became a turn. A resumed task reuses its turn. The input always leaves the
+ * dispatch queue here, also when its event is gone (the chat was purged while the task was being created): the task
+ * exists, so its turn is recorded without an origin event.
  */
-export function shadowOutbox(ledger: AgentLedger, ctx: ShadowContext, input: InboxRecord, outbox: OutboxRecord, purpose: DeliveryPurpose,
-  event: (Omit<EventInput, "role" | "senderType" | "senderId"> & Partial<Pick<EventInput, "role" | "senderType" | "senderId">>) | null, eventId?: string, at = Date.now(),
-  delivery = true): string | undefined {
-  const claim = ledger.claimByInput(input.id);
-  if (!claim?.conversationId || !ledger.session(input.conversationId) || ledger.delivery(outbox.id)) return eventId;
-  const channel = ctx.channel(input.connectionId);
-  let id = eventId ?? null;
-  if (event) {
-    const turnId = "turnId" in event ? event.turnId ?? null : outbox.taskId ?? outbox.originTaskId ?? null;
-    id = ledger.append(ledger.turn(turnId ?? "")?.sessionKey ?? input.conversationId, { role: "assistant", senderType: "agent", senderId: ctx.agentId,
-      conversationId: claim.conversationId, createdAt: at, ...event, turnId, body: { ...event.body, channel } }).event.eventId;
-  }
-  // Web needs no delivery row: the transcript is its delivery (ADR 2.4).
-  if (channel !== "web" && delivery) ledger.createDelivery({ deliveryId: outbox.id, eventId: id, conversationId: claim.conversationId, connectionId: input.connectionId,
-    route: { ...outbox.route, channel }, purpose, ...(outbox.content ? { content: outbox.content } : {}), at });
-  return id ?? undefined;
-}
-export function shadowDelivery(ledger: AgentLedger, outbox: Pick<OutboxRecord, "id" | "state" | "attempts" | "nextAt" | "externalId" | "error">, suppressed = false): void {
-  ledger.deliveryStatus(outbox.id, suppressed ? "suppressed" : legacyStatus[outbox.state], { attempts: outbox.attempts, nextAt: outbox.nextAt,
-    ...(outbox.externalId ? { platformMessageId: outbox.externalId } : {}), ...(outbox.error ? { error: outbox.error } : {}) });
+export function recordStart(ledger: AgentLedger, ctx: ChannelFacts, record: ChannelInput, taskId: string, owner: boolean, at = Date.now()): void {
+  const claim = ledger.claimByInput(record.id), pending = ledger.input(record.id);
+  if (!pending) return;
+  ledger.updateInput(record.id, "started", { turnId: taskId }, at);
+  if (claim?.eventId) ledger.annotate(claim.eventId, { turnId: taskId });
+  if (!ledger.session(record.conversationId)) return;
+  const admission = record.source.scope === "group" ? "group" : owner ? "owner" : "peer";
+  const turn = ledger.ensureTurn({ turnId: taskId, sessionKey: record.conversationId, admission, originConversationId: claim?.conversationId ?? null,
+    originEventId: claim?.eventId ?? null, replyRoute: record.replyRoute, at });
+  ledger.append(record.conversationId, { kind: "turn", role: "system", senderType: "system", senderId: "router", turnId: taskId,
+    idempotencyKey: `turn:${taskId}:input:${record.id}`, createdAt: at,
+    body: { agentId: ctx.agentId, state: turn.state, inputEventIds: ledger.turnInputs(taskId) } });
 }

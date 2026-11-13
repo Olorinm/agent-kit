@@ -1,5 +1,5 @@
 import { ChannelHttpError } from "../http.js";
-import type { InboxRecord, OutboxRecord } from "../communication/core.js";
+import type { ChannelMessage } from "../communication/types.js";
 import type { DurableStore } from "../communication/store.js";
 import type { HostPort, HostRun } from "./host.js";
 import type { ExecutionSession, RunBinding } from "./host-worker.js";
@@ -41,37 +41,30 @@ export interface CommunicationTask {
  */
 export class RunObservation {
   constructor(readonly store: DurableStore, readonly work: CliWork, readonly host: HostPort) {}
+  /** Channel turns, newest first. Each is reported by its first received message, also when later messages resumed it. */
   tasks(filter: TaskFilter = {}): { data: CommunicationTask[]; next: string | null } {
-    const seen = new Set<string>();
-    // Preserve the first receipt as the task's immutable origin, including resumed revisions.
-    let inputs = this.store.entries<InboxRecord>("communication_inbox").map(({ value }) => value)
-      .filter((input) => { if (!input.taskId || seen.has(input.taskId)) return false; seen.add(input.taskId); return true; })
-      .reverse().filter((input) => (!filter.connectionId || input.connectionId === filter.connectionId)
-        && (!filter.target || input.replyRoute.target === filter.target)
-        && (!filter.conversationId || input.conversationId === filter.conversationId));
-    if (filter.before) {
-      const index = inputs.findIndex((input) => input.taskId === filter.before);
-      if (index < 0) throw new WorkError("task_cursor_not_found", 404);
-      inputs = inputs.slice(index + 1);
-    }
-    const limit = filter.limit ?? 50;
+    const ledger = AgentLedger.open(this.store), limit = filter.limit ?? 50;
+    const origins = ledger.turnOrigins({ connectionId: filter.connectionId, sessionKey: filter.conversationId, target: filter.target, before: filter.before, limit: limit + 1 });
+    if (!origins) throw new WorkError("task_cursor_not_found", 404);
     const bindings = this.store.entries<RunBinding>("communication_runs").map(({ value }) => value);
     const questions = this.store.entries<{ taskId: string; noticeId: string }>("communication_questions").map(({ value }) => value);
-    const outbox = this.store.entries<OutboxRecord>("communication_outbox").map(({ value }) => value);
-    const data = inputs.slice(0, limit).map((input): CommunicationTask => {
-      const task = this.work.inspect(input.taskId!);
-      return { id: input.taskId!, conversationId: input.conversationId, receivedAt: input.receivedAt,
-        source: { connectionId: input.connectionId, messageId: input.source.externalId, target: input.replyRoute.target,
-          sender: input.source.sender, scope: input.source.scope }, status: task.status, cancelRequested: task.cancelRequested,
-        runs: bindings.filter((binding) => binding.taskId === input.taskId).map((binding) => this.reference(binding)),
-        replyMessageIds: [...new Set([
-          ...(this.store.get<string[]>("communication_progress_messages", input.taskId!) ?? []),
-          ...outbox.filter((item) => item.taskId === input.taskId && !item.activity && item.externalId).flatMap((item) => item.externalId!.split(",")),
-        ])],
-        interactionMessageIds: outbox.filter((item) => item.externalId && questions.some((q) => q.taskId === input.taskId && q.noticeId === item.id))
-          .flatMap((item) => item.externalId!.split(",")) };
+    const ids = (value: string | null | undefined) => value ? value.split(",") : [];
+    const data = origins.slice(0, limit).flatMap(({ turnId, claim }): CommunicationTask[] => {
+      const source = claim.source as ChannelMessage | null; if (!source) return [];
+      const task = this.work.inspect(turnId), sent = ledger.turnDeliveries(turnId);
+      // On a connection where the event is the delivery (web), a reply or notice without a delivery is named by its event.
+      const delivered = new Set(sent.map((item) => item.eventId));
+      const recorded = ledger.turnEvents(turnId).filter((event) => !delivered.has(event.eventId)).filter((event) => event.role !== "user" &&
+        (event.kind === "message" && event.body.final === true || event.kind === "notice" && Boolean(event.idempotencyKey?.startsWith("notice:")))).map((event) => event.eventId);
+      return [{ id: turnId, conversationId: claim.sessionKey ?? "", receivedAt: new Date(claim.receivedAt).toISOString(),
+        source: { connectionId: claim.connectionId, messageId: source.externalId, target: source.reply.target, sender: source.sender, scope: source.scope },
+        status: task.status, cancelRequested: task.cancelRequested,
+        runs: bindings.filter((binding) => binding.taskId === turnId).map((binding) => this.reference(binding)),
+        replyMessageIds: [...new Set([...(this.store.get<string[]>("communication_progress_messages", turnId) ?? []),
+          ...sent.flatMap((item) => ids(item.platformMessageId)), ...recorded])],
+        interactionMessageIds: questions.filter((question) => question.taskId === turnId).flatMap((question) => ids(ledger.delivery(question.noticeId)?.platformMessageId)) }];
     });
-    return { data, next: inputs.length > limit ? data.at(-1)!.id : null };
+    return { data, next: origins.length > limit ? origins[limit - 1]!.turnId : null };
   }
   private binding(claimId: string): RunBinding {
     const binding = this.store.get<RunBinding>("communication_runs", claimId);
@@ -133,10 +126,8 @@ export class RunObservation {
     await this.request(() => this.host.resolve(run.id, callId, result));
   }
   async cancel(taskId: string) {
-    // Turns of every admission (channel, work, schedule) are in the ledger (ADR 16.2); the inbox scan is the legacy scope.
-    const ledger = AgentLedger.attached(this.store);
-    if (!ledger?.turn(taskId) && !this.store.entries<InboxRecord>("communication_inbox").some(({ value }) => value.taskId === taskId))
-      throw new WorkError("task_not_found", 404);
+    // Turns of every admission (channel, work, schedule) are in the ledger (ADR 16.2).
+    if (!AgentLedger.open(this.store).turn(taskId)) throw new WorkError("task_not_found", 404);
     await this.work.cancel(taskId);
   }
 }

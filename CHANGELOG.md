@@ -5,6 +5,36 @@ tag publishes a GitHub Release whose notes are this file's section for that vers
 section in the version-bump commit before tagging. Changes up to the versions listed under
 0.8.0-alpha.1 are in each package's own `CHANGELOG.md`.
 
+## [0.10.0-alpha.1] - 2026-11-13
+
+- **Router:** the owner ledger is the only record of channel messages. The inbox and outbox
+  documents (`communication_inbox`, `communication_outbox`) that every message was also written to,
+  and the code that kept the two in step, are gone.
+  - A received message is kept on its ledger claim; dispatch reads only pending inputs. What is
+    sent (text, native content, the turn it belongs to) is kept on its delivery row, which is the
+    send queue. Owner notifications and pairing replies are delivery rows as well.
+  - A message that cannot be recorded no longer falls back to a second record. A channel still
+    acknowledges it, so its cursor and the messages behind it are not held up, and the message is
+    kept with the error in `ledger_ingress_failures` and listed by the channel status as
+    `receiptFailures`; a redelivery is tried again. A web send or a group message fails instead and
+    is retried by its caller.
+  - The ledger switches are removed: the web API, card answers, cancel/steer/reset/purge, groups,
+    identities with `/link` pairing, and attachments are always on. `GET /web/me` no longer has
+    `limits.features`; a client that waited for a feature to be advertised must stop checking.
+  - An agent whose ledger cannot be opened or migrated does not start.
+  - Operators: no step is required. On first start each agent's store is migrated (ledger schema 5):
+    stored messages and queued sends are moved onto their ledger rows, then the old documents are
+    deleted. A stored message that never had a ledger claim is not kept. `AGENT_LEDGER_READ`,
+    `AGENT_LEDGER_SEND`, `AGENT_LEDGER_CARDS`, `AGENT_LEDGER_CONTROL`, `AGENT_LEDGER_GROUPS`,
+    `AGENT_LEDGER_IDENTITY` and `AGENT_LEDGER_ATTACHMENTS` are ignored and can be deleted.
+  - Embedding API: `ServiceConfig` has no `ledgerRead`, `ledgerSend`, `ledgerCards`, `ledgerControl`,
+    `ledgerGroups`, `ledgerIdentity` or `ledgerAttachments`. `ManagedService.web`, `.identity`,
+    `.attachments` and `.fanout` are always present, and `createRouter(...).upgrade` always handles
+    the event socket. `CommunicationCore.input(taskId)` returns a `ChannelInput` (the same fields as
+    before, read from the ledger); the `InboxRecord` and `OutboxRecord` types are removed, and
+    `AgentLedger.attached` is replaced by `AgentLedger.open`. The channel status keeps `inbox` and
+    `outbox`; `outbox` no longer lists replies to the web connection, whose event is its delivery.
+
 ## [0.9.0-alpha.1] - 2026-11-12
 
 - **Router:** the service (`ManagedService`, `createManagedApp`) lives in `src/service/managed.ts`,

@@ -32,15 +32,12 @@ const disposition = (type: string, name: string) =>
 
 /**
  * ADR 0005 16.5 upload and download routes, mounted on the authenticated web router (`/_agent-router/v1/web`).
- * `attachments` is undefined while the `attachments` feature is off; the routes then answer 404 `attachments_disabled`.
  */
-export function attachmentRoutes(router: express.Router, attachments: OwnerAttachments | undefined,
+export function attachmentRoutes(router: express.Router, store: OwnerAttachments,
   principal: (res: express.Response) => { ownerId: string; personId: string }): void {
-  const enabled = (res: express.Response) => { if (!attachments) { res.set("Connection", "close"); throw new WorkError("attachments_disabled", 404); } return attachments; };
   const uploads = rateLimit({ windowMs: 60_000, limit: ATTACHMENT_LIMITS.uploadsPerMinute, standardHeaders: "draft-8", legacyHeaders: false,
     keyGenerator: (_req, res) => principal(res).personId, message: { error: "rate_limit_exceeded" } });
   router.post("/attachments", uploads, async (req, res) => {
-    const store = enabled(res);
     // Early rejections close the connection, so an unread body never reaches the next request.
     const reject = (code: string, status: number) => { res.set("Connection", "close"); req.resume(); return new WorkError(code, status); };
     const length = req.headers["content-length"];
@@ -60,7 +57,7 @@ export function attachmentRoutes(router: express.Router, attachments: OwnerAttac
     } catch (error) { if (!req.readableEnded) { res.set("Connection", "close"); req.resume(); } throw error; }
   });
   router.get("/attachments/:attachmentId", async (req, res) => {
-    const store = enabled(res), owner = principal(res);
+    const owner = principal(res);
     const meta = await store.resolve(owner, req.params.attachmentId!);
     let range: BlobRange | undefined;
     try { range = req.headers.range ? parseRange(req.headers.range, meta.size) : undefined; }

@@ -152,11 +152,11 @@ export function createBlobStore(config: BlobStoreConfig | undefined, stateDir: s
   return new R2BlobStore({ endpoint, bucket: config.bucket, accessKeyId: secretFile(config.accessKeyIdFile), secretAccessKey: secretFile(config.secretAccessKeyFile) });
 }
 /**
- * Environment (ADR 16.5): `AGENT_LEDGER_ATTACHMENTS=1`, `AGENT_BLOB_STORE=local|r2`, `AGENT_BLOB_DIR`,
+ * Environment (ADR 16.5): `AGENT_BLOB_STORE=local|r2`, `AGENT_BLOB_DIR`,
  * `AGENT_R2_ENDPOINT` or `AGENT_R2_ACCOUNT_ID`, `AGENT_R2_BUCKET`, `AGENT_R2_ACCESS_KEY_ID_FILE`,
  * `AGENT_R2_SECRET_ACCESS_KEY_FILE`, `AGENT_ATTACHMENT_QUOTA_BYTES`.
  */
-export function blobConfigFromEnv(env: NodeJS.ProcessEnv): { ledgerAttachments?: true; blobStore?: BlobStoreConfig; attachmentQuotaBytes?: number } {
+export function blobConfigFromEnv(env: NodeJS.ProcessEnv): { blobStore?: BlobStoreConfig; attachmentQuotaBytes?: number } {
   const required = (key: string) => { const value = env[key]; if (!value) throw new Error(`${key}_required`); return value; };
   const kind = env.AGENT_BLOB_STORE ?? "local";
   if (kind !== "local" && kind !== "r2") throw new Error("invalid_AGENT_BLOB_STORE");
@@ -166,6 +166,5 @@ export function blobConfigFromEnv(env: NodeJS.ProcessEnv): { ledgerAttachments?:
     : env.AGENT_BLOB_DIR ? { kind: "local", dir: env.AGENT_BLOB_DIR } : undefined;
   const quota = env.AGENT_ATTACHMENT_QUOTA_BYTES ? Number(env.AGENT_ATTACHMENT_QUOTA_BYTES) : undefined;
   if (quota !== undefined && !(Number.isSafeInteger(quota) && quota > 0)) throw new Error("invalid_AGENT_ATTACHMENT_QUOTA_BYTES");
-  return { ...(["1", "true"].includes(env.AGENT_LEDGER_ATTACHMENTS ?? "") ? { ledgerAttachments: true as const } : {}),
-    ...(blobStore ? { blobStore } : {}), ...(quota ? { attachmentQuotaBytes: quota } : {}) };
+  return { ...(blobStore ? { blobStore } : {}), ...(quota ? { attachmentQuotaBytes: quota } : {}) };
 }

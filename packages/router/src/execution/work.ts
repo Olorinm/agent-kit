@@ -32,6 +32,11 @@ export class CliWork implements ExecutionBackend {
   async send(request: SendMessageRequest, source?: ExecutionSource): Promise<Task> {
     return this.submit(request, source);
   }
+  /** The task a message id already created, whatever the message says now. */
+  taskForMessage(messageId: string): Task | undefined {
+    const prior = this.store.get<{ id: string }>("cli_message_ids", messageId);
+    return prior ? this.load(prior.id).task : undefined;
+  }
   /** Synchronous embedding hook: attach trusted task context in the same transaction as admission. */
   submit(request: SendMessageRequest, source?: ExecutionSource, admitted?: (task: Task) => void): Task {
     if (!source || !request.message) throw new WorkError("work_source_required");

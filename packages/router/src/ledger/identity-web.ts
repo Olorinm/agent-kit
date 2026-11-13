@@ -8,7 +8,7 @@ const INSTRUCTIONS = (code: string) => `在要关联的渠道里私聊你的任�
 const id = z.string().regex(/^[A-Za-z0-9_-]{1,64}$/);
 
 /**
- * Identity page API (ADR 0005 18.1, 18.4, 18.5), mounted under `/_agent-router/v1/web` with `features.identity`:
+ * Identity page API (ADR 0005 18.1, 18.4, 18.5), mounted under `/_agent-router/v1/web`:
  * - `GET /identities` → `{ data: IdentityView[] }`
  * - `DELETE /identities/:identityId` → 204; 409 `identity_from_config` | `identity_in_use`; 404 `identity_not_found`
  * - `POST /identities/pairing-codes` `{}` → 201 `{ id, code, expiresAt, instructions }`; 429 `pairing_codes_pending_limit`

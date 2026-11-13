@@ -59,9 +59,6 @@ The service listens on `127.0.0.1:8790` and stores its state under `state/agent-
 | `AGENT_EDGE_IDENTITY_FILE` | Owner sign-in through Cloudflare Access; see [Accounts and agents](docs/guides/managed-agents.md). |
 | `AGENT_TRUST_PROXY` | Comma-separated trusted proxy addresses or ranges. Forwarded headers are ignored without it. |
 | `AGENT_ROUTER_CONNECTIONS_FILE` | JSON file with `mailServices` for email connections; see [Connections](docs/guides/connections.md). |
-| `AGENT_LEDGER_READ`, `AGENT_LEDGER_SEND` | Set to `1` to serve the web history API and event socket, and to accept owner web messages. `AGENT_LEDGER_READ` requires `AGENT_LEDGER_SEND`. |
-| `AGENT_LEDGER_CARDS`, `AGENT_LEDGER_CONTROL`, `AGENT_LEDGER_GROUPS`, `AGENT_LEDGER_ATTACHMENTS` | Set to `1` for card answers, cancel/steer/reset/purge, groups, and attachments on the web API. Each needs `AGENT_LEDGER_SEND`. |
-| `AGENT_LEDGER_IDENTITY` | Set to `1` for owner resolution by linked identity and `/link` pairing. |
 | `AGENT_BLOB_STORE` | `local` (default) or `r2`. |
 | `AGENT_BLOB_DIR` | Directory of the local blob store. Default `<state>/blobs`. |
 | `AGENT_R2_BUCKET`, `AGENT_R2_ACCESS_KEY_ID_FILE`, `AGENT_R2_SECRET_ACCESS_KEY_FILE` | Required with `AGENT_BLOB_STORE=r2`. The keys are read from files. |

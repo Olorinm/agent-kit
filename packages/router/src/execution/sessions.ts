@@ -1,7 +1,7 @@
 import { SendMessageRequest } from "@a2a-js/sdk";
 import { z } from "zod";
 import { setTimeout as sleep } from "node:timers/promises";
-import type { CommunicationCore, InboxRecord } from "../communication/core.js";
+import type { ChannelInput, CommunicationCore } from "../communication/core.js";
 import type { DurableStore } from "../communication/store.js";
 import { ChannelHttpError } from "../http.js";
 import type { HostAdmission, HostPort, HostRun, HostStartInput, NativeSessionInput } from "./host.js";
@@ -78,11 +78,10 @@ export class WorkSessions {
       runs: this.store.entries<RunBinding>("communication_runs").map(({ value }) => value)
         .filter(run => run.contextId === sessionId).map(run => ({ taskId: run.taskId, runId: run.runId ?? null, phase: run.phase, error: run.error ?? null })) };
   }
-  private ownerInput(sessionId: string): InboxRecord | undefined { return this.ownerInputs(sessionId)[0]; }
-  /** The session's owner inputs, newest first. */
-  private ownerInputs(sessionId: string): InboxRecord[] {
-    return this.store.entries<InboxRecord>("communication_inbox").map(({ value }) => value).reverse()
-      .filter(input => input.taskId && input.conversationId === sessionId && this.communication.isOwnerInput(input));
+  private ownerInput(sessionId: string): ChannelInput | undefined { return this.ownerInputs(sessionId)[0]; }
+  /** The session's owner messages that became turns, newest first. */
+  private ownerInputs(sessionId: string): ChannelInput[] {
+    return this.communication.sessionInputs(sessionId).filter(input => this.communication.isOwnerInput(input));
   }
   validateTarget(sessionId: string) {
     this.getSession(sessionId);
@@ -116,8 +115,7 @@ export class WorkSessions {
     if (Buffer.byteLength(input.input) > 24_000) throw new WorkError("work_input_too_large", 413);
     const sessionId = input.sessionId ?? `w-${digest(key(this.agentId, input.eventId)).slice(0, 40)}`;
     // A ledger session that was reset (ADR 0005 16.3) runs new work in its current window's execution context.
-    const ledger = AgentLedger.attached(this.store);
-    const contextId = ledger?.authoritative && ledger.session(sessionId) ? ledger.contextFor(sessionId) : sessionId;
+    const contextId = AgentLedger.open(this.store).contextFor(sessionId);
     // Existing owner chats retain their native catalog, but this work has no channel reply route.
     // The execution handler denies channel tools without a separately admitted channel message.
     const priorBinding = this.store.get<ExecutionSession>("execution_sessions", contextId);
@@ -140,14 +138,14 @@ export class WorkSessions {
         ...(input.settings ? { settings: input.settings } : {}), ...(input.mode ? { mode: input.mode } : {}),
       } satisfies HostStartInput);
       this.store.set("work_session_events", input.eventId, { eventId: input.eventId, sessionId, taskId: task.id, hash } satisfies WorkEvent);
-      this.shadowSubmit(input, sessionId, task.id);
+      this.record(input, sessionId, task.id);
     });
     return this.get(input.eventId);
   }
-  /** Shadow ledger (ADR 0005 6.7): the submitted input and its turn, in the target or a fresh work session. */
-  private shadowSubmit(input: WorkSessionSubmission, sessionId: string, taskId: string) {
-    const ledger = AgentLedger.attached(this.store); if (!ledger) return;
-    ledger.shadow(() => {
+  /** ADR 0005 6.7: the submitted input and its turn, in the target or a fresh work session, with the admission. */
+  private record(input: WorkSessionSubmission, sessionId: string, taskId: string) {
+    const ledger = AgentLedger.open(this.store);
+    ledger.atomic(() => {
       const kind = input.admission.kind === "owner" ? "work" : input.admission.kind;
       ledger.ensureSession(sessionId, kind, `${kind}:${sessionId}`);
       const owner = input.admission.kind === "owner";
@@ -344,7 +342,12 @@ export class WorkSessions {
     if (!prior) return null;
     if (prior.push) return this.communication.notification(prior.push);
     if (prior.state) return { id: prior.deliveryId, state: prior.state, externalId: null, error: prior.error ?? null };
-    return this.communication.delivery(prior.taskId, prior.deliveryId);
+    try { return this.communication.delivery(prior.taskId, prior.deliveryId, `schedule:${eventId}`); }
+    catch (error) {
+      // The notice was recorded on a transcript (its delivery) that was purged since.
+      if (!(error instanceof Error) || error.message !== "channel_delivery_not_found") throw error;
+      return { id: prior.deliveryId, state: "accepted", externalId: null, error: null };
+    }
   }
 
 }

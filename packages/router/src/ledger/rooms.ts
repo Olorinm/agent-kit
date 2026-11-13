@@ -76,7 +76,6 @@ export class HubRooms {
   private rows(sql: string, ...args: SQLInputValue[]) { return this.db.prepare(sql).all(...args) as Row[]; }
   private run(sql: string, ...args: SQLInputValue[]) { return this.db.prepare(sql).run(...args); }
   private atomic<T>(work: () => T): T { return this.db.isTransaction ? work() : this.hub.store.transaction(work); }
-  get enabled(): boolean { return Boolean(this.directory.groups); }
 
   /** The room behind a `room:` chat id; unknown ids are `chat_not_found`. */
   roomOf(chatId: string): string {
@@ -197,7 +196,7 @@ export class HubRooms {
     if (!this.row("SELECT 1 FROM hub_chats WHERE chat_id=?", chatId)) this.index(roomId);
     const room = this.room(roomId)!, row = this.row("SELECT * FROM hub_chats WHERE chat_id=?", chatId)!;
     const readSeq = this.readSeq(chatId, personId);
-    return { chatId, kind: "group", title: room.title as string, agentIds: this.agentIds(roomId), readOnly: !this.enabled || Boolean(room.archived),
+    return { chatId, kind: "group", title: room.title as string, agentIds: this.agentIds(roomId), readOnly: Boolean(room.archived),
       lastSeq: Number(room.last_seq), generation: Number(room.generation), readSeq, unread: this.unread(roomId, readSeq, personId),
       lastEvent: row.last_event ? JSON.parse(String(row.last_event)) : null, activeTurns: Number(row.active_turns), pendingCards: Number(row.pending_cards),
       updatedAt: iso(Number(row.updated_at)) };

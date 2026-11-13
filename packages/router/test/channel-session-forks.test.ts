@@ -11,9 +11,9 @@ import { AgentLedger } from "../src/ledger/ledger.js";
 const stores: DurableStore[] = [];
 afterEach(() => stores.splice(0).forEach(store => store.close()));
 
-function setup(authoritative = false) {
+function setup() {
   const store = new DurableStore(":memory:", "agent"); stores.push(store);
-  const ledger = AgentLedger.open(store); ledger.authoritative = authoritative;
+  const ledger = AgentLedger.open(store);
   const work = new CliWork(store, () => "allow"), core = new CommunicationCore("agent", store, work);
   const starts: HostStartInput[] = [], runs = new Map<string, HostRun>(), transcripts = new Map<string, string[]>();
   const fork = vi.fn(async (input: NativeSessionInput) => {
@@ -41,8 +41,8 @@ function setup(authoritative = false) {
 }
 
 describe("provider topic native forks", () => {
-  it.each([false, true])("forks once, inherits hidden group context and continues independently (ledger=%s)", async authoritative => {
-    const h = setup(authoritative); const main = h.receive("main", "group context"); await h.tick();
+  it("forks once, inherits hidden group context and continues independently", async () => {
+    const h = setup(); const main = h.receive("main", "group context"); await h.tick();
     await h.sessions.submit({ eventId: "background", sessionId: main.conversationId, input: "private background delivered to this group",
       admission: { kind: "owner", owner: "owner", agentId: "agent", reference: "background" } });
     await h.worker.tick();
@@ -105,7 +105,7 @@ describe("provider topic native forks", () => {
   });
 
   it("forks the group's current reset window and keeps a topic reset empty", async () => {
-    const h = setup(true); const main = h.receive("main", "old context"); await h.tick();
+    const h = setup(); const main = h.receive("main", "old context"); await h.tick();
     h.ledger.reset(main.conversationId);
     h.receive("after-reset", "new context"); await h.tick();
     const topic = h.receive("topic", "question", "topic"); await h.tick();

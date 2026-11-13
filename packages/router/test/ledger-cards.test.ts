@@ -192,14 +192,8 @@ describe("card answers through the web (ADR 0005 16.1)", () => {
     expect(t.host.starts).toHaveLength(3);
   }, 30_000);
 
-  it("reports the features and keeps the routes off without the flags", async () => {
-    const on = await setup(cleanup);
-    expect((await on.api(`${root}/web/me`)).data.limits.features).toMatchObject({ send: true, cards: true, reset: true });
-    const off = await setup(cleanup, { ledgerCards: false, ledgerControl: false });
-    expect((await off.api(`${root}/web/me`)).data.limits.features).toMatchObject({ send: true, cards: false, reset: false });
-    expect((await off.answer("cd_x", { idempotencyKey: ik(), choiceId: "0" })).status).toBe(404);
-    expect((await off.api(`${off.chat}/reset`, "alice", "POST", { idempotencyKey: ik() })).status).toBe(404);
-    // The web history is never served read-only: there is nothing else to send through.
-    await expect(setup(cleanup, { ledgerSend: false })).rejects.toThrow("ledger_read_requires_ledger_send");
+  it("answers an unknown card with 404", async () => {
+    const t = await setup(cleanup);
+    expect(await t.answer("cd_x", { idempotencyKey: ik(), choiceId: "0" })).toEqual({ status: 404, data: { error: "card_not_found" } });
   }, 20_000);
 });

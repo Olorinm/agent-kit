@@ -44,7 +44,7 @@ async function setup(overrides: Partial<ServiceConfig> = {}) {
   cleanup.push(() => rmSync(stateDir, { recursive: true, force: true }));
   const host = new Host(), extensions = new Map<string, ServiceExtension>();
   const service: ManagedService = new ManagedService({ serverName: "example.test", publicUrl: "https://example.test/_agent-router/v1",
-    stateDir, ledgerRead: true, ledgerSend: true, ledgerAttachments: true, ...overrides }, {
+    stateDir, ...overrides }, {
     authenticate: async (token) => { if (token === "alice") return owner; if (token === "bob") return other; throw new Error("bad_credentials"); },
     configure: async (agent, runtime) => {
       const config = channelConfigSchema.parse({ agents: [{ agentId: agent.id, connections: [],
@@ -76,7 +76,7 @@ async function setup(overrides: Partial<ServiceConfig> = {}) {
     return { status: response.status, body: Buffer.from(await response.arrayBuffer()), type: response.headers.get("content-type") };
   }
   const agent = await service.create(owner, "helper");
-  const ledger = AgentLedger.attached((await service.runtime(agent.id)).store)!;
+  const ledger = AgentLedger.open((await service.runtime(agent.id)).store);
   const chatId = `dm:${agent.id}`;
   await api(`${root}/web/chats/dm`, "alice", "POST", { agentId: agent.id });
   const send = (body: Record<string, unknown>, token = "alice") => api(`${root}/web/chats/${enc(chatId)}/messages`, token, "POST", body);
@@ -89,7 +89,6 @@ const png = Buffer.concat([Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]), Buffe
 describe("web send with attachments", () => {
   it("binds uploads to the message, renders them with URLs and hands them to the Host as media", async () => {
     const t = await setup();
-    expect((await t.api(`${root}/web/me`)).data.limits.features).toMatchObject({ send: true, attachments: true });
     const image = (await t.upload(png, "image/png", "截图.png")).data, doc = (await t.upload(Buffer.from("%PDF-1"), "application/pdf", "a.pdf")).data;
     const sent = await t.send({ idempotencyKey: key, text: "看图", attachments: [image.attachmentId, doc.attachmentId] });
     expect(sent.status).toBe(200);
@@ -156,7 +155,7 @@ describe("web send with attachments", () => {
     expect(media.media).toBeUndefined();
     expect((await t.download(media.attachments[0].url)).body.equals(png)).toBe(true);
     // The outbox row keeps no copy of the bytes, and a retried tool call stores nothing again.
-    expect(JSON.stringify(core.store.entries("communication_outbox"))).not.toContain(png.toString("base64"));
+    expect(JSON.stringify(core.ledger.recentDeliveries())).not.toContain(png.toString("base64"));
     await tools.execute(call as never);
     expect(t.service.hubs.hub(owner).store.db.prepare("SELECT COUNT(*) AS n FROM hub_blob_refs").get()!.n).toBe(1);
     expect((await t.events()).filter((event) => event.text === "图来了")).toHaveLength(1);
@@ -182,7 +181,7 @@ describe("web send with attachments", () => {
   }, 20_000);
 
   it("purge deletes the session's attachments and releases their blob references", async () => {
-    const t = await setup({ ledgerControl: true });
+    const t = await setup({ });
     const image = (await t.upload(png, "image/png", "p.png")).data, kept = (await t.upload(Buffer.from("other"), "text/plain", "o.txt")).data;
     await t.send({ idempotencyKey: key, text: "带图", attachments: [image.attachmentId] });
     await until(t.events, (items) => items.some((event) => event.text === "回答-1"));
@@ -202,11 +201,4 @@ describe("web send with attachments", () => {
     expect(await t.service.attachments!.sweep(Date.now() + 7 * 86_400_000 + 1000)).toMatchObject({ deletedBlobs: 1 });
   }, 20_000);
 
-  it("requires the send flag and keeps attachments unsupported without the attachments flag", async () => {
-    const off = await setup({ ledgerAttachments: false });
-    expect((await off.api(`${root}/web/me`)).data.limits.features).toMatchObject({ send: true, attachments: false });
-    expect(await off.send({ idempotencyKey: key, text: "图", attachments: ["at_1"] })).toEqual({ status: 422, data: { error: "attachments_unsupported" } });
-    expect(off.extension().communication!.capabilities("missing")).toBeUndefined();
-    await expect(setup({ ledgerSend: false })).rejects.toThrow("ledger_read_requires_ledger_send");
-  }, 20_000);
 });

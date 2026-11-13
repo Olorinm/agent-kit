@@ -140,7 +140,7 @@ describe("purge (ADR 0005 16.4)", () => {
     expect(page).toMatchObject({ generation: 2, lastSeq: 1, events: [{ seq: 1, kind: "window", window: 2 }] });
     expect(JSON.stringify(page)).not.toContain("要删掉的话");
     const store = (await t.service.runtime(t.agent.id)).store;
-    expect(JSON.stringify(store.entries("communication_inbox"))).not.toContain("要删掉的话");
+    expect(JSON.stringify(t.ledger.recentClaims())).not.toContain("要删掉的话");
     expect(t.ledger.claimFor("chat", "$m1")).toMatchObject({ state: "tombstone", eventId: null });
     // A redelivered channel message does not come back.
     t.extension().communication!.receive("chat", direct);
