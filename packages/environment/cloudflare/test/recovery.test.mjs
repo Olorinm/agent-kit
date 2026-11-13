@@ -1,12 +1,13 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
-import ts from "typescript";
+import { stripTypeScriptTypes } from "node:module";
 
 // Exercise the real gateway and Durable Object routes with the Cloudflare runtime
 // replaced by an in-memory container. No account or remote service is contacted.
 const moduleUrl = source => `data:text/javascript;base64,${Buffer.from(source).toString("base64")}`;
-const compile = source => ts.transpileModule(source, { compilerOptions: { target: ts.ScriptTarget.ES2023, module: ts.ModuleKind.ESNext } }).outputText;
+// Node removes the type annotations itself; the TypeScript package no longer ships a JavaScript compiler API.
+const compile = source => stripTypeScriptTypes(source, { mode: "transform" });
 const runtime = moduleUrl("export class DurableObject { constructor(ctx, env) { this.ctx = ctx; this.env = env; } } export class WorkerEntrypoint {}");
 const backup = moduleUrl(compile(await readFile(new URL("../src/backup.ts", import.meta.url), "utf8")));
 const worker = compile(await readFile(new URL("../src/index.ts", import.meta.url), "utf8"))
