@@ -5,6 +5,13 @@ tag publishes a GitHub Release whose notes are this file's section for that vers
 section in the version-bump commit before tagging. Changes up to the versions listed under
 0.8.0-alpha.1 are in each package's own `CHANGELOG.md`.
 
+## [0.10.0-alpha.4] - 2026-11-13
+
+- **Host:** a Codex turn that selects no model names the runtime's configured `model` again.
+  Codex keeps a turn's model for the thread's following turns, so after one turn had selected
+  another model, later turns without a selection stayed on it instead of returning to the
+  configured one. A runtime without a configured `model` is unchanged.
+
 ## [0.10.0-alpha.3] - 2026-11-13
 
 - **Router:** an agent can have default native settings. `WorkSessions.setDefaultSettings`

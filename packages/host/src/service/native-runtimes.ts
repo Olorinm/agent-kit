@@ -206,6 +206,9 @@ export function createNativeRuntime(
               : {}),
           },
           turn: {
+            // Codex keeps a turn's model for the thread's following turns, so a turn that selects
+            // none names the configured model again instead of inheriting the last selection.
+            ...(config.model ? { model: config.model } : {}),
             ...config.runOptions?.turn,
             ...config.turn,
             ...request.settings,

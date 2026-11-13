@@ -3,6 +3,7 @@ import { createInterface } from "node:readline";
 let id = 0;
 const threads = new Set();
 const active = new Map();
+const threadModels = new Map();
 const requests = new Map();
 const parents = new Map();
 const cwds = new Map();
@@ -106,6 +107,9 @@ createInterface({ input: process.stdin }).on("line", async (line) => {
     ? JSON.stringify(p.input)
     : [p.additionalContext?.agent_host?.value, p.input?.map((i) => i.text ?? "").join("\n") ?? "compact"].filter(x => x !== undefined).join("\n");
   const input = p.input?.at(-1)?.text ?? "compact";
+  // Like Codex, a turn's model stays the thread's model until a later turn names another.
+  if (p.model) threadModels.set(threadId, p.model);
+  const answer = input === "turn-settings" ? JSON.stringify({ model: threadModels.get(threadId) ?? null, effort: p.effort ?? null }) : fullInput;
   active.set(threadId, turnId);
   if (input === "relay-command" || input === "relay-command-late") {
     // A shell command stays running until the test creates relay-done in the working directory
@@ -280,7 +284,7 @@ createInterface({ input: process.stdin }).on("line", async (line) => {
     threadId,
     turnId,
     itemId: "answer",
-    delta: fullInput,
+    delta: answer,
   });
   notify("item/completed", {
     threadId,
@@ -289,7 +293,7 @@ createInterface({ input: process.stdin }).on("line", async (line) => {
       id: "answer",
       type: "agentMessage",
       phase: "final_answer",
-      text: fullInput,
+      text: answer,
     },
   });
   finish(threadId, turnId);
