@@ -60,6 +60,8 @@ export interface OwnerRequestResult {
   /** Where the card was sent beside the transcript, and what became of that send. */
   delivery: WorkReplyReceipt;
 }
+/** One entry of `WorkSessions.settlements`: a work event whose turn ended, or an owner request that was closed. */
+export type Settlement = { seq: number; settledAt: string } & ({ kind: "work"; event: WorkEventResult } | { kind: "request"; request: OwnerRequestResult });
 export interface WorkEventResult {
   eventId: string; taskId: string; sessionId: string; status: string; answer: string;
   runId?: string; error?: string; outcomeUnknown: boolean;
@@ -85,7 +87,13 @@ export class WorkSessions {
     readonly instanceId: string, readonly store: DurableStore, readonly work: CliWork,
     readonly host: HostPort, readonly communication: CommunicationCore,
     private readonly validate: () => void = () => {},
-    private readonly dependencyWait?: (input: WorkDependencyWait) => () => void) {}
+    private readonly dependencyWait?: (input: WorkDependencyWait) => () => void) {
+    // A work event's turn ended: recorded with the task's terminal state, in the same transaction (`settlements`).
+    work.settled = (task) => {
+      const ledger = AgentLedger.open(this.store), inputId = ledger.inputForTurn(task.id);
+      if (inputId?.startsWith("work:") && this.store.get("work_session_inputs", task.id)) ledger.settle("work", inputId.slice("work:".length));
+    };
+  }
 
   private async forward<T>(operation: () => Promise<T>): Promise<T> {
     try { return await operation(); }
@@ -493,6 +501,24 @@ export class WorkSessions {
     const card = this.communication.ledger.cardRecord(current.cardId);
     if (card?.status === "pending") closeRequest(this.communication.ledger, this.communication, card, "canceled");
     return this.lookupRequest(eventId)!;
+  }
+  /**
+   * What ended since a cursor (ADR 20.4): work events whose turn reached a terminal state, and owner requests that
+   * were answered, expired or withdrawn, in the order that happened. The record is durable and its `seq` only grows,
+   * so a reader that keeps the returned `cursor` sees every ending once, also after a restart of either side.
+   */
+  settlements(options: { after?: number | undefined; limit?: number | undefined } = {}): { data: Settlement[]; cursor: number } {
+    this.validate();
+    const after = z.number().int().min(0).parse(options.after ?? 0), limit = z.number().int().min(1).max(500).parse(options.limit ?? 100);
+    expireRequests(this.communication.ledger, this.communication);
+    const rows = this.communication.ledger.settlements(after, limit);
+    const data = rows.flatMap((row): Settlement[] => {
+      const head = { seq: row.seq, settledAt: new Date(row.settledAt).toISOString() };
+      if (row.kind === "work") return this.store.get("work_session_events", row.eventId) ? [{ ...head, kind: "work", event: this.get(row.eventId) }] : [];
+      const request = this.lookupRequest(row.eventId);
+      return request ? [{ ...head, kind: "request", request }] : [];
+    });
+    return { data, cursor: rows.at(-1)?.seq ?? after };
   }
   /** Connections a schedule notice can name (`deliver` `connectionId`): `web` and every registered connection. */
   deliveryConnections(): string[] { return [...new Set([WEB_CONNECTION, ...this.communication.connectionIds()])]; }
