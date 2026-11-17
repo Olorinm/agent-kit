@@ -11,7 +11,7 @@ import { runtimeWorkingDirectory } from "./host.js";
 import type { HostTools, HostToolResult } from "./tools.js";
 import type { WorkDependencyWait } from "./sessions.js";
 import { AgentLedger, type TurnState } from "../ledger/ledger.js";
-import { cardBody, cardKind, type LedgerControl } from "../ledger/control.js";
+import { cardBody, cardKind, STEER_COMMAND, STOP_COMMAND, type LedgerControl } from "../ledger/control.js";
 import { textDelivery, toolDelivery, type WorkSender } from "./delivery.js";
 
 interface ToolReceipt { hash: string; phase: "executing" | "completed" | "uncertain"; result?: HostToolResult; }
@@ -465,14 +465,14 @@ export class HostWorker {
       return true;
     }
     const active = this.store.entries<RunBinding>("communication_runs").map(({ value }) => value).reverse().find((item) => this.sessionOf(item.contextId) === input.conversationId && item.phase === "running");
-    if (/^(\/(?:cancel|stop)(?:@\w+)?|停止|停一下|取消|取消当前任务)$/i.test(text)) {
+    if (STOP_COMMAND.test(text)) {
       const task = active?.taskId ?? this.work.list().find((item) => this.sessionOf(item.contextId) === input.conversationId)?.id;
       const original = task ? core.input(task) : undefined;
       if (original && original.source.sender !== input.source.sender && !(core.isOwnerInput(input) && core.isOwnerInput(original))) { core.notice(input, "这轮任务属于另一位发送者。", "control-scope"); return true; }
       if (task) await this.work.cancel(task);
       core.notice(input, task ? "正在停止当前任务。" : "当前没有正在执行的任务。", "cancel"); return true;
     }
-    if (/^\/steer\s+/i.test(text)) {
+    if (STEER_COMMAND.test(text)) {
       const original = active ? core.input(active.taskId) : undefined;
       if (original && original.source.sender !== input.source.sender && !(core.isOwnerInput(input) && core.isOwnerInput(original))) { core.notice(input, "这轮任务属于另一位发送者。", "control-scope"); return true; }
       if (!active?.runId || !this.host.steer) core.notice(input, "当前运行无法接收即时补充。", "steer-unavailable");

@@ -9,6 +9,7 @@ import { runtimeWorkingDirectory } from "./host.js";
 import { DEFAULT_SETTINGS, type ExecutionSession, type RunBinding } from "./host-worker.js";
 import { digest, key } from "./protocol.js";
 import { CliWork, WorkError } from "./work.js";
+import { closeRequest, createRequest, expireRequests, ownerRequestSchema, requestCardId, requestDeliveryId, type OwnerRequestInput } from "../ledger/requests.js";
 import { AgentLedger, legacySession } from "../ledger/ledger.js";
 import { personId } from "../ledger/registry.js";
 import { WEB_CONNECTION } from "../ledger/surfaces.js";
@@ -44,6 +45,21 @@ interface SessionMetadata { createdAt: string; title?: string; parentSessionId?:
 /** What a routed output reports about its route: the connection, whether that is a push, and why it is only recorded. */
 interface RouteFacts { connectionId: string; push?: boolean; error?: string }
 interface WorkEvent { eventId: string; sessionId: string; hash: string; taskId: string; reply?: RouteFacts; }
+interface RequestRecord { hash: string; cardId: string; route: RouteFacts; expiresAt: string }
+export type { OwnerRequestInput } from "../ledger/requests.js";
+/** An owner request as the product reads it (`WorkSessions.request`). */
+export interface OwnerRequestResult {
+  eventId: string; cardId: string; sessionId: string; expiresAt: string;
+  /** `expired`: nobody answered before `expiresAt`, or the owner cleared the conversation. `withdrawn`: `withdrawRequest`. */
+  status: "pending" | "answered" | "expired" | "withdrawn";
+  /** The `id` of the chosen choice, when answered. */
+  choice?: string;
+  /** The person who answered, and where. */
+  answeredBy?: string; surface?: "web" | "channel";
+  settledAt?: string;
+  /** Where the card was sent beside the transcript, and what became of that send. */
+  delivery: WorkReplyReceipt;
+}
 export interface WorkEventResult {
   eventId: string; taskId: string; sessionId: string; status: string; answer: string;
   runId?: string; error?: string; outcomeUnknown: boolean;
@@ -427,6 +443,56 @@ export class WorkSessions {
       this.store.set("work_session_deliveries", input.eventId, { hash, taskId: record.taskId!, deliveryId, ...receipt });
     });
     return this.lookupDelivery(input.eventId)!;
+  }
+  /**
+   * Ask the owner (ADR 0005 20.3): a card with choices in the owner conversation that belongs to no run, for a decision
+   * the product needs from the owner about something that happens elsewhere. It is shown and answered like a card of a
+   * run, on the web and on the route `connectionId` selects (the rule of `deliver`); the first answer wins. The same
+   * `eventId` returns the same request. It ends answered, `expired` at `expiresAt`, or `withdrawn`.
+   */
+  request(input: OwnerRequestInput): OwnerRequestResult {
+    this.validate();
+    const request = ownerRequestSchema.parse(input), target = request.connectionId;
+    const hash = digest(request), prior = this.store.get<RequestRecord>("work_session_requests", request.eventId);
+    if (prior && prior.hash !== hash) throw new WorkError("owner_request_event_id_reused", 409);
+    if (!prior) {
+      if (!(Date.parse(request.expiresAt) > Date.now())) throw new WorkError("owner_request_expired", 400);
+      if (target !== undefined && target !== WEB_CONNECTION && !this.communication.connected(target)) throw new WorkError("delivery_connection_not_found", 404);
+      const { sessionId } = this.openOwnerConversation();
+      this.store.transaction(() => {
+        const route = this.communication.ownerRoute(sessionId, target);
+        createRequest(this.communication.ledger, this.communication, this.agentId, sessionId, request, route);
+        this.store.set("work_session_requests", request.eventId, { hash, cardId: requestCardId(request.eventId), route: routeFacts(route, target),
+          expiresAt: request.expiresAt } satisfies RequestRecord);
+      });
+    }
+    return this.lookupRequest(request.eventId)!;
+  }
+  /** The request and its result, read from the ledger; a request past its deadline reads as `expired`. */
+  lookupRequest(eventId: string): OwnerRequestResult | null {
+    this.validate();
+    const record = this.store.get<RequestRecord>("work_session_requests", eventId);
+    if (!record) return null;
+    const ledger = this.communication.ledger;
+    expireRequests(ledger, this.communication);
+    const card = ledger.cardRecord(record.cardId), base = { eventId, cardId: record.cardId, sessionId: this.ownerSession, expiresAt: record.expiresAt };
+    const delivery = this.receipt(record.route, requestDeliveryId(eventId), `notice:${requestDeliveryId(eventId)}`, true);
+    // The owner cleared the conversation: the card is gone and can no longer be answered.
+    if (!card) { const at = ledger.settledAt("request", eventId); return { ...base, status: "expired", ...(at === undefined ? {} : { settledAt: new Date(at).toISOString() }), delivery }; }
+    if (card.status === "pending") return { ...base, status: "pending", delivery };
+    const settledAt = new Date(card.updatedAt).toISOString();
+    if (card.status === "expired" || card.status === "canceled") return { ...base, status: card.status === "expired" ? "expired" : "withdrawn", settledAt, delivery };
+    const choice = (card.result as { choice?: unknown } | null)?.choice;
+    return { ...base, status: "answered", ...(typeof choice === "string" ? { choice } : {}), ...(card.answeredBy ? { answeredBy: card.answeredBy } : {}),
+      ...(card.surface === "web" || card.surface === "channel" ? { surface: card.surface } : {}), settledAt, delivery };
+  }
+  /** Withdraw an unanswered request: its card closes, and an answer that arrives later is refused. Returns the request as it is now. */
+  withdrawRequest(eventId: string): OwnerRequestResult {
+    const current = this.lookupRequest(eventId);
+    if (!current) throw new WorkError("owner_request_not_found", 404);
+    const card = this.communication.ledger.cardRecord(current.cardId);
+    if (card?.status === "pending") closeRequest(this.communication.ledger, this.communication, card, "canceled");
+    return this.lookupRequest(eventId)!;
   }
   /** Connections a schedule notice can name (`deliver` `connectionId`): `web` and every registered connection. */
   deliveryConnections(): string[] { return [...new Set([WEB_CONNECTION, ...this.communication.connectionIds()])]; }

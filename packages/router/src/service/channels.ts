@@ -15,6 +15,7 @@ import { ChannelTools } from "../communication/tools.js";
 import { personId, type IdentityProvider, type PersonRegistry } from "../ledger/registry.js";
 import { mailPairingCommand, pairingCommand, REPLIES, senderIdentities, type Identities } from "../ledger/identity.js";
 import { LedgerControl } from "../ledger/control.js";
+import { expireRequests } from "../ledger/requests.js";
 import { ROOM_CONNECTION, WEB_CONNECTION } from "../ledger/surfaces.js";
 import type { HubRooms } from "../ledger/rooms.js";
 import type { OwnerAttachments } from "../ledger/blobs-hub.js";
@@ -175,7 +176,7 @@ export async function createChannelRuntime(agent: ManagedAgent, runtime: AgentRu
     }
   };
   return {
-    start: async () => { await core.start(); loops = [loop(async () => { await core.reconnect(); await core.dispatch(); await core.flush(); }, 250),
+    start: async () => { await core.start(); loops = [loop(async () => { await core.reconnect(); await core.dispatch(); expireRequests(core.ledger, core); await core.flush(); }, 250),
       ...(worker ? [loop(() => worker!.tick(), 1000)] : [])]; },
     stop: async () => { controller.abort(); await core.stop(); await Promise.allSettled(loops); },
     status: () => {

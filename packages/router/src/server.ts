@@ -44,4 +44,4 @@ export { loadServiceConfig } from "./service/config.js";
 
 export { RunObservation, type CommunicationTask, type RunReference, type TaskFilter } from "./execution/observation.js";
 export { WorkSessions, type WorkSessionSubmission, type WorkEventResult, type WorkSessionWaitOptions, type WorkDependencyWait,
-  type WorkReplyReceipt } from "./execution/sessions.js";
+  type WorkReplyReceipt, type OwnerRequestInput, type OwnerRequestResult } from "./execution/sessions.js";
