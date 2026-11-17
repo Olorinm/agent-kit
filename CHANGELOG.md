@@ -5,7 +5,7 @@ tag publishes a GitHub Release whose notes are this file's section for that vers
 section in the version-bump commit before tagging. Changes up to the versions listed under
 0.8.0-alpha.1 are in each package's own `CHANGELOG.md`.
 
-## [Unreleased]
+## [0.11.0-alpha.1] - 2026-11-17
 
 - **Router:** an embedding product can work in an agent's owner conversation without a message
   from the owner. `WorkSessions.openOwnerConversation()` returns its session id and makes it a
