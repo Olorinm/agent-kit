@@ -105,9 +105,10 @@ export class HostWorker {
       // Complete inexpensive local work in this tick, but never wait for remote tools or a sibling's completion.
       await Promise.race([Promise.allSettled([...this.observing.values()]), new Promise<void>(resolve => setImmediate(resolve))]);
       await Promise.race([Promise.allSettled([...this.executingTools.values()]), new Promise<void>(resolve => setImmediate(resolve))]);
-      // Internal work is observed through its saved task/run records, not the channel outbox.
+      // Internal work is observed through its saved task/run records, not the channel outbox. Work that answers the
+      // owner is the exception: the channel core publishes its result along its owner route, like a channel turn's.
       this.validate();
-      for (const event of this.work.events()) if (this.store.get("work_session_inputs", event.value.id)) this.work.ack(event.id);
+      for (const event of this.work.events()) if (this.internal(event.value.id)) this.work.ack(event.id);
       if (uncertain.length && !this.lastError) this.lastError = uncertain[0]!.error ?? "host_submission_unknown";
     } catch (error) { await this.recordFailure(error); }
     finally { this.busy = false; }
@@ -115,9 +116,13 @@ export class HostWorker {
   /** Transcript notes of the run (turn states, cards); the run does not depend on them (`AgentLedger.guarded`). */
   private ledger(work: (ledger: AgentLedger) => void) { const ledger = AgentLedger.open(this.store); ledger.guarded(() => work(ledger)); }
   private turn(taskId: string, state: TurnState, error?: string) { this.ledger((ledger) => ledger.turnState(taskId, state, { agentId: this.agentId, ...(error ? { error } : {}) })); }
+  /** Product-submitted work without an owner route: nothing is delivered for it, and the channel core does not see it. */
+  private internal(taskId: string): boolean {
+    return Boolean(this.store.get("work_session_inputs", taskId)) && !this.communication?.input(taskId);
+  }
   /** Owner work and schedules have no channel input, so their final transcript entry is written here. */
   private finishWork(taskId: string, state: TurnState, answer?: string) {
-    if (!this.store.get("work_session_inputs", taskId)) return;
+    if (!this.internal(taskId)) return;
     this.ledger((ledger) => {
       const turn = ledger.turn(taskId); if (!turn) return;
       const final = answer ? ledger.append(turn.sessionKey, { kind: "message", role: "assistant", senderType: "agent", senderId: this.agentId, turnId: taskId,
@@ -223,7 +228,7 @@ export class HostWorker {
           const channelAllowed = this.tools?.allowed(claim.contextId, claim.id) === true;
           // Only trusted internally admitted work may reuse a catalog without a new channel message.
           // A forged external context ID must never inherit its owner's tool definitions.
-          const withTools = savedSession.tools !== false && (authored ? savedSession.channelTools ?? channelAllowed : channelAllowed);
+          const withTools = Boolean(this.tools) && savedSession.tools !== false && (authored ? savedSession.channelTools ?? channelAllowed : channelAllowed);
           if (savedSession.tools !== false && savedSession.channelTools === undefined && (channelAllowed || authored))
             this.store.set("execution_sessions", claim.contextId, { ...savedSession, channelTools: withTools });
           const admission = authored?.admission ?? this.options.admission?.(claim.contextId, claim.id);

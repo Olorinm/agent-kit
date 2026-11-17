@@ -44,8 +44,8 @@ export class WorkHost implements HostPort {
     if (!call || call.status !== "pending") throw new ChannelHttpError(404, "interaction_not_found");
     call.status = "completed"; this.resolved.push({ runId: id, callId, result });
   }
-  /** Finish the n-th run (1-based) with an answer. */
-  finish(n: number, answer: string, status: HostRun["status"] = "completed") { Object.assign(this.runs.get(`run-${n}`)!, { status, answer }); }
+  /** Finish a run (its id, or its 1-based number in start order) with an answer. */
+  finish(run: number | string, answer: string, status: HostRun["status"] = "completed") { Object.assign(this.runs.get(typeof run === "number" ? `run-${run}` : run)!, { status, answer }); }
   ask(n: number, call: Pick<HostCall, "id" | "name" | "input"> & { deadlineAt?: string }) {
     this.pending.push({ kind: "interaction", status: "pending", deadlineAt: new Date(Date.now() + 3_600_000).toISOString(), ...call, runId: `run-${n}` });
   }
@@ -109,8 +109,13 @@ export async function harness(options: HarnessOptions = {}) {
   if (options.notify) core.register({ id: "push", ownerAddresses: [], notify: { replies: true, replyAfterSeconds: 0, questions: true, schedules: true, ...options.notify } }, push);
   await core.start();
   const host = options.host ?? new WorkHost();
+  // The channel tool as the service declares it: a received message admits it, an owner route alone does not.
+  const tools: HostTools = options.tools ?? { definitions: [{ name: "channel", description: "Use the conversation's channel.", inputSchema: { type: "object" }, timeoutMs: 1000 }],
+    instructions: "\nUse the channel tool for native channel content.\n",
+    allowed: (_conversationId, taskId) => { const input = core.input(taskId); return Boolean(input) && !input!.routed; },
+    execute: async () => ({ success: true, contentItems: [{ type: "inputText", text: "{}" }] }) };
   const worker = new HostWorker(AGENT, "instance", store, work, host, "runtime", "You are the fixture agent.", () => {},
-    (taskId, answer) => core.saveResult(taskId, answer), options.tools, core);
+    (taskId, answer) => core.saveResult(taskId, answer), tools, core);
   const control = new LedgerControl({ agentId: AGENT, ownerPersonId: OWNER_PERSON, store, ledger: core.ledger, core, work,
     observation: new RunObservation(store, work, host), host, closeUnknown: (claimId) => worker.closeUnknown(claimId) });
   control.replanGraceMs = 0;

@@ -148,7 +148,8 @@ export async function createChannelRuntime(agent: ManagedAgent, runtime: AgentRu
       config.host.instructions, () => { runtime.assertLease(); instance.validate(); }, (taskId, answer) => core.saveResult(taskId, answer),
       { definitions: [channelTools.definition],
         instructions: "\nUse the channel tool to inspect native communication capabilities and send files or supported native content. Never automatically repeat an operation with an uncertain outcome.\n",
-        allowed: (_conversationId, taskId) => Boolean(core.input(taskId)),
+        // A received message admits the channel tool. A work turn that only answers along an owner route does not.
+        allowed: (_conversationId, taskId) => { const input = core.input(taskId); return Boolean(input) && !input!.routed; },
         execute: (call) => channelTools.execute(call) }, core, instance.wake, {
           // Private groups (owner plus the owner's agents) get the owner's grants; mixed groups do not.
           admission: (contextId, taskId) => core.isOwnerTask(contextId, taskId) || core.isPrivateGroupOwnerTask(contextId, taskId)

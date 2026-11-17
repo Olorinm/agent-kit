@@ -234,7 +234,8 @@ export class LedgerControl {
     if (ledger.card(cardId)) return;
     const text = "这一轮执行中断，结果无法确认，系统不会自动重复执行。要重新执行吗？";
     const labels = ["重新执行", "不用了"], results = [{ action: "retry" }, { action: "skip" }];
-    const input = this.deps.core.input(binding.taskId), external = input && input.connectionId !== "web";
+    // Product work is not submitted again from this card (`retryDecision`), so its card stays on the transcript only.
+    const input = this.deps.core.input(binding.taskId), external = input && !input.routed && input.connectionId !== "web";
     const nativeButtons = external ? this.deps.core.capabilities(binding.taskId)?.buttons : undefined;
     const tokens = labels.map((_label, index) => digest(key(callId, String(index))).slice(0, 32));
     this.tx(() => {
@@ -267,7 +268,8 @@ export class LedgerControl {
     }
     if ((result as { action?: unknown } | null)?.action !== "retry") return;
     const original = this.deps.core.input(card.turnId);
-    if (!original) return;
+    // Product work is the product's to submit again; only a received message is queued a second time.
+    if (!original || original.routed) return;
     const ledger = this.ledger, externalId = `${original.source.externalId}:retry:${card.turnId}`.slice(0, 512);
     this.tx(() => {
       const record = this.deps.core.receive(original.connectionId, { ...original.source, externalId,

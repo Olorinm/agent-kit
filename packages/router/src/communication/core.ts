@@ -7,6 +7,7 @@ import { ChannelSendError, type ChannelAdapter, type ChannelContext, type Channe
 import { DurableStore } from "./store.js";
 import { AgentLedger, type Claim, type Delivery, type DeliveryPurpose, type DeliveryStatus, type EventInput } from "../ledger/ledger.js";
 import { recordReceipt, recordStart, type ChannelFacts } from "../ledger/ingress.js";
+import { WEB_CONNECTION, webTarget } from "../ledger/surfaces.js";
 
 const messageSchema = z.object({
   externalId: z.string().min(1).max(512), sender: z.string().min(1).max(512), threadId: z.string().min(1).max(1024),
@@ -46,7 +47,31 @@ export interface ChannelInput {
   forkFromContextId?: string;
   /** The ledger conversation (`cv_…`); absent for a sender that was not admitted. */
   channelConversationId?: string;
+  /**
+   * Not a received message: the owner route of output the product placed in the owner conversation (a work turn that
+   * answers there, or an owner request). `push` names the notify connection the product chose for it.
+   */
+  routed?: { push?: string | undefined };
 }
+/**
+ * Where output for the owner goes in the owner conversation when no message is being answered (ADR 0005 section 20):
+ * a connection with the reply route of the owner's newest conversation on it, or the web transcript.
+ */
+export interface OwnerRoute {
+  connectionId: string; target: string; messageId: string; data: Record<string, string>;
+  /** The owner's sender id on that connection. */
+  sender: string;
+  /** The ledger conversation (`cv_…`) of that route, when the owner has written there. */
+  conversationId?: string | undefined;
+  /** A notify connection that gets the output as a push, whatever its policy and the owner's presence. */
+  push?: string | undefined;
+  /** Why the output is only recorded although a connection was named (`no_conversation_on_connection`). */
+  error?: string | undefined;
+}
+/** Delivery ids of a turn's answer, of a notice on an input, and of an owner notification. */
+export const replyDeliveryId = (taskId: string) => digest(key(taskId, "final"));
+export const noticeDeliveryId = (inputId: string, suffix: string) => digest(key(inputId, suffix));
+export const notificationId = (ref: string, connectionId: string) => digest(key(ref, connectionId, "notify"));
 /** The state of a send as the channel tool and the delivery API report it. */
 export type SendState = "queued" | "submitting" | "accepted" | "failed" | "uncertain";
 const sendState: Record<DeliveryStatus, SendState> = { created: "queued", queued: "queued", sending: "submitting", sent: "accepted", suppressed: "accepted",
@@ -110,10 +135,43 @@ export class CommunicationCore {
       ...(taskId ? { taskId } : {}), ...(reason ? { reason } : {}), ...(claim.forkFrom ? { forkFromContextId: claim.forkFrom } : {}),
       ...(claim.conversationId ? { channelConversationId: claim.conversationId } : {}) };
   }
-  /** A received message by its input id. */
+  /** A received message by its input id, or the owner route of a work turn that answers the owner (`routed`). */
   inputById(inputId: string): ChannelInput | undefined {
     const claim = this.ledger.claimByInput(inputId);
-    return claim ? this.view(claim) : undefined;
+    if (claim) return this.view(claim);
+    const pending = this.ledger.input(inputId);
+    if (typeof pending?.route !== "string") return undefined;
+    const taskId = (pending.turn_id as string | null) ?? undefined;
+    return this.routed(inputId, String(pending.session_key), JSON.parse(pending.route) as OwnerRoute, { at: Number(pending.created_at), ...(taskId ? { taskId } : {}),
+      state: ["completed", "failed", "canceled"].includes(this.ledger.turn(taskId ?? "")?.state ?? "") ? "done" : "submitted" });
+  }
+  /**
+   * The owner route for product output in a session, by the `connectionId` rule of `WorkSessions.deliver`:
+   * - omitted: the newest owner conversation whose connection is still registered (follows the owner), else the web;
+   * - `web`: recorded on the transcript only;
+   * - a notify connection: recorded, and pushed there;
+   * - another connection: the owner's newest conversation on it, or recorded only with `no_conversation_on_connection`.
+   */
+  ownerRoute(sessionKey: string, target?: string): OwnerRoute {
+    const inputs = this.sessionInputs(sessionKey).filter((input) => this.isOwnerInput(input));
+    const push = target !== undefined && this.notifies(target);
+    const chosen = target === undefined ? inputs.find((input) => this.connections.has(input.connectionId)) : inputs.find((input) => input.connectionId === target);
+    if (chosen && !this.recordedOnly(chosen.connectionId)) return { ...chosen.replyRoute, sender: chosen.source.sender,
+      ...(chosen.channelConversationId ? { conversationId: chosen.channelConversationId } : {}) };
+    // The transcript: the owner's web conversation when there is one. A reply there quotes nothing.
+    const web = chosen ?? inputs.find((input) => this.recordedOnly(input.connectionId));
+    const owner = this.ownerPersonId ?? "owner";
+    return { connectionId: web?.connectionId ?? WEB_CONNECTION, target: web?.replyRoute.target ?? webTarget(owner), messageId: "", data: {}, sender: web?.source.sender ?? owner,
+      ...(web?.channelConversationId ? { conversationId: web.channelConversationId } : {}), ...(push ? { push: target } : {}),
+      ...(target !== undefined && target !== WEB_CONNECTION && !push ? { error: "no_conversation_on_connection" } : {}) };
+  }
+  /** An owner route as the input of what is sent along it: notices, cards and a turn's answer use it like a received message. */
+  routed(id: string, sessionKey: string, route: OwnerRoute, fields: { at?: number; taskId?: string; state?: ChannelInput["state"] } = {}): ChannelInput {
+    const reply = { target: route.target, messageId: route.messageId, data: route.data };
+    return { id, connectionId: route.connectionId, conversationId: sessionKey, hash: "", receivedAt: new Date(fields.at ?? Date.now()).toISOString(),
+      source: { externalId: id, sender: route.sender, threadId: route.target, scope: "direct", text: "", reply },
+      replyRoute: { connectionId: route.connectionId, ...reply }, state: fields.state ?? "done", ...(fields.taskId ? { taskId: fields.taskId } : {}),
+      ...(route.conversationId ? { channelConversationId: route.conversationId } : {}), routed: route.push ? { push: route.push } : {} };
   }
   /** The newest message that became a turn for each connection and sender of the session, newest first. */
   sessionInputs(sessionKey: string): ChannelInput[] {
@@ -359,17 +417,18 @@ export class CommunicationCore {
     const ledger = this.ledger;
     for (const { id: eventId, value: task } of this.work.events()) {
       const input = this.input(task.id);
-      if (!input) continue; // Not channel work (for example a work session event).
+      if (!input) continue; // Work that answers nowhere (a work session event without a reply route).
       this.store.transaction(() => {
         // The connection may be gone: the result is still recorded, and flush settles its delivery as rejected.
         const adapter = this.connections.get(input.connectionId)?.adapter;
         const capabilities = adapter?.capabilitiesFor?.(input.replyRoute) ?? adapter?.capabilities;
-        if (adapter?.activity && capabilities?.native.includes("reaction")) {
+        // A working marker belongs on the message being answered; a routed turn answers none.
+        if (!input.routed && adapter?.activity && capabilities?.native.includes("reaction")) {
           const active = task.status?.state === TaskState.TASK_STATE_WORKING;
           this.outbound(input, { id: digest(key(input.id, "activity", String(active))), purpose: "activity", text: "", turnId: task.id,
             activity: { key: input.id, active } }, null);
         }
-        const finalId = digest(key(task.id, "final"));
+        const finalId = replyDeliveryId(task.id);
         // Published once: the turn then has its final event (kept on the turn after a purge) or its reply delivery.
         if (terminal(task) && !ledger.turn(task.id)?.finalEventId && !ledger.delivery(finalId)) {
           const parts = task.artifacts.flatMap((artifact) => artifact.parts);
@@ -474,7 +533,7 @@ export class CommunicationCore {
     return inputId ? this.inputById(inputId) : undefined;
   }
   notice(input: ChannelInput, text: string, suffix: string, content?: ChannelContent): string {
-    const id = digest(key(input.id, suffix)), question = suffix.startsWith("question:");
+    const id = noticeDeliveryId(input.id, suffix), question = suffix.startsWith("question:");
     // A question is recorded as a `card` event by the component that owns the call, which binds this delivery to it.
     this.ledger.atomic(() => {
       const { fresh } = this.outbound(input, { id, purpose: question ? "card" : "notice", text, content }, question ? null
@@ -484,7 +543,7 @@ export class CommunicationCore {
     return id;
   }
   async attachments(taskId: string): Promise<MediaContent[]> {
-    const input = this.input(taskId); if (!input) return [];
+    const input = this.input(taskId); if (!input || input.routed) return [];
     const cached = this.store.get<MediaContent[]>("communication_media", input.id); if (cached) return cached;
     const adapter = this.connection(input.connectionId).adapter;
     const items: MediaContent[] = []; let size = 0;
@@ -506,8 +565,16 @@ export class CommunicationCore {
     this.store.set("communication_progress_messages", taskId, receipt.externalId.split(","));
     this.store.set("communication_streams", taskId, true);
   }
-  capabilities(taskId: string) { const input = this.input(taskId); if (!input) return undefined;
-    const adapter = this.connections.get(input.connectionId)?.adapter; return adapter?.capabilitiesFor?.(input.replyRoute) ?? adapter?.capabilities; }
+  capabilities(taskId: string) { const input = this.input(taskId); return input && this.capabilitiesOf(input); }
+  /** What the input's connection can do on its route; undefined once the connection is gone. */
+  capabilitiesOf(input: ChannelInput) {
+    const adapter = this.connections.get(input.connectionId)?.adapter; return adapter?.capabilitiesFor?.(input.replyRoute) ?? adapter?.capabilities;
+  }
+  /** The state of a delivery by its id; undefined when nothing was queued under it. */
+  sent(id: string): { state: SendState; externalId: string | null; error: string | null } | undefined {
+    const row = this.ledger.delivery(id);
+    return row && { state: sendState[row.status], externalId: row.platformMessageId, error: row.error };
+  }
   /** True while the connection is registered. Records of a removed connection stay readable but have no route. */
   connected(connectionId: string): boolean { return this.connections.has(connectionId); }
   /** Registered connection ids. */
@@ -588,6 +655,8 @@ export class CommunicationCore {
    */
   private notifyOwner(purpose: NotifyPurpose, input: ChannelInput, text: string, ref: string, options: { webOnly?: boolean | undefined } = {}, now = Date.now()): void {
     if (!text.trim() || !this.isOwnerInput(input)) return;
+    // The product named a notify connection for this output: it is pushed there, as `deliver` pushes a schedule notice.
+    if (input.routed?.push) { if (this.notifies(input.routed.push)) this.queueNotification(input.routed.push, purpose, input, text, ref); return; }
     const origin = this.connections.get(input.connectionId);
     if (!options.webOnly && origin && !origin.adapter.ledgerDelivery) return;
     const covers = (policy: NotifyPolicy) => purpose === "reply" ? policy.replies && now - Date.parse(input.receivedAt) >= policy.replyAfterSeconds * 1000
@@ -599,7 +668,7 @@ export class CommunicationCore {
   }
   private queueNotification(connectionId: string, purpose: NotifyPurpose, input: ChannelInput, text: string, ref: string): string {
     if (!this.notifies(connectionId)) throw new Error("notify_connection_not_found");
-    const id = digest(key(ref, connectionId, "notify"));
+    const id = notificationId(ref, connectionId);
     this.ledger.createDelivery({ deliveryId: id, eventId: null, conversationId: input.channelConversationId ?? "", connectionId, purpose: "notice", text,
       route: { connectionId, target: "owner", messageId: "", data: { purpose, sessionKey: input.conversationId }, channel: this.kindOf(connectionId) } });
     return id;

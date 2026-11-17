@@ -43,4 +43,5 @@ export { edgeIdentityConfigSchema, loadEdgeIdentityConfig, type EdgeIdentityConf
 export { loadServiceConfig } from "./service/config.js";
 
 export { RunObservation, type CommunicationTask, type RunReference, type TaskFilter } from "./execution/observation.js";
-export { WorkSessions, type WorkSessionSubmission, type WorkEventResult, type WorkSessionWaitOptions, type WorkDependencyWait } from "./execution/sessions.js";
+export { WorkSessions, type WorkSessionSubmission, type WorkEventResult, type WorkSessionWaitOptions, type WorkDependencyWait,
+  type WorkReplyReceipt } from "./execution/sessions.js";
