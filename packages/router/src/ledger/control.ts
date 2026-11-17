@@ -9,7 +9,7 @@ import type { RunObservation } from "../execution/observation.js";
 import { digest, key } from "../execution/protocol.js";
 import { WorkError, type CliWork } from "../execution/work.js";
 import { RETRY_CALL_PREFIX, type AgentLedger, type CardKind, type CardRecord, type CardStatus, type CardSurface, type LedgerEvent } from "./ledger.js";
-import { closedRequestReply, expireRequests, requestInput } from "./requests.js";
+import { closedRequestReply, expireRequests, requestInput, type WorkDisplay } from "./requests.js";
 import { WEB_CONNECTION } from "./surfaces.js";
 
 /** ADR 0005 16.1: the private browser link of a handoff card is never stored in the transcript. */
@@ -43,6 +43,8 @@ export interface CardView {
   cardId: string; agentId: string; turnId: string; claimId: string; callId: string; kind: CardKind; source: string; text: string;
   choices: Array<{ choiceId: string; label: string; style?: "primary" | "danger" }>; freeText: boolean; native?: { method: string; params: unknown };
   deadlineAt: string | null; status: CardStatus;
+  /** What the product attached to an owner request (`WorkSessions.request` `display`). Router does not interpret it. */
+  display?: WorkDisplay;
 }
 export interface AnswerInput {
   key: string; by: string | null; surface: CardSurface;

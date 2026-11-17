@@ -39,7 +39,7 @@ export interface HubSocket {
 }
 export const LIMITS = { pageEvents: 200, pageBytes: 1024 * 1024, deltaGap: 1000, socketReplayEvents: 500, socketReplayBytes: 1024 * 1024, subscriptions: 200 };
 const fields: Record<string, string[]> = {
-  message: ["text", "html", "attachments", "mentions", "replyTo", "final", "possibleDuplicate", "quoted", "media", "event", "truncated", "redacted", "steer"],
+  message: ["text", "html", "attachments", "mentions", "replyTo", "final", "possibleDuplicate", "quoted", "media", "event", "truncated", "redacted", "steer", "display"],
   notice: ["text", "level"], action: ["targetCardId", "label"], card: ["card"], "card.update": ["cardId", "status", "answeredBy", "summary"],
   turn: ["agentId", "state", "inputEventIds", "error"], delivery: ["targetEventId", "delivery"], edit: ["targetEventId", "text"],
   redaction: ["targetEventId"], reaction: ["targetEventId", "key", "removed"], window: ["window", "reason"], member: ["action", "member", "title"],
