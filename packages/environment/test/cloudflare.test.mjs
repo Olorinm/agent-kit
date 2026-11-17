@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
 import { once } from "node:events";
-import { createCloudflareProvider } from "../dist/index.js";
+import { createCloudflareProvider, EnvironmentManager } from "../dist/index.js";
 const id = "e85982d9-ea40-4be4-9646-02c07b7109d2";
 async function withServer(handler, fn) {
   const server = createServer(async (req, res) => {
@@ -69,6 +69,49 @@ test("binary file transfer and metadata filtering retain exact values", async ()
     assert.equal(written.path, "/workspace/中文");
     assert.equal((await p.list({ owner: "one" })).length, 1);
     assert.equal((await p.list({ owner: "two" })).length, 0);
+  });
+});
+test("model services reach the gateway only when the caller selects them", async () => {
+  const sent = [];
+  await withServer(async (req, res) => {
+    const chunks = []; for await (const c of req) chunks.push(c);
+    sent.push([req.method, req.url, Buffer.concat(chunks).toString()]);
+    res.end(JSON.stringify({ id, state: "running", template: "node24", metadata: {} }));
+  }, async p => {
+    const manager = new EnvironmentManager([p]), ref = { provider: "cf", id };
+    assert.deepEqual(await p.create({ template: "node24", timeoutSeconds: 600 }), ref);
+    await p.create({ template: "node24", timeoutSeconds: 600, modelServices: undefined });
+    await p.create({ template: "node24", timeoutSeconds: 600, modelServices: ["openai", "anthropic"] });
+    await manager.create("cf", { template: "node24", modelServices: [] });
+    assert.equal((await p.resume(id)).state, "running");
+    await p.resume(id, 900);
+    await p.resume(id, 900, {});
+    await p.resume(id, 900, { modelServices: ["anthropic"] });
+    await p.resume(id, undefined, { modelServices: [] });
+    await manager.resume(ref);
+    await manager.resume(ref, 900, { modelServices: ["openai", "anthropic"] });
+    const create = body => ["POST", "/v1/environments", body], resume = body => ["POST", `/v1/environments/${id}/resume`, body];
+    assert.deepEqual(sent, [
+      create('{"template":"node24","timeoutSeconds":600}'),
+      create('{"template":"node24","timeoutSeconds":600}'),
+      create('{"template":"node24","timeoutSeconds":600,"modelServices":["openai","anthropic"]}'),
+      create('{"template":"node24","modelServices":[]}'),
+      resume('{"timeoutSeconds":600}'),
+      resume('{"timeoutSeconds":900}'),
+      resume('{"timeoutSeconds":900}'),
+      resume('{"timeoutSeconds":900,"modelServices":["anthropic"]}'),
+      resume('{"timeoutSeconds":600,"modelServices":[]}'),
+      resume('{"timeoutSeconds":600}'),
+      resume('{"timeoutSeconds":900,"modelServices":["openai","anthropic"]}'),
+    ]);
+  });
+});
+test("an invalid model service selection surfaces the gateway's error code", async () => {
+  await withServer(async (req, res) => {
+    res.writeHead(400); res.end(JSON.stringify({ error: req.url.endsWith("/resume") ? "invalid_model_services" : "invalid_create" }));
+  }, async p => {
+    await assert.rejects(p.resume(id, 600, { modelServices: ["unknown"] }), { code: "invalid_model_services", outcomeUnknown: false });
+    await assert.rejects(p.create({ template: "node24", modelServices: ["unknown"] }), { code: "invalid_create", outcomeUnknown: false });
   });
 });
 test("rejects nonlocal HTTP, credential URLs and path injection before network I/O", () => {

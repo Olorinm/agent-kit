@@ -1,6 +1,6 @@
 import { DurableObject, WorkerEntrypoint } from "cloudflare:workers";
 import { UUID, equalSecret, signAccess, verifyAccess, createSpec, lifetime, strings } from "./security.mjs";
-import { allowEgress } from "./egress.mjs";
+import { allowEgress, modelServices, DEFAULT_MODEL_SERVICES } from "./egress.mjs";
 import { installAge, archiveAgent } from "./backup";
 
 interface Env {
@@ -26,6 +26,8 @@ interface RecordData {
   onTimeout: "pause" | "kill";
   snapshot?: { id: string; size: number; createdAt: number };
   maintenance?: boolean;
+  /** Model endpoints this environment may reach, chosen by the product. Absent means the default. */
+  modelServices?: string[];
 }
 class ApiError extends Error {
   constructor(readonly code: string, readonly status = 409) { super(code); }
@@ -120,9 +122,9 @@ export default {
 } satisfies ExportedHandler<Env>;
 
 /** This policy executes outside the guest. Guest root cannot change it. */
-export class AgentEgress extends WorkerEntrypoint<Env> {
+export class AgentEgress extends WorkerEntrypoint<Env, { modelServices?: readonly string[] }> {
   async fetch(request: Request) {
-    if (!allowEgress(request.url, request.method)) return json({error:"destination_not_allowed"},403);
+    if (!allowEgress(request.url, request.method, this.ctx.props.modelServices ?? DEFAULT_MODEL_SERVICES)) return json({error:"destination_not_allowed"},403);
     return fetch(request, {redirect:"manual"});
   }
 }
@@ -187,7 +189,7 @@ export class AgentSandbox extends DurableObject<Env> {
       instance: { vcpu: 2, memoryMib: 6144, diskMb: 10000 },
       env: {...r.env, NODE_EXTRA_CA_CERTS:"/etc/cloudflare/certs/cloudflare-containers-ca.crt"},
     });
-    const egress = this.ctx.exports.AgentEgress({props:{}});
+    const egress = this.ctx.exports.AgentEgress({props:{modelServices:r.modelServices??DEFAULT_MODEL_SERVICES}});
     await this.container.interceptAllOutboundHttp(egress);
     await this.container.interceptOutboundHttps("*",egress);
     await this.container.setInactivityTimeout(6 * 3600000);
@@ -321,7 +323,7 @@ export class AgentSandbox extends DurableObject<Env> {
         const r = await this.ctx.storage.get<RecordData>("record");
         return r ? json(info(r, this.container.running)) : json({ error: "environment_missing" }, 404);
       }
-      if(url.pathname==="/security"&&request.method==="GET")return json({version:2,egress:"model-and-package-allowlist",runtime:await this.runtimeUsage(),backup:await this.ctx.storage.get("backup")??null});
+      if(url.pathname==="/security"&&request.method==="GET")return json({version:2,egress:"model-and-package-allowlist",modelServices:(await this.ctx.storage.get<RecordData>("record"))?.modelServices??DEFAULT_MODEL_SERVICES,runtime:await this.runtimeUsage(),backup:await this.ctx.storage.get("backup")??null});
       if(url.pathname==="/backup"&&request.method==="POST")return this.change(async()=>{const r=await this.record();await this.backup(r);return json({ok:true});});
       if(url.pathname==="/maintenance"&&request.method==="POST")return this.change(async()=>{
         const r=await this.record();if(r.status!=="paused")return json({skipped:true});
@@ -343,12 +345,18 @@ export class AgentSandbox extends DurableObject<Env> {
       if (url.pathname === "/resume" && request.method === "POST") {
         return await this.change(async () => {
           const r = await this.record(), b = await body(request);
+          let services;
+          try { services = modelServices(b.modelServices); } catch { throw new ApiError("invalid_model_services", 400); }
           r.expires = Date.now() + lifetime(b.timeoutSeconds ?? 600) * 1000;
+          if (services) r.modelServices = services;
           if (r.status === "running" && this.container.running) {
+            // A running container keeps the list it started with; this one applies from its next start.
             await this.ctx.storage.put("record", r);
             return json(info(r, true));
           }
           if (r.status !== "paused") throw new ApiError("resume_requires_paused");
+          // Commit the selection before the restored container starts.
+          if (services) await this.ctx.storage.put("record", r);
           return json(await this.start(r, true));
         });
       }

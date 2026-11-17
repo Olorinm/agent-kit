@@ -53,6 +53,7 @@ node dist/cli.js destroy --config /secure/providers.json --provider cloudflare -
 
 - `pause()` 只确认请求已受理；查询到 `paused` 后再恢复。到期会保存文件系统快照并停止计算，不恢复进程内存。
 - 恢复使用原来的环境 ID；环境丢失会报错，不会偷偷新建。
+- `create()` 的 `modelServices`，或 `resume(id, seconds, { modelServices })`，用来选择环境可以访问哪些已审查的模型接口，例如 `['openai', 'anthropic']`。不传时使用网关默认值（`openai`）；恢复时不传则沿用已保存的列表。运行中的环境要到下次启动才换用新列表。规则写在[网关源码](cloudflare/README.md#managed-secrets-network-restrictions-and-independent-backups)里，环境内部无法修改。
 - 断线不会被当成“环境不存在”或“命令成功”。没有确认退出的命令会标记为执行结果不确定，核对后再暂停或重试。
 - 上层需要按环境串行处理生命周期变更和工作，并持久化环境归属；创建请求丢失响应时，用自己记录的操作标识核对后再决定是否重试。metadata 筛选不是用户隔离措施。
 

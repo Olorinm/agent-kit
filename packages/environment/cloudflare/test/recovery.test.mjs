@@ -15,14 +15,14 @@ const worker = compile(await readFile(new URL("../src/index.ts", import.meta.url
   .replace('from "./backup"', `from "${backup}"`)
   .replace('from "./security.mjs"', `from "${new URL("../src/security.mjs", import.meta.url)}"`)
   .replace('from "./egress.mjs"', `from "${new URL("../src/egress.mjs", import.meta.url)}"`);
-const { default: gateway, AgentSandbox } = await import(moduleUrl(worker));
+const { default: gateway, AgentSandbox, AgentEgress } = await import(moduleUrl(worker));
 const id = "33333333-3333-4333-8333-333333333333";
 const control = "fixture-operator-control";
 
 function fixture(overrides = {}, running = false) {
   const record = { id, template: "node24", metadata: { owner: "unchanged" }, env: { FIXTURE: "preserved" },
     status: "running", expires: 1, onTimeout: "pause", snapshot: { id: "original-snapshot", size: 123, createdAt: 1 }, ...overrides };
-  const records = new Map([["record", structuredClone(record)]]), starts = [], commands = [], policy = [];
+  const records = new Map([["record", structuredClone(record)]]), starts = [], commands = [], policy = [], egress = [];
   const container = {
     running,
     start(options) { starts.push(options); this.running = true; },
@@ -35,7 +35,7 @@ function fixture(overrides = {}, running = false) {
   };
   const storage = { async get(key) { return structuredClone(records.get(key)); },
     async put(key, value) { records.set(key, structuredClone(value)); }, async setAlarm() {}, async deleteAlarm() {} };
-  const ctx = { container, storage, exports: { AgentEgress: () => ({ policy: "existing-egress" }) },
+  const ctx = { container, storage, exports: { AgentEgress: options => { egress.push(options); return { policy: "existing-egress" }; } },
     blockConcurrencyWhile: work => work() };
   const env = { CONTROL_TOKEN: control, DAILY_RUNTIME_MINUTES: "240", CATALOG: { getByName: () => ({ contains: async value => value === id }) } };
   const sandbox = new AgentSandbox(ctx, env);
@@ -44,7 +44,7 @@ function fixture(overrides = {}, running = false) {
     new Request(`https://gateway.test/v1/environments/${id}/${action}`, {
       method: "POST", headers: { "X-Environment-Control": key, "Content-Type": "application/json" }, body: JSON.stringify(body),
     }), env);
-  return { record, records, starts, commands, policy, sandbox, container, request };
+  return { record, records, starts, commands, policy, egress, sandbox, container, request };
 }
 
 for (const status of ["running", "unknown"]) test(`operator recovery restores the same stopped ${status} environment in fixed maintenance mode`, async () => {
@@ -132,4 +132,108 @@ test("maintenance expiry pauses instead of deleting an environment whose normal 
   assert.equal(saved.maintenance, undefined);
   assert.equal(saved.onTimeout, "kill");
   assert.deepEqual(saved.env, f.record.env);
+});
+
+const security = async f => (await (await f.sandbox.fetch(new Request("https://internal/security"))).json()).modelServices;
+
+test("an environment without a selection starts with the default model services", async () => {
+  const f = fixture({ status: "paused" });
+  assert.equal((await f.request({ timeoutSeconds: 600 }, control, "resume")).status, 200);
+  assert.deepEqual(f.egress, [{ props: { modelServices: ["openai"] } }]);
+  assert.equal("modelServices" in f.records.get("record"), false);
+  assert.deepEqual(await security(f), ["openai"]);
+  const recovered = fixture();
+  assert.equal((await recovered.request()).status, 200);
+  assert.deepEqual(recovered.egress, [{ props: { modelServices: ["openai"] } }]);
+});
+
+test("create stores the product's model services and starts the container with them", async () => {
+  const create = async body => {
+    const f = fixture(); f.records.delete("record");
+    const response = await f.sandbox.fetch(new Request("https://internal/create", { method: "POST", body: JSON.stringify({ id, template: "node24", ...body }) }));
+    assert.equal(response.status, 200);
+    return f;
+  };
+  const plain = await create({});
+  assert.deepEqual(plain.egress, [{ props: { modelServices: ["openai"] } }]);
+  assert.equal("modelServices" in plain.records.get("record"), false);
+  const selected = await create({ modelServices: ["openai", "anthropic"] });
+  assert.deepEqual(selected.egress, [{ props: { modelServices: ["openai", "anthropic"] } }]);
+  assert.deepEqual(selected.records.get("record").modelServices, ["openai", "anthropic"]);
+  assert.deepEqual(await security(selected), ["openai", "anthropic"]);
+  const packagesOnly = await create({ modelServices: [] });
+  assert.deepEqual(packagesOnly.egress, [{ props: { modelServices: [] } }]);
+  assert.deepEqual(await security(packagesOnly), []);
+  const invalid = fixture(); invalid.records.delete("record");
+  const response = await invalid.sandbox.fetch(new Request("https://internal/create", { method: "POST", body: JSON.stringify({ id, template: "node24", modelServices: ["unknown"] }) }));
+  assert.equal(response.ok, false); assert.equal(invalid.starts.length, 0); assert.equal(invalid.records.has("record"), false);
+});
+
+test("resume stores a new selection before the restored container starts and later resumes keep it", async () => {
+  const f = fixture({ status: "paused" });
+  const response = await f.request({ timeoutSeconds: 600, modelServices: ["openai", "anthropic"] }, control, "resume");
+  assert.equal(response.status, 200);
+  assert.deepEqual(f.starts[0].containerSnapshot, { id: "original-snapshot" });
+  assert.deepEqual(f.egress, [{ props: { modelServices: ["openai", "anthropic"] } }]);
+  assert.deepEqual(f.records.get("record").modelServices, ["openai", "anthropic"]);
+  f.records.set("backup", { version: 2, createdAt: Date.now() });
+  assert.equal((await f.request({}, control, "pause")).status, 200);
+  assert.equal((await f.request({ timeoutSeconds: 600 }, control, "resume")).status, 200);
+  assert.deepEqual(f.egress[1], { props: { modelServices: ["openai", "anthropic"] } });
+  assert.deepEqual(await security(f), ["openai", "anthropic"]);
+  // The selection is durable even when the start itself is refused.
+  const exhausted = fixture({ status: "paused" });
+  exhausted.records.set("runtime", { day: new Date().toISOString().slice(0, 10), usedMs: 240 * 60000, startedAt: 0 });
+  const refused = await exhausted.request({ modelServices: ["anthropic"] }, control, "resume");
+  assert.equal(refused.status, 429); assert.equal(exhausted.starts.length, 0);
+  assert.deepEqual(exhausted.records.get("record").modelServices, ["anthropic"]);
+});
+
+test("resume of a running environment records the selection for its next start without touching the container", async () => {
+  const f = fixture({ modelServices: ["openai"] }, true);
+  const response = await f.request({ modelServices: ["anthropic"] }, control, "resume");
+  assert.equal(response.status, 200); assert.equal((await response.json()).state, "running");
+  assert.equal(f.starts.length, 0); assert.deepEqual(f.egress, []);
+  assert.deepEqual(f.policy.filter(p => p[0] !== "idle"), []);
+  assert.deepEqual(f.records.get("record").modelServices, ["anthropic"]);
+  assert.equal((await f.request({ timeoutSeconds: 600 }, control, "resume")).status, 200);
+  assert.deepEqual(f.records.get("record").modelServices, ["anthropic"]);
+  f.records.set("backup", { version: 2, createdAt: Date.now() });
+  assert.equal((await f.request({}, control, "pause")).status, 200);
+  assert.equal((await f.request({}, control, "resume")).status, 200);
+  assert.deepEqual(f.egress, [{ props: { modelServices: ["anthropic"] } }]);
+});
+
+test("resume rejects an invalid model service selection without changing the environment", async () => {
+  for (const modelServices of [null, "anthropic", ["unknown"], ["openai", "openai"], [1], Array(9).fill("openai")]) for (const running of [false, true]) {
+    const f = fixture({ status: running ? "running" : "paused" }, running);
+    const response = await f.request({ timeoutSeconds: 600, modelServices }, control, "resume");
+    assert.equal(response.status, 400, JSON.stringify(modelServices));
+    assert.equal((await response.json()).error, "invalid_model_services");
+    assert.equal(f.starts.length, 0); assert.deepEqual(f.egress, []);
+    assert.deepEqual(f.records.get("record"), f.record);
+  }
+  const stopped = fixture({ status: "running" });
+  const response = await stopped.request({ modelServices: ["anthropic"] }, control, "resume");
+  assert.equal(response.status, 409); assert.equal((await response.json()).error, "resume_requires_paused");
+  assert.deepEqual(stopped.records.get("record"), stopped.record);
+});
+
+test("the egress entrypoint enforces the model services it was started with", async t => {
+  const forwarded = [];
+  t.mock.method(globalThis, "fetch", async (request, options) => { forwarded.push([request.url, options]); return new Response("upstream"); });
+  const call = (props, url) => Object.assign(new AgentEgress(), { ctx: { props } }).fetch(new Request(url, { method: "POST", body: "{}" }));
+  const openai = "https://api.openai.com/v1/responses", anthropic = "https://api.anthropic.com/v1/messages";
+  for (const [props, url, allowed] of [
+    [{}, openai, true], [{}, anthropic, false],
+    [{ modelServices: ["openai"] }, anthropic, false],
+    [{ modelServices: ["anthropic"] }, anthropic, true], [{ modelServices: ["anthropic"] }, openai, false],
+    [{ modelServices: ["openai", "anthropic"] }, anthropic, true], [{ modelServices: ["openai", "anthropic"] }, openai, true],
+    [{ modelServices: [] }, openai, false], [{ modelServices: [] }, anthropic, false],
+  ]) {
+    forwarded.length = 0;
+    const response = await call(props, url);
+    if (allowed) { assert.equal(await response.text(), "upstream"); assert.deepEqual(forwarded, [[url, { redirect: "manual" }]]); }
+    else { assert.equal(response.status, 403); assert.deepEqual(await response.json(), { error: "destination_not_allowed" }); assert.deepEqual(forwarded, []); }
+  }
 });

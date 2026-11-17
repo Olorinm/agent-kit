@@ -66,6 +66,7 @@ for await (const chunk of provider.exec(ref.id, ['node', '--version'], {
 
 - `pause()` confirms that the request was accepted. Poll `info()` until paused before resuming. Lifetime expiry saves a filesystem snapshot and stops compute; process memory is not resumed.
 - Resume reuses an existing ID; a missing environment is never silently replaced.
+- `modelServices` on `create()`, or as `resume(id, seconds, { modelServices })`, selects which reviewed model endpoints the environment may reach, for example `['openai', 'anthropic']`. Omit it for the gateway default (`openai`); a resume without it keeps the stored list. A running environment keeps its list until its next start. The rule sets live in the [gateway source](cloudflare/README.md#managed-secrets-network-restrictions-and-independent-backups), and the guest cannot change the selection.
 - Network failure is never interpreted as “missing” or successful command completion. A command without an observed exit marks execution uncertain; reconcile before pausing or retrying.
 - Serialize lifecycle changes and work per environment in your scheduler. Persist refs in your database, check ownership before passing them here, and retain an operation ID in metadata to reconcile creation after a lost response. Metadata filters help discovery; they are not an authorization boundary.
 

@@ -13,6 +13,8 @@ export interface CreateEnvironment {
   onTimeout?: "kill" | "pause";
   env?: Record<string, string>;
   metadata?: Record<string, string>;
+  /** Model endpoints the environment may reach; the provider's default when omitted. */
+  modelServices?: string[];
 }
 export interface ExecOptions {
   cwd?: string;
@@ -39,7 +41,7 @@ export interface EnvironmentProvider {
   create(request: CreateEnvironment): Promise<EnvironmentRef>;
   info(id: string): Promise<EnvironmentInfo>;
   list(metadata?: Record<string, string>): Promise<EnvironmentInfo[]>;
-  resume(id: string, timeoutSeconds?: number): Promise<EnvironmentInfo>;
+  resume(id: string, timeoutSeconds?: number, options?: { modelServices?: string[] }): Promise<EnvironmentInfo>;
   pause(id: string): Promise<void>;
   destroy(id: string): Promise<void>;
   setTimeout(id: string, seconds: number): Promise<void>;

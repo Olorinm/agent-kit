@@ -21,3 +21,13 @@ test("missing credentials and malformed resource choices fail closed", async () 
   assert.throws(() => createSpec({ template: "node24", env: { KEY: 123 } }));
   assert.equal(createSpec({ template: "node24" }).onTimeout, "pause");
 });
+test("create requests carry model services only when the product selects them", () => {
+  const plain = createSpec({ template: "node24" });
+  assert.deepEqual(plain, { template: "node24", timeoutSeconds: 600, onTimeout: "pause", metadata: {}, env: {} });
+  assert.equal("modelServices" in plain, false);
+  assert.deepEqual(createSpec({ template: "node24", timeoutSeconds: 900, onTimeout: "kill", metadata: { owner: "one" }, env: { KEY: "value" }, modelServices: ["openai", "anthropic"] }),
+    { template: "node24", timeoutSeconds: 900, onTimeout: "kill", metadata: { owner: "one" }, env: { KEY: "value" }, modelServices: ["openai", "anthropic"] });
+  assert.deepEqual(createSpec({ template: "node24", modelServices: [] }).modelServices, []);
+  for (const modelServices of [null, "openai", ["unknown"], ["openai", "openai"], [1], { openai: true }, Array(9).fill("anthropic")])
+    assert.throws(() => createSpec({ template: "node24", modelServices }), { message: "invalid_model_services" }, JSON.stringify(modelServices));
+});

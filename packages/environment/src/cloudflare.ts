@@ -94,8 +94,8 @@ class CloudflareProvider implements EnvironmentProvider {
     if (!Array.isArray(values)) throw new EnvironmentError("invalid_response", "Invalid environment list.");
     return values.map(x => this.project(x)).filter(x => Object.entries(metadata).every(([k, v]) => x.metadata[k] === v));
   }
-  async resume(id: string, timeoutSeconds = 600) {
-    return this.project(await (await this.request(this.path(id, "/resume"), "POST", { timeoutSeconds })).json());
+  async resume(id: string, timeoutSeconds = 600, options: { modelServices?: string[] } = {}) {
+    return this.project(await (await this.request(this.path(id, "/resume"), "POST", { timeoutSeconds, modelServices: options.modelServices })).json());
   }
   async pause(id: string) {
     if (this.hasUncertainExecution(id)) throw new EnvironmentError("execution_uncertain", "Reconcile execution before pausing.");
