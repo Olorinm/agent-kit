@@ -12,6 +12,7 @@ import type { HostTools, HostToolResult } from "./tools.js";
 import type { WorkDependencyWait } from "./sessions.js";
 import { AgentLedger, type TurnState } from "../ledger/ledger.js";
 import { cardBody, cardKind, type LedgerControl } from "../ledger/control.js";
+import { textDelivery, toolDelivery, type WorkSender } from "./delivery.js";
 
 interface ToolReceipt { hash: string; phase: "executing" | "completed" | "uncertain"; result?: HostToolResult; }
 
@@ -202,7 +203,7 @@ export class HostWorker {
         let attachments = undefined as import("../communication/types.js").MediaContent[] | undefined;
         try { attachments = await this.communication?.attachments(claim.id); }
         catch (error) { this.work.update(claim.claimId, "fail", `附件读取失败：${error instanceof Error && /^[a-z_]+$/.test(error.message) ? error.message : "attachment_read_failed"}。请重新发送或检查渠道权限。`, undefined, this.instanceId); return; }
-        const authored = this.store.get<HostStartInput>("work_session_inputs", claim.id);
+        const authored = this.store.get<HostStartInput & { sender?: WorkSender }>("work_session_inputs", claim.id);
         const input = Message.fromJSON(claim.input).parts.filter((part) => part.content?.$case === "text").map((part) => part.content!.value).join("\n");
         if (!input.trim() && !authored?.inputItems?.length && authored?.mode !== "compact") { this.work.update(claim.claimId, "fail", "此执行入口目前需要文字输入。", undefined, this.instanceId); return; }
         const blocked = this.store.entries<RunBinding>("communication_runs").some(({ value }) => value.contextId === claim.contextId && value.phase === "unknown");
@@ -227,15 +228,15 @@ export class HostWorker {
             this.store.set("execution_sessions", claim.contextId, { ...savedSession, channelTools: withTools });
           const admission = authored?.admission ?? this.options.admission?.(claim.contextId, claim.id);
           const delivered = admission && admission.kind !== "owner" && authored?.mode !== "compact"
-            ? await this.deliveryInput(runtimeId, input, admission, authored?.inputItems) : undefined;
+            ? await this.deliveryInput(runtimeId, input, admission, authored?.inputItems, authored?.sender) : undefined;
           // The agent's default settings apply to every turn; a turn's own selection wins. Compaction takes none.
           const defaults = authored?.mode === "compact" ? undefined : this.store.get<Record<string, unknown>>(DEFAULT_SETTINGS, "default");
           const settings = defaults || authored?.settings ? { ...defaults, ...authored?.settings } : undefined;
           submissionAttempted = true;
           const started = await this.host.start({ sessionId, runtimeId,
-            instructions: this.instructions + (withTools ? this.tools!.instructions : ""), input: delivered ? "" : input,
+            instructions: this.instructions + (withTools ? this.tools!.instructions : ""), input: delivered ? delivered.input : input,
             requestKey: binding.requestKey!,
-            ...(delivered ? { toolOutput: delivered } : authored?.inputItems ? { inputItems: authored.inputItems } : {}),
+            ...(delivered ? delivered.toolOutput ? { toolOutput: delivered.toolOutput } : {} : authored?.inputItems ? { inputItems: authored.inputItems } : {}),
             ...(settings ? { settings } : {}),
             ...(authored?.mode ? { mode: authored.mode } : {}),
             ...(admission ? { admission } : {}),
@@ -314,7 +315,29 @@ export class HostWorker {
       this.lastError = "";
     } catch (error) { await this.recordFailure(error); }
   }
-  private async deliveryInput(runtimeId: string, input: string, admission: HostAdmission, items?: Record<string, unknown>[]): Promise<Record<string, unknown>> {
+  /**
+   * Whether the runtime takes a standalone native tool output, as its Host describes it now (`input.nativeItems`).
+   * Only an explicit `unsupported` selects the text form: a Host that does not describe its runtimes, or does not
+   * answer, is sent the tool output, as before.
+   */
+  private async acceptsToolOutput(runtimeId: string): Promise<boolean> {
+    if (!this.host.inspectRuntime) return true;
+    try {
+      const description = await this.host.inspectRuntime(runtimeId) as { capabilities?: { features?: Record<string, { status?: unknown } | undefined> } } | null;
+      return description?.capabilities?.features?.["input.nativeItems"]?.status !== "unsupported";
+    } catch { return true; }
+  }
+  /**
+   * Delegated and scheduled input is never a human user message. A runtime that accepts native tool output gets it as
+   * one; any other runtime gets the text with a fixed notice and its source (`textDelivery`).
+   */
+  private async deliveryInput(runtimeId: string, input: string, admission: HostAdmission, items?: Record<string, unknown>[],
+    sender?: WorkSender): Promise<{ input: string; toolOutput?: Record<string, unknown> }> {
+    if (!(await this.acceptsToolOutput(runtimeId))) {
+      // Typed items are a native input form too; a text delivery cannot carry them.
+      if (items?.length) throw new WorkError("native_tool_delivery_typed_input_unsupported", 422);
+      return { input: textDelivery(admission, input, sender) };
+    }
     let skills: Array<{ name: string; path: string }> | undefined;
     if (items?.length) {
       if (items.some(item => item.type !== "skill" || typeof item.name !== "string" || typeof item.path !== "string"))
@@ -332,9 +355,7 @@ export class HostWorker {
     // Native tool output is deliberately distinct from a human user message. Native Codex
     // cannot combine it with typed skill input; verified skill references remain evidence
     // for on-demand loading, not a claim that native explicit skill injection occurred.
-    return { namespace: "mau", name: admission.kind === "schedule" ? "proactive_work" : "work_sessions", retain: false,
-      output: JSON.stringify({ source: { kind: admission.kind, reference: admission.reference }, message: input,
-        ...(skills ? { skills, skillLoading: "verified_references" } : {}) }) };
+    return { input: "", toolOutput: toolDelivery(admission, input, sender, skills) };
   }
   private async recordFailure(error: unknown) {
       this.lastError = error instanceof Error && /^[a-z0-9_]+$/.test(error.message) ? error.message : "host_observation_failed";
