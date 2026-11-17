@@ -5,6 +5,30 @@ tag publishes a GitHub Release whose notes are this file's section for that vers
 section in the version-bump commit before tagging. Changes up to the versions listed under
 0.8.0-alpha.1 are in each package's own `CHANGELOG.md`.
 
+## [0.11.0-alpha.2] - 2026-11-18
+
+- **Environment:** the model endpoints a sandbox may reach are selected per environment. The
+  Cloudflare gateway's outbound allowlist keeps its rules as reviewed source, grouped into named
+  model services (`openai`, and new `anthropic`: `POST /v1/messages`,
+  `POST /v1/messages/count_tokens` and `GET /v1/models` on `api.anthropic.com`), and the product
+  names the services of an environment with `modelServices` on create and on resume. The gateway
+  keeps the list on the environment's record and gives it to the egress entrypoint at each container
+  start; a running container keeps the list it started with. Without a list the default is
+  `openai`, which admits exactly what the gateway admitted before, and package fetches (npm,
+  Debian) are unchanged. The guest cannot change the list. `GET /v1/environments/:id/security`
+  reports it.
+- **Environment:** `CreateEnvironment.modelServices` and
+  `resume(id, timeoutSeconds, { modelServices })` in the client. A caller that passes neither sends
+  the same requests as before.
+- **Router:** `WorkSessions.submit` and `WorkSessions.request` accept `display`, a JSON object the
+  product defines (at most 64,000 bytes) for showing the input or the card. It is recorded on the
+  input event or on the card and returned by the web chat API as the message event's `display` or
+  as `card.display`. Router does not interpret it, and it is not part of the model input, the
+  context, the admission, the Host request or a message sent to an external channel. Too large a
+  value is refused with `work_display_too_large` or `owner_request_display_too_large`. Work
+  submitted without it is recorded exactly as before; Host scope, session definitions and
+  execution bindings are unchanged.
+
 ## [0.11.0-alpha.1] - 2026-11-17
 
 - **Router:** an embedding product can work in an agent's owner conversation without a message
