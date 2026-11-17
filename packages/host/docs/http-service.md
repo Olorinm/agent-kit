@@ -31,6 +31,13 @@ native `inputItems`; a tool-delivered task can reference installed skills for
 native on-demand reading. Never silently convert a delegated message into a
 new human instruction to bypass this distinction.
 
+`runtimes/inspect` reports the availability of both forms as
+`capabilities.features["input.nativeItems"]`. A runtime that reports it
+`unsupported` refuses `inputItems` (`native_input_items_unsupported`) and
+`toolOutput` (`native_tool_output_unsupported`) before a run is created. Host does
+not convert either into text. A caller that must deliver input from a non-human
+source to such a runtime sends it as `input` and states its source in that text.
+
 Service owners can explicitly enable the complete native extension in a Codex
 profile. This administrative interface has the authority of that native server;
 do not expose its bearer token or arbitrary methods as a product's model tool.

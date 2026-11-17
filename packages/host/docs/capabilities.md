@@ -70,6 +70,8 @@ Native capabilities can be more specific than this shared description. For ACP, 
 
 Custom `ServiceRuntime` implementations may supply `capabilities`, using `unknownCapabilities(kernel, 'http')` as a starting point. The service leaves undeclared features unknown and derives control availability from the installed control handlers. Disabling a control prevents it from being advertised as usable.
 
+`input.nativeItems` covers native typed input (`inputItems`) and a standalone tool-output turn (`toolOutput`). The service derives it from the runtime's `inputItems` flag, the same flag that admits those requests, so a custom runtime without it is reported as `unsupported`.
+
 Custom attachment delivery additionally requires `inputs: { attachments: true, images: 'native' | 'negotiated' | 'workspace' }`. Without it, the service rejects attachment requests before creating a session/task or saving files. These explicit media hints also populate discovery when a custom runtime has no full capability declaration. Compaction never accepts attachments.
 
 Capability metadata is not a live-test certificate. Consult the [support matrix](kernel-support.md) for exact tested versions, platforms and native probes. Keep these descriptions, their implementation paths and consumer tests in sync when adding capabilities.
