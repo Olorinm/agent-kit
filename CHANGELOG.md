@@ -5,6 +5,50 @@ tag publishes a GitHub Release whose notes are this file's section for that vers
 section in the version-bump commit before tagging. Changes up to the versions listed under
 0.8.0-alpha.1 are in each package's own `CHANGELOG.md`.
 
+## [Unreleased]
+
+- **Router:** an embedding product can work in an agent's owner conversation without a message
+  from the owner. `WorkSessions.openOwnerConversation()` returns its session id and makes it a
+  `submit` target before the owner has written; the owner's later messages continue the same
+  session and native thread. Work submitted there earlier used to open a Host session without the
+  channel tool, which the owner's first message then conflicted with; an existing session is not
+  changed.
+- **Router:** `WorkSessions.submit` accepts `reply: { connectionId? }` for a turn in the owner
+  conversation. The turn then answers the owner like a turn started by a channel message: its
+  answer, notices and the cards of its questions and approvals are recorded once and sent through
+  the delivery queue along a route chosen by the `connectionId` rule of `deliver` (omitted: the
+  connection the owner was last on; `web`: the transcript; a notify connection: a push; another
+  connection: the owner's conversation there, or `suppressed` with
+  `no_conversation_on_connection`). The notify policy applies as for an owner's web turn, and
+  `get`, `lookup` and `wait` return the receipt as `reply`. Work submitted without `reply` is
+  unchanged.
+- **Router:** owner requests. `WorkSessions.request` puts a card with choices in the owner
+  conversation that belongs to no run, for a decision the product needs about something that
+  happens elsewhere. It is an ordinary ledger card (`source: "product"`), shown and answered on
+  the web and in channels like a card of a run; the first answer wins. It is idempotent by event
+  id, expires at `expiresAt`, and can be withdrawn; `lookupRequest` and `withdrawRequest` read
+  and close it.
+- **Router:** `WorkSessions.settlements({ after, limit })` lists, by a durable cursor, the work
+  events whose turn ended and the owner requests that were closed, so a product does not have to
+  poll each event.
+- **Router:** delegated and scheduled input reaches runtimes that take no native tool output.
+  Before such a turn Router asks the Host whether the runtime takes native input items. A runtime
+  that reports them as unsupported gets the input as text behind a fixed notice that names its
+  source and says that no human wrote or authorized it; such turns used to fail with
+  `native_tool_output_unsupported`. Every other case, including Codex and a Host that does not
+  answer, gets the same tool output as before.
+- **Router:** `WorkSessions.submit` accepts `sender: { kind: "agent", id, name }` for delegated
+  and scheduled input. The sender is recorded on the input event, returned by the web chat API
+  as the event's `sender`, and included in the source the model is given. The web API also
+  returns `origin` (`work`, `delegation` or `schedule`) on inputs that no channel message
+  carried.
+- **Router:** ledger schema step 6 adds `ledger_pending_inputs.route`, `ledger_cards.route` and
+  the `ledger_settlements` table. Existing rows are not rewritten. Host scope, session definitions
+  and execution bindings of existing sessions are unchanged, and no tool definition changed.
+- **Host:** runtime inspection reports `input.nativeItems` from the flag that admits `inputItems`
+  and `toolOutput`, so a caller can tell before submitting whether a runtime takes them. A custom
+  runtime is reported as `supported` or `unsupported` by that flag instead of `unknown`.
+
 ## [0.10.0-alpha.4] - 2026-11-13
 
 - **Host:** a Codex turn that selects no model names the runtime's configured `model` again.

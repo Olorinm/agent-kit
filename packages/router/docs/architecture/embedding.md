@@ -52,7 +52,8 @@ the service's namespace or throws. Without it only the edge identity signs owner
 | `extension` | The channel runtime built from the agent's configuration: `communication`, `sessions`, `observation`, `web`, `control`, `room`. It is `undefined` for an agent without a channel configuration, and `sessions` and `observation` exist only with a Host. |
 
 The runtime holds a lease on the store, so a second process cannot open the same agent. See
-[Native sessions](../guides/native-sessions.md) for `extension.sessions`.
+[Native sessions](../guides/native-sessions.md) for `extension.sessions`: product-authored work, turns that answer the
+owner, owner requests and the settlement feed.
 
 Channels are per-agent connections (see the [connection guide](../guides/connections.md)). `router.start()` starts
 them once and `router.close()` stops and drains them. The product needs no polling loop of its own.
