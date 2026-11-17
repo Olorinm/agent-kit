@@ -12,7 +12,7 @@ import type { HostTools, HostToolResult } from "./tools.js";
 import type { WorkDependencyWait } from "./sessions.js";
 import { AgentLedger, type TurnState } from "../ledger/ledger.js";
 import { cardBody, cardKind, STEER_COMMAND, STOP_COMMAND, type LedgerControl } from "../ledger/control.js";
-import { textDelivery, toolDelivery, type WorkSender } from "./delivery.js";
+import { textDelivery, toolDelivery, type WorkInput, type WorkSender } from "./delivery.js";
 
 interface ToolReceipt { hash: string; phase: "executing" | "completed" | "uncertain"; result?: HostToolResult; }
 
@@ -208,7 +208,7 @@ export class HostWorker {
         let attachments = undefined as import("../communication/types.js").MediaContent[] | undefined;
         try { attachments = await this.communication?.attachments(claim.id); }
         catch (error) { this.work.update(claim.claimId, "fail", `附件读取失败：${error instanceof Error && /^[a-z_]+$/.test(error.message) ? error.message : "attachment_read_failed"}。请重新发送或检查渠道权限。`, undefined, this.instanceId); return; }
-        const authored = this.store.get<HostStartInput & { sender?: WorkSender }>("work_session_inputs", claim.id);
+        const authored = this.store.get<WorkInput>("work_session_inputs", claim.id);
         const input = Message.fromJSON(claim.input).parts.filter((part) => part.content?.$case === "text").map((part) => part.content!.value).join("\n");
         if (!input.trim() && !authored?.inputItems?.length && authored?.mode !== "compact") { this.work.update(claim.claimId, "fail", "此执行入口目前需要文字输入。", undefined, this.instanceId); return; }
         const blocked = this.store.entries<RunBinding>("communication_runs").some(({ value }) => value.contextId === claim.contextId && value.phase === "unknown");

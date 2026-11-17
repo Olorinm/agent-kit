@@ -1,7 +1,9 @@
-import type { HostAdmission } from "./host.js";
+import type { HostAdmission, HostStartInput } from "./host.js";
 
 /** Who an input is from when the owner did not write it (`WorkSessions.submit` `sender`). */
 export interface WorkSender { kind: "agent"; id: string; name: string }
+/** What a work submission keeps for its turn (`work_session_inputs`). */
+export type WorkInput = HostStartInput & { sender?: WorkSender };
 
 const source = (admission: HostAdmission, sender?: WorkSender) =>
   ({ kind: admission.kind, reference: admission.reference, ...(sender ? { sender } : {}) });

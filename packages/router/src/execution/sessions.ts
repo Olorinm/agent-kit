@@ -9,6 +9,7 @@ import { runtimeWorkingDirectory } from "./host.js";
 import { DEFAULT_SETTINGS, type ExecutionSession, type RunBinding } from "./host-worker.js";
 import { digest, key } from "./protocol.js";
 import { CliWork, WorkError } from "./work.js";
+import type { WorkInput, WorkSender } from "./delivery.js";
 import { closeRequest, createRequest, expireRequests, ownerRequestSchema, requestCardId, requestDeliveryId, type OwnerRequestInput } from "../ledger/requests.js";
 import { AgentLedger, legacySession } from "../ledger/ledger.js";
 import { personId } from "../ledger/registry.js";
@@ -24,6 +25,7 @@ const admissionSchema = z.object({ kind: z.enum(["owner", "delegation", "schedul
   }).strict().optional(),
 }).strict();
 const replySchema = z.object({ connectionId: z.string().min(1).max(160).optional() }).strict();
+const senderSchema = z.object({ kind: z.literal("agent"), id: identifier, name: z.string().trim().min(1).max(200) }).strict();
 export interface WorkSessionSubmission {
   eventId: string; sessionId?: string | undefined; input: string; admission: HostAdmission;
   context?: unknown | undefined; inputItems?: Record<string, unknown>[] | undefined; settings?: Record<string, unknown> | undefined; mode?: "turn" | "compact" | undefined;
@@ -34,6 +36,12 @@ export interface WorkSessionSubmission {
    * owner's conversation on it.
    */
   reply?: { connectionId?: string | undefined } | undefined;
+  /**
+   * Who the input is from when it is another agent's message. It is recorded as the sender of the input event and
+   * told to the model with the source of the delivery. Only for delegated and scheduled work: the owner's own work
+   * is the owner's.
+   */
+  sender?: WorkSender | undefined;
 }
 /**
  * Where a turn that answers the owner sends its answer, and what became of that send. `pending` until the answer is
@@ -47,6 +55,7 @@ interface RouteFacts { connectionId: string; push?: boolean; error?: string }
 interface WorkEvent { eventId: string; sessionId: string; hash: string; taskId: string; reply?: RouteFacts; }
 interface RequestRecord { hash: string; cardId: string; route: RouteFacts; expiresAt: string }
 export type { OwnerRequestInput } from "../ledger/requests.js";
+export type { WorkSender } from "./delivery.js";
 /** An owner request as the product reads it (`WorkSessions.request`). */
 export interface OwnerRequestResult {
   eventId: string; cardId: string; sessionId: string; expiresAt: string;
@@ -183,6 +192,8 @@ export class WorkSessions {
     if (Buffer.byteLength(input.input) > 24_000) throw new WorkError("work_input_too_large", 413);
     const sessionId = input.sessionId ?? `w-${digest(key(this.agentId, input.eventId)).slice(0, 40)}`;
     const reply = input.reply === undefined ? undefined : replySchema.parse(input.reply);
+    const sender = input.sender === undefined ? undefined : senderSchema.parse(input.sender);
+    if (sender && input.admission.kind === "owner") throw new WorkError("work_sender_admission_mismatch", 403);
     if (reply) {
       if (sessionId !== this.ownerSession) throw new WorkError("reply_requires_owner_conversation", 403);
       if (input.mode === "compact") throw new WorkError("compaction_reply_unsupported", 400);
@@ -215,10 +226,11 @@ export class WorkSessions {
         ...(input.context === undefined ? {} : { context: input.context }),
         ...(input.inputItems ? { inputItems: input.inputItems } : {}),
         ...(input.settings ? { settings: input.settings } : {}), ...(input.mode ? { mode: input.mode } : {}),
-      } satisfies HostStartInput);
+        ...(sender ? { sender } : {}),
+      } satisfies WorkInput);
       this.store.set("work_session_events", input.eventId, { eventId: input.eventId, sessionId, taskId: task.id, hash,
         ...(route ? { reply: routeFacts(route, reply!.connectionId) } : {}) } satisfies WorkEvent);
-      this.record(input, sessionId, task.id, route);
+      this.record({ ...input, sender }, sessionId, task.id, route);
     });
     return this.get(input.eventId);
   }
@@ -232,11 +244,12 @@ export class WorkSessions {
       const kind = input.admission.kind === "owner" ? "work" : input.admission.kind;
       if (sessionId === this.ownerSession) ledger.ensureSession(sessionId, "owner_main", "owner-main");
       else ledger.ensureSession(sessionId, kind, `${kind}:${sessionId}`);
-      const owner = input.admission.kind === "owner";
-      const event = ledger.append(sessionId, { kind: "message", role: "user", senderType: owner ? "person" : "system",
-        senderId: owner ? personId(this.owner) : input.admission.kind, idempotencyKey: `work:${input.eventId}`, turnId: taskId,
+      const owner = input.admission.kind === "owner", sender = input.sender;
+      const event = ledger.append(sessionId, { kind: "message", role: "user", senderType: owner ? "person" : sender ? "agent" : "system",
+        senderId: owner ? personId(this.owner) : sender ? sender.id : input.admission.kind, idempotencyKey: `work:${input.eventId}`, turnId: taskId,
         ...(route?.conversationId ? { conversationId: route.conversationId } : {}),
-        body: { text: input.input, origin: owner ? "work" : input.admission.kind, reference: input.admission.reference } }).event;
+        body: { text: input.input, origin: owner ? "work" : input.admission.kind, reference: input.admission.reference,
+          ...(sender ? { sender: { kind: sender.kind, id: sender.id, name: sender.name } } : {}) } }).event;
       ledger.queueInput(`work:${input.eventId}`, sessionId, event.eventId, undefined, route ? { route } : {});
       ledger.updateInput(`work:${input.eventId}`, "started", { turnId: taskId });
       ledger.ensureTurn({ turnId: taskId, sessionKey: sessionId, admission: kind, originEventId: event.eventId, originConversationId: route?.conversationId ?? null,
