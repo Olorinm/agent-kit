@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest";
+import { createHash } from "node:crypto";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -66,7 +67,7 @@ describe("ledger migrations", () => {
       expect(versions(a[name]), name).toEqual(versions(b[name]));
       expect(a[name].get("meta", "probe"), name).toBe(name);
     }
-    expect(versions(a.agent)).toEqual({ ledger_schema_version: 5 });
+    expect(versions(a.agent)).toEqual({ ledger_schema_version: 6 });
     expect(versions(a.hub)).toEqual({ ledger_schema_version: 2, hub_rooms_schema_version: 1, hub_identity_schema_version: 1 });
     expect(versions(a.registry)).toEqual({ registry_schema_version: 2 });
   });
@@ -106,6 +107,56 @@ describe("ledger migrations", () => {
     expect(ledger.delivery("out-web")).toBeUndefined();
     expect(agent.entries("communication_inbox")).toEqual([]); expect(agent.entries("communication_outbox")).toEqual([]);
   });
+  it("adds owner routes and settlements to a store of the previous step without touching its rows", async () => {
+    const { AGENT_LEDGER_V1, AGENT_LEDGER_V2, AGENT_LEDGER_V3, AGENT_LEDGER_V4, AGENT_LEDGER_V5 } = await import("../src/ledger/schema.js");
+    const path = join(dir(), "agent.sqlite"), before = store(path, "agent-1");
+    [AGENT_LEDGER_V1, AGENT_LEDGER_V2, AGENT_LEDGER_V3, AGENT_LEDGER_V4, AGENT_LEDGER_V5].forEach((sql, index) => before.migrate(index + 1, sql));
+    // A conversation as the previous release left it: a turn that waits on a card, a queued input, and a queued delivery.
+    before.db.exec(`INSERT INTO ledger_sessions(session_key,kind,label,last_seq,created_at,updated_at) VALUES('c-main','owner_main','owner-main',2,1,1);
+      INSERT INTO ledger_session_windows(session_key,window,context_id,opened_at) VALUES('c-main',1,'c-main',1);
+      INSERT INTO ledger_events(session_key,seq,event_id,window,kind,role,sender_type,sender_id,turn_id,idempotency_key,created_at,body)
+        VALUES('c-main',1,'ev_1',1,'message','user','system','schedule','turn-1','work:rule-1',1,'{"text":"check","origin":"schedule","reference":"rule-1"}'),
+          ('c-main',2,'ev_2',1,'card','assistant','agent','agent-1','turn-1','card:cd_1',2,'{"card":{"cardId":"cd_1","callId":"call-1","kind":"approval","text":"ok?","choices":[{"choiceId":"0","label":"同意"},{"choiceId":"1","label":"拒绝"}],"freeText":false}}');
+      INSERT INTO ledger_pending_inputs(input_id,session_key,event_id,state,turn_id,created_at,updated_at) VALUES('work:rule-1','c-main','ev_1','started','turn-1',1,1),('in-2','c-main','ev_9','queued',NULL,2,2);
+      INSERT INTO ledger_turns(turn_id,session_key,window,admission,origin_event_id,state,created_at) VALUES('turn-1','c-main',1,'schedule','ev_1','running',1);
+      INSERT INTO ledger_cards(card_id,call_id,run_id,claim_id,turn_id,session_key,event_id,kind,status,deadline_at,updated_at,source) VALUES('cd_1','call-1','run-1','claim-1','turn-1','c-main','ev_2','approval','pending',NULL,2,'host');
+      INSERT INTO ledger_card_tokens(token,card_id,choice_id,result) VALUES('t0','cd_1','0','{"decision":"accept"}'),('t1','cd_1','1','{"decision":"decline"}');
+      INSERT INTO ledger_deliveries(delivery_id,event_id,conversation_id,connection_id,route,purpose,status,created_at,updated_at,text,turn_id)
+        VALUES('out-1','ev_2','cv_1','chat','{"connectionId":"chat","target":"room","messageId":"m1","data":{},"channel":"chat"}','card','queued',2,2,'ok?','turn-1')`);
+    const dump = (value: DurableStore) => Object.fromEntries(["ledger_sessions", "ledger_events", "ledger_pending_inputs", "ledger_turns", "ledger_cards", "ledger_card_tokens", "ledger_deliveries"]
+      .map((table) => [table, (value.db.prepare(`SELECT * FROM ${table} ORDER BY rowid`).all() as Array<Record<string, unknown>>).map(({ route: _route, ...row }) => table === "ledger_deliveries" ? { ...row, route: _route } : row)]));
+    const rows = dump(before);
+    before.close();
+    const after = store(path, "agent-1"), ledger = AgentLedger.open(after);
+    expect(versions(after)).toEqual({ ledger_schema_version: 6 });
+    // Every row is what it was; the new columns are empty and the new table has no rows.
+    expect(dump(after)).toEqual(rows);
+    expect(after.db.prepare("SELECT COUNT(*) AS n FROM ledger_pending_inputs WHERE route IS NOT NULL").get()!.n).toBe(0);
+    expect(after.db.prepare("SELECT COUNT(*) AS n FROM ledger_cards WHERE route IS NOT NULL").get()!.n).toBe(0);
+    expect(ledger.settlements()).toEqual([]);
+    // The stored records read and move as before: the card of the run is not a product card, and it still closes.
+    expect(ledger.cardRecord("cd_1")).toMatchObject({ status: "pending", source: "host", route: null, turnId: "turn-1" });
+    expect(ledger.overdueCards(Date.now() + 1e12)).toEqual([]);
+    expect(ledger.input("work:rule-1")).toMatchObject({ state: "started", turn_id: "turn-1", route: null });
+    expect(ledger.dueInputs()).toEqual(["in-2"]);
+    expect(ledger.dueDeliveries()).toEqual(["out-1"]);
+    expect(ledger.planAnswer("cd_1", { key: "web:1", result: { decision: "accept" }, by: "p_1", surface: "web" })).toBe("planned");
+    expect(ledger.cardStatus("cd_1", "approved")).toBe(true);
+    expect(ledger.settlements()).toEqual([]);
+    expect(ledger.turnState("turn-1", "completed")).toMatchObject({ kind: "turn" });
+    // The new records are accepted beside them, and the cursor only grows.
+    ledger.settle("work", "rule-1"); ledger.settle("work", "rule-1"); ledger.settle("request", "ask-1");
+    expect(ledger.settlements().map((row) => [row.seq, row.kind, row.eventId])).toEqual([[1, "work", "rule-1"], [2, "request", "ask-1"]]);
+    // A sequence number is never given out twice, also when rows are gone.
+    after.db.exec("DELETE FROM ledger_settlements");
+    ledger.settle("work", "rule-2");
+    expect(ledger.settlements().map((row) => row.seq)).toEqual([3]);
+    after.close();
+    // Opening it again changes nothing.
+    const again = store(path, "agent-1"); AgentLedger.open(again);
+    expect(versions(again)).toEqual({ ledger_schema_version: 6 });
+    expect(AgentLedger.open(again).settlements().map((row) => row.seq)).toEqual([3]);
+  });
   it("is idempotent when the stores are opened again", () => {
     const root = dir();
     alpha10(root);
@@ -120,5 +171,13 @@ describe("ledger migrations", () => {
     expect(shipped.AGENT_LEDGER_V2).toBe(ALPHA10_AGENT_LEDGER_V2);
     expect(shipped.OWNER_HUB_V1).toBe(ALPHA10_OWNER_HUB_V1);
     expect(shipped.REGISTRY_V1).toBe(ALPHA10_REGISTRY_V1);
+  });
+  it("keeps the later shipped agent ledger steps unedited", async () => {
+    const shipped = await import("../src/ledger/schema.js"), sha = (sql: string) => createHash("sha256").update(sql).digest("hex");
+    expect([shipped.AGENT_LEDGER_V3, shipped.AGENT_LEDGER_V4, shipped.AGENT_LEDGER_V5].map(sha)).toEqual([
+      "8f5affa678257ffc3d0fca546f008daaebded25914f771424a480f26728f4c9a",
+      "21158f0bae1cc0798ccdfeedd4e13c8d71bdd656948813092fdd807af5e4b807",
+      "775a009b39d160c67dbf0a7fb61f31d63bb5994e25ce50653e849b4a154139f2",
+    ]);
   });
 });

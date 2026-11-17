@@ -203,3 +203,20 @@ INSERT OR IGNORE INTO ledger_deliveries(delivery_id, event_id, conversation_id, 
 UPDATE ledger_deliveries SET status = 'suppressed', error = 'delivery_without_content' WHERE status IN ('created','queued','sending')
   AND delivery_id NOT IN (SELECT id FROM documents WHERE collection = 'communication_outbox');
 DELETE FROM documents WHERE collection IN ('communication_inbox','communication_outbox','communication_threads');`;
+
+/**
+ * Output the embedding product routes to the owner without a received message (ADR 0005 section 20).
+ * `ledger_pending_inputs.route` is the owner route of a work turn that answers in the owner conversation, and
+ * `ledger_cards.route` the owner route of a card that belongs to no run. Both stay null for every existing row and for
+ * everything a channel message starts, which keeps its route in its claim.
+ *
+ * `ledger_settlements` is the ordered record of product-started things that reached their end: a work event whose
+ * task became terminal, and an owner request that was answered, expired or withdrawn. `seq` only grows, so a reader
+ * keeps one cursor. It starts empty: what ended before this step is read by its event id, as before.
+ */
+export const AGENT_LEDGER_V6 = `
+ALTER TABLE ledger_pending_inputs ADD COLUMN route TEXT;
+ALTER TABLE ledger_cards ADD COLUMN route TEXT;
+CREATE TABLE ledger_settlements(
+  seq INTEGER PRIMARY KEY AUTOINCREMENT, kind TEXT NOT NULL CHECK(kind IN ('work','request')), event_id TEXT NOT NULL,
+  settled_at INTEGER NOT NULL, UNIQUE(kind, event_id));`;
