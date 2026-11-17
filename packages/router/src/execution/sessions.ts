@@ -10,7 +10,8 @@ import { DEFAULT_SETTINGS, type ExecutionSession, type RunBinding } from "./host
 import { digest, key } from "./protocol.js";
 import { CliWork, WorkError } from "./work.js";
 import type { WorkInput, WorkSender } from "./delivery.js";
-import { closeRequest, createRequest, expireRequests, ownerRequestSchema, requestCardId, requestDeliveryId, type OwnerRequestInput } from "../ledger/requests.js";
+import { closeRequest, createRequest, displaySchema, displayTooLarge, expireRequests, ownerRequestSchema, requestCardId, requestDeliveryId,
+  type OwnerRequestInput, type WorkDisplay } from "../ledger/requests.js";
 import { AgentLedger, legacySession } from "../ledger/ledger.js";
 import { personId } from "../ledger/registry.js";
 import { WEB_CONNECTION } from "../ledger/surfaces.js";
@@ -42,6 +43,14 @@ export interface WorkSessionSubmission {
    * is the owner's.
    */
   sender?: WorkSender | undefined;
+  /**
+   * What to show for this input: a JSON object the product defines, at most 64,000 bytes serialized. For example the
+   * message as its sender wrote it, when `input` is the text written for the model. It is recorded on the input event
+   * and returned by the web chat API as the event's `display`. Router does not interpret it, and it never reaches the
+   * model: it is no part of the input, the context, the admission or the Host request. Like every other member it
+   * belongs to the submission, so the same `eventId` with another `display` is `work_event_id_reused`.
+   */
+  display?: WorkDisplay | undefined;
 }
 /**
  * Where a turn that answers the owner sends its answer, and what became of that send. `pending` until the answer is
@@ -54,7 +63,7 @@ interface SessionMetadata { createdAt: string; title?: string; parentSessionId?:
 interface RouteFacts { connectionId: string; push?: boolean; error?: string }
 interface WorkEvent { eventId: string; sessionId: string; hash: string; taskId: string; reply?: RouteFacts; }
 interface RequestRecord { hash: string; cardId: string; route: RouteFacts; expiresAt: string }
-export type { OwnerRequestInput } from "../ledger/requests.js";
+export type { OwnerRequestInput, WorkDisplay } from "../ledger/requests.js";
 export type { WorkSender } from "./delivery.js";
 /** An owner request as the product reads it (`WorkSessions.request`). */
 export interface OwnerRequestResult {
@@ -194,6 +203,8 @@ export class WorkSessions {
     const reply = input.reply === undefined ? undefined : replySchema.parse(input.reply);
     const sender = input.sender === undefined ? undefined : senderSchema.parse(input.sender);
     if (sender && input.admission.kind === "owner") throw new WorkError("work_sender_admission_mismatch", 403);
+    const display = input.display === undefined ? undefined : displaySchema.parse(input.display);
+    if (display && displayTooLarge(display)) throw new WorkError("work_display_too_large", 413);
     if (reply) {
       if (sessionId !== this.ownerSession) throw new WorkError("reply_requires_owner_conversation", 403);
       if (input.mode === "compact") throw new WorkError("compaction_reply_unsupported", 400);
@@ -230,13 +241,13 @@ export class WorkSessions {
       } satisfies WorkInput);
       this.store.set("work_session_events", input.eventId, { eventId: input.eventId, sessionId, taskId: task.id, hash,
         ...(route ? { reply: routeFacts(route, reply!.connectionId) } : {}) } satisfies WorkEvent);
-      this.record({ ...input, sender }, sessionId, task.id, route);
+      this.record({ ...input, sender, display }, sessionId, task.id, route);
     });
     return this.get(input.eventId);
   }
   /**
    * ADR 0005 6.7: the submitted input and its turn, in the target or a fresh work session, with the admission. With an
-   * owner route (ADR 20.2) the input keeps it, and the turn answers along it.
+   * owner route (ADR 20.2) the input keeps it, and the turn answers along it. `display` is kept here only: on the event.
    */
   private record(input: WorkSessionSubmission, sessionId: string, taskId: string, route?: OwnerRoute) {
     const ledger = AgentLedger.open(this.store);
@@ -249,7 +260,8 @@ export class WorkSessions {
         senderId: owner ? personId(this.owner) : sender ? sender.id : input.admission.kind, idempotencyKey: `work:${input.eventId}`, turnId: taskId,
         ...(route?.conversationId ? { conversationId: route.conversationId } : {}),
         body: { text: input.input, origin: owner ? "work" : input.admission.kind, reference: input.admission.reference,
-          ...(sender ? { sender: { kind: sender.kind, id: sender.id, name: sender.name } } : {}) } }).event;
+          ...(sender ? { sender: { kind: sender.kind, id: sender.id, name: sender.name } } : {}),
+          ...(input.display ? { display: input.display } : {}) } }).event;
       ledger.queueInput(`work:${input.eventId}`, sessionId, event.eventId, undefined, route ? { route } : {});
       ledger.updateInput(`work:${input.eventId}`, "started", { turnId: taskId });
       ledger.ensureTurn({ turnId: taskId, sessionKey: sessionId, admission: kind, originEventId: event.eventId, originConversationId: route?.conversationId ?? null,
@@ -469,7 +481,8 @@ export class WorkSessions {
    * Ask the owner (ADR 0005 20.3): a card with choices in the owner conversation that belongs to no run, for a decision
    * the product needs from the owner about something that happens elsewhere. It is shown and answered like a card of a
    * run, on the web and on the route `connectionId` selects (the rule of `deliver`); the first answer wins. The same
-   * `eventId` returns the same request. It ends answered, `expired` at `expiresAt`, or `withdrawn`.
+   * `eventId` returns the same request. It ends answered, `expired` at `expiresAt`, or `withdrawn`. `display` is a JSON
+   * object for the web chat API (`card.display`), as for `submit`.
    */
   request(input: OwnerRequestInput): OwnerRequestResult {
     this.validate();
@@ -478,6 +491,7 @@ export class WorkSessions {
     if (prior && prior.hash !== hash) throw new WorkError("owner_request_event_id_reused", 409);
     if (!prior) {
       if (!(Date.parse(request.expiresAt) > Date.now())) throw new WorkError("owner_request_expired", 400);
+      if (request.display && displayTooLarge(request.display)) throw new WorkError("owner_request_display_too_large", 413);
       if (target !== undefined && target !== WEB_CONNECTION && !this.communication.connected(target)) throw new WorkError("delivery_connection_not_found", 404);
       const { sessionId } = this.openOwnerConversation();
       this.store.transaction(() => {

@@ -1978,11 +1978,11 @@ Alternatives considered:
 
 ### 20.3 Decision: owner requests
 
-`WorkSessions.request({ eventId, kind, title?, text, choices, expiresAt, connectionId? })` puts a card in the owner
-conversation that belongs to no run. It is a `ledger_cards` row with `source = 'product'`, empty `run_id`, `claim_id`
-and `turn_id`, its owner route in `route`, and `call_id = product-request:<eventId>`; the card id is derived from the
-event id. Its `card` event has the body every card has (`text`, `choices`, `freeText: false`, `deadlineAt`), so the
-web API, the socket, the chat index (`pendingCards`) and channel buttons (`ledger_card_tokens`) work unchanged.
+`WorkSessions.request({ eventId, kind, title?, text, choices, expiresAt, connectionId?, display? })` puts a card in the
+owner conversation that belongs to no run. It is a `ledger_cards` row with `source = 'product'`, empty `run_id`,
+`claim_id` and `turn_id`, its owner route in `route`, and `call_id = product-request:<eventId>`; the card id is derived
+from the event id. Its `card` event has the body every card has (`text`, `choices`, `freeText: false`, `deadlineAt`), so
+the web API, the socket, the chat index (`pendingCards`) and channel buttons (`ledger_card_tokens`) work unchanged.
 
 - **Idempotent and durable.** The first call records the card, its tokens, its delivery and a request record in one
   transaction. A repeated call returns the request; other content under the same event id is refused.
@@ -2005,6 +2005,8 @@ web API, the socket, the chat index (`pendingCards`) and channel buttons (`ledge
   or is withdrawn is followed by one line in the external conversation it was sent to, and a later button or label is
   answered with that line.
 - **Purge.** Clearing the conversation deletes its cards (16.4). An open request ends there and reads as `expired`.
+- **Display.** `display` is kept in the card body (20.7). The message an external channel gets is built from `title`,
+  `text` and the choices, as before.
 
 Alternative considered: a product-side card protocol (the product renders and tracks its own approval). Rejected: the
 owner already answers cards in one place on every surface, and a second protocol would need its own delivery, button
@@ -2061,6 +2063,21 @@ Additive, no new route:
 - `Card.source` may be `"product"`; such a card has empty `turnId` and `claimId` and is answered by `choiceId` or `text`.
 - A `message` event with `role: "user"` that no channel message carried has `origin: "work" | "delegation" | "schedule"`.
 - The `sender` of such an event is `{ type: "agent", id, name }` when the submission named a sender.
+- A `message` event of a submitted input has `display` when the submission had one, and so has `Card` for an owner
+  request (`card.display`), in history and on the socket.
+
+`display` is an optional member of `submit` and of `request`: a JSON object the product defines, at most 64,000 bytes
+serialized (`work_display_too_large` / `owner_request_display_too_large`, 413). The `text` of a submitted input is the
+text written for the model, with whatever the product put around the message it carries, and a console that wants to
+show the message had to parse that text. `display` carries what to show instead, in a form only the product and its
+console know. Router does not interpret it:
+
+- It is stored in the body of the input event (`body.display`) and of the card (`body.card.display`) and nowhere else.
+  It is not written to the work input, the Host start request, the context, the admission or a channel message, so it
+  reaches no model and no external conversation.
+- It is part of what an event id stands for, like every other member: the same `eventId` with another `display` is
+  refused (`work_event_id_reused`, `owner_request_event_id_reused`).
+- It goes with its event: a redaction replaces the whole body (16.4), and a purge deletes the event and the card.
 
 ### 20.8 Schema (`AGENT_LEDGER_V6`)
 
@@ -2081,7 +2098,7 @@ Nothing a stored session is compared with changes for a product that uses none o
 (`communication_host/scope`), the `instructions` and `tools` of each start request (the Host's session definition and a
 kernel's binding fingerprint derive from them), the execution bindings, and the tool output of delegated and scheduled
 turns. No model-visible tool definition is added or changed. `test/session-fingerprints.test.ts` compares these values
-with ones recorded on the commit before this section was implemented.
+with ones recorded on the commit before this section was implemented. `display` (20.7) is in none of them.
 
 ### 20.10 Not covered
 

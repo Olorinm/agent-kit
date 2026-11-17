@@ -160,6 +160,32 @@ inspection CA is added to the system and Node trust stores before Host starts.
 Read `src/egress.mjs` when changing native runtime dependencies; do not disable TLS
 verification to fix a failed request.
 
+Package fetches are always admitted. Model endpoints are grouped into named model
+services in `src/egress.mjs`, and each environment reaches only the services selected
+for it:
+
+| Service | Admits |
+| --- | --- |
+| `openai` | ChatGPT Codex backend and workspace discovery, `api.openai.com` responses and model list, `auth.openai.com` token refresh |
+| `anthropic` | `api.anthropic.com`: `POST /v1/messages`, `POST /v1/messages/count_tokens`, `GET /v1/models` and `GET /v1/models/:id` |
+
+The product selects services with an optional `modelServices` array in the create
+body and in the resume body (`{"timeoutSeconds":600,"modelServices":["openai","anthropic"]}`).
+Without it, a new environment uses `["openai"]`, the same destinations as before, and
+a resume keeps the stored list. An empty array admits package fetches only. Unknown or
+repeated names are refused: `invalid_create` on create, `invalid_model_services` on
+resume. The list is stored with the environment and applied when its container
+starts, including a recovery start. A running container keeps the list it started
+with; a resume that changes the list of a running environment stores it for the
+next start. `/security` reports the effective list as `modelServices`: the stored
+selection, or the default when there is none. After such a change it is the list for
+the next start.
+
+Only the holder of the operator credential can select services. Nothing inside the
+guest can change the list, and no request can add a destination: the rule sets are
+reviewed source. Admitting another provider or a private model gateway host means
+adding a service to `src/egress.mjs` with tests and redeploying the gateway.
+
 A configurable daily runtime allowance blocks another start after the allowance is
 used and requests pause when idle. Concurrent work can defer pause. It is not a hard
 account spending cap; budget notifications also do not stop billing. Maintenance

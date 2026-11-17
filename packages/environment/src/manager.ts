@@ -17,7 +17,7 @@ export class EnvironmentManager {
   }
   create(provider: string, request: CreateEnvironment) { return this.provider(provider).create(request); }
   info(ref: EnvironmentRef) { return this.provider(ref.provider).info(ref.id); }
-  resume(ref: EnvironmentRef, seconds?: number) { return this.provider(ref.provider).resume(ref.id, seconds); }
+  resume(ref: EnvironmentRef, seconds?: number, options?: { modelServices?: string[] }) { return this.provider(ref.provider).resume(ref.id, seconds, options); }
   pause(ref: EnvironmentRef) { return this.provider(ref.provider).pause(ref.id); }
   destroy(ref: EnvironmentRef) { return this.provider(ref.provider).destroy(ref.id); }
 }

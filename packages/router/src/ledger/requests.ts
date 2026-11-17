@@ -5,6 +5,16 @@ import { REQUEST_CALL_PREFIX, type AgentLedger, type CardRecord } from "./ledger
 import { WEB_CONNECTION } from "./surfaces.js";
 
 /**
+ * `display` of `WorkSessions.submit` and `request`: a JSON object the product defines for whatever shows the event.
+ * Router keeps it on the event and returns it through the web chat API. It does not interpret it, and nothing that is
+ * sent to a model or to an external channel is built from it.
+ */
+export const displaySchema = z.record(z.string(), z.json());
+export type WorkDisplay = z.output<typeof displaySchema>;
+/** A `display` is refused above 64,000 bytes of serialized JSON. */
+export const displayTooLarge = (display: WorkDisplay) => Buffer.byteLength(JSON.stringify(display)) > 64_000;
+
+/**
  * Owner requests (ADR 0005 20.3): a card the embedding product puts in the owner conversation that belongs to no run.
  * It is an ordinary ledger card (`source: "product"`), so every surface shows and answers it the way it shows and
  * answers a card of a run; its answer is kept on the card instead of being resolved at a Host.
@@ -18,6 +28,8 @@ export const ownerRequestSchema = z.object({
   choices: z.array(z.object({ id: z.string().min(1).max(64), label: z.string().trim().min(1).max(60), style: z.enum(["primary", "danger"]).optional() }).strict()).min(1).max(6),
   expiresAt: z.iso.datetime(),
   connectionId: z.string().min(1).max(160).optional(),
+  /** Kept on the card as `card.display` for the web chat API; an external channel gets `title`, `text` and the choices only. */
+  display: displaySchema.optional(),
 }).strict().superRefine((value, context) => {
   if (new Set(value.choices.map((choice) => choice.id)).size !== value.choices.length || new Set(value.choices.map((choice) => choice.label)).size !== value.choices.length)
     context.addIssue({ code: "custom", message: "owner_request_choices_not_distinct" });
@@ -43,7 +55,7 @@ export function createRequest(ledger: AgentLedger, core: CommunicationCore, agen
     conversationId: route.conversationId ?? null, idempotencyKey: `card:${cardId}`,
     body: { card: { cardId, agentId, turnId: "", claimId: "", callId, kind: request.kind, source: "product", text,
       choices: request.choices.map((choice, index) => ({ choiceId: String(index), label: choice.label, ...(choice.style ? { style: choice.style } : {}) })),
-      freeText: false, deadlineAt: new Date(deadlineAt).toISOString() } } }).event;
+      freeText: false, deadlineAt: new Date(deadlineAt).toISOString(), ...(request.display ? { display: request.display } : {}) } } }).event;
   ledger.addCard({ cardId, callId, runId: "", claimId: "", turnId: "", sessionKey, eventId: event.eventId, kind: request.kind, source: "product", deadlineAt, route });
   const buttons = request.choices.map((choice, index) => {
     const token = digest(key(callId, String(index))).slice(0, 32);

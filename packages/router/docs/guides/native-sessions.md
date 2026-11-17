@@ -87,6 +87,17 @@ chat API returns it as the event's `sender`, and both delivery forms carry it in
 A sender is refused on an owner admission (`work_sender_admission_mismatch`): the owner's own
 work is the owner's.
 
+`submit` accepts `display`, a JSON object the product defines, for whatever shows the input:
+for example the message as its sender wrote it, when `input` is the text written for the
+model. Router records it on the input event, and the web chat API returns it as the event's
+`display`, beside `text`, `origin` and `sender`. Router does not interpret it, and it never
+reaches the model: it is not part of the input, the context, the admission or the Host
+request, and no session fingerprint depends on it. It is limited to 64,000 bytes of
+serialized JSON (`work_display_too_large`, 413), and anything but a JSON object is refused
+as invalid input. It belongs to the submission like every other member: the same `eventId`
+with another `display` is refused with `work_event_id_reused`. The HTTP work-event route
+does not take it.
+
 `setDefaultSettings(selection)` stores native settings (for example `model` and `effort`) that
 Router sends with every turn of the agent, including turns started by channel messages;
 `defaultSettings()` reads them and an empty selection removes them. A work event's own
@@ -235,6 +246,10 @@ choices, the first approving and the second rejecting, and closes the card as `a
 - The same `eventId` returns the same request; other content under it is refused with
   `owner_request_event_id_reused`. An `expiresAt` that has passed is refused with
   `owner_request_expired`.
+- `display` is an optional JSON object the product defines for the card, with the limit of
+  `submit`'s `display` (`owner_request_display_too_large`, 413). The web API returns it as
+  `card.display`. Router does not interpret it, and an external conversation gets the title,
+  the text and the choices only. Another `display` under the same `eventId` is other content.
 - `lookupRequest(eventId)` returns `{ status, choice?, answeredBy?, surface?, settledAt?,
   delivery }`. `status` is `pending`, `answered` (with the chosen `id`), `expired` or
   `withdrawn`. A request past its deadline never reads as pending.
