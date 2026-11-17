@@ -114,6 +114,10 @@ announced by their own apps. The rules are the `notify` policy and are evaluated
   `timeSensitive`.
 - A scheduled reminder reached only the web, or its session has no connected channel: it is pushed.
 - Nothing is pushed while a browser has that chat open, and nothing for other contacts or group chats.
+- Output the embedding product places in the owner conversation follows the same rules: the answer of a submitted turn
+  that answers the owner counts as an answer, and an owner request counts as a question. When the product names this
+  connection as their target, they are pushed whatever the policy and the open chat say
+  (see [native sessions](native-sessions.md#the-owner-conversation)).
 
 ```json
 { "id": "bark", "kind": "bark", "server": "https://bark.example.test", "deviceKeyFile": "bark/device-key",

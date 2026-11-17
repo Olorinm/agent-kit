@@ -136,9 +136,11 @@ export async function startAgentHostServer(options: HostServerOptions) {
                 details:
                   "Image bytes are available as workspace files, without native image-block delivery.",
               };
+    // `input.nativeItems` is the gate of `inputItems` and of a standalone `toolOutput` turn (see `start`).
     for (const [name, enabled] of [
       ["controls.steer", Boolean(runtime.steer)],
       ["controls.compact", Boolean(runtime.supportsCompaction)],
+      ["input.nativeItems", Boolean(runtime.inputItems)],
     ] as const) {
       if (!enabled)
         capabilities.features[name] = {

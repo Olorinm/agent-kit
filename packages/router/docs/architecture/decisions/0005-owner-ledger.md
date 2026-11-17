@@ -15,7 +15,8 @@
 > rules are in "Implementation notes (single record)" at the end.
 
 - Status: accepted; phases 1–3 implemented behind flags (see "Implementation notes"); phases 4–7 decided and
-  specified (sections 15–19); phase 8 (Durable Objects) later
+  specified (sections 15–19); product-routed output in the owner conversation added in section 20; phase 8 (Durable
+  Objects) later
 - Date: 2026-11-05; phases 3–7 decisions 2026-11-06
 - Affects: ADR 0002 (Matrix stops being the record of conversation history and becomes an optional adapter),
   ADR 0004 (from phase 6 owners log in through the edge identity, not a Matrix password)
@@ -1903,6 +1904,192 @@ Removal:
   with Synapse. Items 5–8 are preconditions of removal, not cleanup.
 - **External Matrix peers** lose the channel. They are found in item 4.
 - **CLI login** depends on Matrix today. The CLI edge mode (18.3) must ship before Synapse is removed.
+
+## 20. Product-routed output in the owner conversation
+
+Added after phase 7 and implemented as written (`AGENT_LEDGER_V6`). Sections 6.7 and 16.6 remain true for work
+submitted without the options below.
+
+### 20.1 Problem
+
+An embedding product could start a turn in the owner conversation without a message from the owner (`WorkSessions.submit`
+with the session id, section 6.7) and could post one line of text there (`deliver`, section 16.6). Three things were
+missing for a product that brings results from elsewhere back to the owner:
+
+- The turn had no reply route. Its answer was written to the transcript and reached no external channel, and the
+  Host worker did not present its questions and approvals, because a card needed a received message to travel on.
+- A card existed only for a call of a run. The product had no way to ask the owner for a decision about something that
+  does not run in this conversation.
+- The product learned that a work event ended only by reading that event (`get`, `wait`).
+
+The owner conversation also did not exist as a work target until the owner had written. Work submitted there earlier
+opened a Host session without the channel tool, which the owner's first message then conflicted with.
+
+Routing between agents, the product's record of what it sent and its retry policy stay with the product.
+`WorkSessions` remains one agent's embedding boundary.
+
+### 20.2 Decision: owner routes
+
+An **owner route** is where output for the owner goes when no received message is being answered: a connection with
+the reply route of the owner's newest private conversation on it, or the web transcript. It is resolved by one rule,
+the `connectionId` rule of section 16.6 (`CommunicationCore.ownerRoute`):
+
+| `connectionId` | Route |
+| --- | --- |
+| omitted | the owner's newest private conversation whose connection is registered, else the transcript |
+| `web` | the transcript only |
+| a notify connection | the transcript, and a push to that connection |
+| another connection | the owner's newest private conversation on it, else the transcript with `no_conversation_on_connection` |
+
+A connection that is not registered is refused when the output is submitted (`delivery_connection_not_found`). The
+route is frozen at submission, as a channel turn's reply route is frozen at receipt. Group and room conversations are
+never an owner route.
+
+The route is stored, and the channel core presents it to the rest of the code as the input of whatever travels on it
+(`ChannelInput.routed`). Publication of a turn's result, notices, cards, card answers from a channel, activity, owner
+notifications and the delivery queue therefore need no second path. Two stores hold a route:
+
+- `ledger_pending_inputs.route` for a work turn submitted with `reply`. `CommunicationCore.input(turnId)` returns the
+  routed input, so the turn's answer is published by the channel core exactly once (`turn:<id>:final`, section "single
+  record" rule 5) and the Host worker no longer writes it. The turn's `reply_route` and `origin_conversation_id` are set.
+- `ledger_cards.route` for an owner request (20.3).
+
+Differences from a received message, all deliberate:
+
+- A routed turn gets no working marker (there is no message to mark) and no channel tool: the tool is admitted by a
+  received message, and delegated input must not gain it by being routed.
+- The notice that a turn's outcome is unknown travels along the route. Its retry card (6.2.4) stays on the transcript
+  only, as for every work turn: "重新执行" closes the turn and does not submit the work again, because the product owns
+  its work events.
+- `CommunicationCore.input(turnId)` returns a routed input, and `isOwnerInput` is true for it, because the route is the
+  owner's. Whose work a turn is follows from its admission, not from its input.
+- When the product names a notify connection, the output is pushed there regardless of the notify policy and of an
+  open browser, as `deliver` does. Otherwise the notify policy applies as for an owner's web turn.
+
+Alternatives considered:
+
+- *A synthetic claim* (a fake received message for each routed output). Rejected: claims are what a channel delivered,
+  they drive redelivery checks, quoting, the task list and purge tombstones, and a row that no channel sent would have
+  to be excluded in each of those places.
+- *Having the Host worker deliver the answer itself.* Rejected: it would duplicate the publication rules (final reply
+  once, streaming finish, notify policy) that the channel core already owns.
+- *Extending `deliver` to start a turn.* Rejected: `deliver` records a notice of a result the product already has; a
+  turn has admission, serialization and an outcome, which `submit` already carries.
+
+### 20.3 Decision: owner requests
+
+`WorkSessions.request({ eventId, kind, title?, text, choices, expiresAt, connectionId? })` puts a card in the owner
+conversation that belongs to no run. It is a `ledger_cards` row with `source = 'product'`, empty `run_id`, `claim_id`
+and `turn_id`, its owner route in `route`, and `call_id = product-request:<eventId>`; the card id is derived from the
+event id. Its `card` event has the body every card has (`text`, `choices`, `freeText: false`, `deadlineAt`), so the
+web API, the socket, the chat index (`pendingCards`) and channel buttons (`ledger_card_tokens`) work unchanged.
+
+- **Idempotent and durable.** The first call records the card, its tokens, its delivery and a request record in one
+  transaction. A repeated call returns the request; other content under the same event id is refused.
+- **Answers.** The web answers through `POST …/cards/:cardId/answer` with `choiceId` or the label as `text`. A channel
+  answers by button, by the label of a choice, or by its number (`LedgerControl.command`). There is no call to resolve,
+  so the answer is planned and committed in one transaction; the first one wins and later ones are `stale`. The result
+  of a choice is `{ choice: <id> }`. `approval` requests have two choices and close as `approved` / `rejected` by the
+  existing mapping of choice 0 and 1; `question` requests close as `answered`.
+- **Matching a text reply.** A reply that quotes the card's message means that card. Without a quote, a label must
+  belong to exactly one request while only requests wait in the session. A number is accepted only for a card that
+  was sent to that conversation as a numbered list, and without a quote only while it is the only card waiting. In
+  every other case where a label matches, Router asks which card is meant. A stop or steer command is never an answer,
+  and a reply that matches nothing is an ordinary message. This keeps a reply meant for a question of a run from being
+  taken by a request and the reverse. An answer typed in the web chat counts as a web answer. A message that answered
+  a request is recognised by its answer key when dispatch repeats after a restart, so it is not read a second time.
+- **Expiry.** `expiresAt` is required. The channel loop closes overdue requests as `expired`, and so does every read
+  and every answer first, so a request past its deadline never reads as pending and cannot be answered late.
+- **Withdrawal.** `withdrawRequest` closes an unanswered request as `canceled`.
+- **Closed cards on external channels.** A sent message cannot be recalled on every channel. A request that expires
+  or is withdrawn is followed by one line in the external conversation it was sent to, and a later button or label is
+  answered with that line.
+- **Purge.** Clearing the conversation deletes its cards (16.4). An open request ends there and reads as `expired`.
+
+Alternative considered: a product-side card protocol (the product renders and tracks its own approval). Rejected: the
+owner already answers cards in one place on every surface, and a second protocol would need its own delivery, button
+tokens, idempotency and expiry.
+
+### 20.4 Decision: settlements
+
+`ledger_settlements(seq INTEGER PRIMARY KEY AUTOINCREMENT, kind, event_id, settled_at, UNIQUE(kind, event_id))` records
+that something the product started in this agent reached its end:
+
+- `work`: written by the work queue when a task of a work event becomes terminal, in the transaction that records the
+  terminal state (`CliWork.settled`). A turn with an unknown outcome is not terminal; it is recorded when it is
+  reconciled or closed.
+- `request`: written when a product card closes (`cardStatus`), and for open requests when their conversation is purged.
+
+`WorkSessions.settlements({ after, limit })` returns the entries after a cursor with the current result of each. `seq`
+never repeats and only grows, so a reader keeps one number per agent. The existing `get`, `lookup` and `wait` are
+unchanged and remain sufficient for a product that polls its own open events; the feed removes the need to poll each
+one. The table starts empty: events that ended before this step are read by their id.
+
+### 20.5 Decision: input that no human wrote
+
+Delegated and scheduled input was sent to the Host as a standalone native tool output, which only one kernel accepts;
+on the others the run was refused (`native_tool_output_unsupported`).
+
+- Before each such turn the Host worker asks the Host for the runtime's description and reads `input.nativeItems`.
+  The Host derives that feature from the flag that admits `inputItems` and `toolOutput`, so the description and the
+  refusal agree. The decision is made in Router, because the Host does not know that an input is a delegation and must
+  not turn a tool output into user text on its own. The answer is not cached, so a runtime that changes is noticed.
+- Only an explicit `unsupported` selects the text form. A runtime that accepts native input items, a Host that does not
+  describe its runtimes and a Host that does not answer all get the same tool output as before, byte for byte, so no
+  existing deployment gains a way to fail.
+- A runtime that reports `unsupported` gets the input as text behind a fixed notice (`src/execution/delivery.ts`): not
+  a message from a human user, no new human authorization, then the source (`kind`, `reference`, optional `sender`) as
+  one line of JSON, then a line saying that everything after it is the delivered message, then the message as the last
+  part. Typed input items cannot be carried and are refused before submission.
+- The notice is a statement to the model, not an enforced boundary: a text-only runtime has no input channel that a
+  message cannot imitate. Authorization stays where it was, in the admission and the grants the product enforces.
+- `submit` accepts `sender: { kind: "agent", id, name }`. It is stored on the input event (`sender_type = 'agent'`,
+  `sender_id`, `body.sender`), returned by the web API as the event's `sender` actor, and included in the source of both
+  delivery forms. It is refused on an owner admission.
+
+### 20.6 The owner conversation as a work target
+
+`WorkSessions.openOwnerConversation()` returns the session id of owner-main and creates what the owner's first message
+would have created when it is missing: the ledger session (`kind = 'owner_main'`) and the execution binding of its
+current window with `channelTools: true`. `submit` with that session id does the same. An execution binding that
+exists is never changed, so a session an earlier release opened keeps its definition.
+
+### 20.7 Web API
+
+Additive, no new route:
+
+- `Card.source` may be `"product"`; such a card has empty `turnId` and `claimId` and is answered by `choiceId` or `text`.
+- A `message` event with `role: "user"` that no channel message carried has `origin: "work" | "delegation" | "schedule"`.
+- The `sender` of such an event is `{ type: "agent", id, name }` when the submission named a sender.
+
+### 20.8 Schema (`AGENT_LEDGER_V6`)
+
+```sql
+ALTER TABLE ledger_pending_inputs ADD COLUMN route TEXT;   -- owner route of a work turn that answers the owner
+ALTER TABLE ledger_cards ADD COLUMN route TEXT;            -- owner route of an owner request
+CREATE TABLE ledger_settlements(
+  seq INTEGER PRIMARY KEY AUTOINCREMENT, kind TEXT NOT NULL CHECK(kind IN ('work','request')), event_id TEXT NOT NULL,
+  settled_at INTEGER NOT NULL, UNIQUE(kind, event_id));
+```
+
+Both columns are null for every existing row and for everything a channel message starts. No existing row is rewritten.
+Request records are documents (`work_session_requests`), like delivery records (`work_session_deliveries`).
+
+### 20.9 Session fingerprints
+
+Nothing a stored session is compared with changes for a product that uses none of these options: the Host scope
+(`communication_host/scope`), the `instructions` and `tools` of each start request (the Host's session definition and a
+kernel's binding fingerprint derive from them), the execution bindings, and the tool output of delegated and scheduled
+turns. No model-visible tool definition is added or changed. `test/session-fingerprints.test.ts` compares these values
+with ones recorded on the commit before this section was implemented.
+
+### 20.10 Not covered
+
+- Routes into groups and hub rooms.
+- A run's own questions for work submitted without `reply`: they are still not presented.
+- Presenting one agent's run-bound card in another agent's conversation. A product uses an owner request and resolves
+  its own call with the result.
+- Editing or recalling the card message on an external channel when a request closes.
 
 ## Implementation notes (phases 1–2)
 

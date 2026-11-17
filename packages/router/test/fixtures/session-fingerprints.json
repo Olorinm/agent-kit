@@ -1,0 +1,22 @@
+{
+  "hostScope": "a867de3a3fec0967ee7d50ec9b0271d24ed162fb4eb718ddf36368fa67463371",
+  "sessionDefinitions": [
+    "3fadaa89c6b14722244d3c31eb8dae62101b198b2ed8e1671712c5cccc3e7487",
+    "3fadaa89c6b14722244d3c31eb8dae62101b198b2ed8e1671712c5cccc3e7487",
+    "2299a7b6ed6463f6256ab7a0cbc3e44daab4e547aa666abb6377031d5a45105e",
+    "38ee3e3af4755685067c5480d6043758964a08b055b8c419359053e7a45aec6c"
+  ],
+  "turns": [
+    "931ae11573fa3676467cbf157f80244e732dc3e98c6408d5ea93fc364e313a2a",
+    "c839e824874d7bb944cc0630f34f049e3fd99f3df204d5899fd804bde2e4f3bc",
+    "08fbff7a0169590d1945d1a68c4b4a2df6356ef7bd2d93acc377dc854244142c",
+    "bd9c3f5af6ae3ef461a3256b76ef5d86a40bbf3902713552e656a659ce53b158"
+  ],
+  "delivered": [
+    "hello\nChannel context (provider routing IDs): {\"channel\":\"chat\",\"connectionId\":\"chat\",\"scope\":\"direct\",\"conversationId\":\"private\",\"messageId\":\"m1\",\"senderId\":\"@alice:example.test\"}",
+    "{\"namespace\":\"mau\",\"name\":\"proactive_work\",\"retain\":false,\"output\":\"{\\\"source\\\":{\\\"kind\\\":\\\"schedule\\\",\\\"reference\\\":\\\"rule-1\\\"},\\\"message\\\":\\\"Check the inbox.\\\"}\"}",
+    "{\"namespace\":\"mau\",\"name\":\"work_sessions\",\"retain\":false,\"output\":\"{\\\"source\\\":{\\\"kind\\\":\\\"delegation\\\",\\\"reference\\\":\\\"call-1\\\"},\\\"message\\\":\\\"Summarize the report.\\\"}\"}",
+    "Write the notes."
+  ],
+  "bindings": "7737065bf45dc05e7413e0897652c3bf3061309413edc0db2ea905e32d1a51a5"
+}

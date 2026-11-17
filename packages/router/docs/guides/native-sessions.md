@@ -51,13 +51,41 @@ durable work item. Reusing an event ID with different input is rejected. `lookup
 return the saved task status and latest observed answer without contacting Host. `wait`
 uses a cursor over these saved observations. It never resumes or wakes a native thread.
 Owner-authored native input items and per-turn context are forwarded separately from the
-session's stable instructions. Scheduled work requires explicit tool grants. Delegated and
-scheduled work enters Codex as native `toolOutput`, with its actual product source
-(`mau.work_sessions` or `mau.proactive_work`), instead of a human user message. Codex does
-not allow typed input and standalone tool output in the same turn. For internal work,
-Router verifies requested skill names and paths against the native catalog and includes
-those references for on-demand loading; this does not force native skill injection.
-Other typed items on an internal delivery are rejected before submitting a run.
+session's stable instructions. Scheduled work requires explicit tool grants.
+
+### Input that no human wrote
+
+Delegated and scheduled work is never delivered as a human user message. Before each such
+turn Router asks the Host whether the runtime takes native input items (`input.nativeItems`
+in the runtime description) and chooses the form:
+
+- **A runtime that takes them (Codex):** the input enters as native `toolOutput` with its
+  actual product source (`mau.work_sessions` or `mau.proactive_work`). Codex does not allow
+  typed input and standalone tool output in the same turn. Router verifies requested skill
+  names and paths against the native catalog and includes those references for on-demand
+  loading; this does not force native skill injection. Other typed items are rejected
+  before a run is submitted (`native_tool_delivery_typed_input_unsupported`).
+- **A runtime that reports them as unsupported:** the input is sent as text behind a fixed
+  notice. The notice says that the input is an automated delivery, that no person wrote or
+  approved it in this turn and that it gives no new human authorization. A `Source:` line
+  follows with the admission kind, its reference and the sender as one line of JSON, then a
+  line saying that everything after it is the delivered message, then the message as the
+  last part. Typed input items cannot be carried by a text delivery and are rejected with
+  the same error.
+
+A Host that does not describe its runtimes, or does not answer the question, is sent the
+tool output as before. The admission still travels beside the input for the product's Host
+decorator, in both forms.
+
+The notice is a statement to the model, not an enforced boundary: a text-only runtime has
+no input channel that a message cannot imitate. What such a turn may do is decided by its
+admission and the grants the product enforces, never by the text.
+
+`submit` accepts `sender: { kind: "agent", id, name }` for input that is another agent's
+message. Router records it as the sender of the input event (`sender_type: "agent"`), the web
+chat API returns it as the event's `sender`, and both delivery forms carry it in the source.
+A sender is refused on an owner admission (`work_sender_admission_mismatch`): the owner's own
+work is the owner's.
 
 `setDefaultSettings(selection)` stores native settings (for example `model` and `effort`) that
 Router sends with every turn of the agent, including turns started by channel messages;
@@ -111,11 +139,134 @@ native tool catalog. It does not inherit a channel reply route. Channel tools ar
 for that turn unless it has an admitted channel message. Products similarly retain stable
 business tool definitions while authorizing each call from the current run's admission.
 
-Internal work does not automatically send a chat message. After inspecting a result, the
-product may call `validateTarget` and `deliver({eventId,targetSessionId,text})`. Only a
-known owner private conversation is accepted. The stable delivery intent and the channel
-outbox are committed together. `lookupDelivery` reports the actual receipt: `queued` is
-not delivery, and an uncertain result is not automatically resent as a new message.
+Internal work does not send a chat message unless it was submitted with `reply` (below).
+After inspecting a result, the product may call `validateTarget` and
+`deliver({eventId,targetSessionId,text})`. Only a known owner private conversation is
+accepted. The stable delivery intent and the delivery are committed together.
+`lookupDelivery` reports the actual receipt: `queued` is not delivery, and an uncertain
+result is not automatically resent as a new message.
+
+## The owner conversation
+
+Every owner channel of an agent shares one session, the owner conversation. The functions in
+this section let a product work in it without a message from the owner. They are for trusted
+embedding code and have no HTTP route.
+
+### Opening it
+
+```ts
+const { sessionId } = sessions.openOwnerConversation();
+```
+
+The call returns the owner conversation's session id and makes it usable as a `submit`
+target even when the owner has never written. It creates what the owner's first message
+would have created: the ledger session (the agent's writable chat in the web API) and the
+binding to the Host session, with the definition an owner turn gives it. A later owner
+message continues the same session and the same native thread. An existing binding is left
+as it is. `submit` with this session id does the same on its own.
+
+### Turns that answer the owner
+
+```ts
+const event = await sessions.submit({
+  eventId: "message-17", sessionId, input: "The report is ready.",
+  admission: { kind: "delegation", owner, agentId, reference: "message-17", toolGrants: {} },
+  sender: { kind: "agent", id: "agent-b", name: "Agent B" },
+  reply: {},
+});
+```
+
+With `reply`, the turn answers the owner the way a turn started by a channel message does:
+its answer, its notices and the cards of its questions and approvals are recorded once on the
+transcript and sent along an owner route through the delivery queue, with the same retry
+rules. The owner answers a card on the web or in that conversation. The route is chosen when
+the turn is submitted:
+
+| `reply.connectionId` | Route |
+| --- | --- |
+| omitted | the owner's newest conversation whose connection is still registered; the transcript when there is none |
+| `"web"` | the transcript only |
+| a notify connection | the transcript, and a push to that connection whatever its policy says |
+| another connection | the owner's newest conversation on it; without one, the transcript only, reported as `suppressed` / `no_conversation_on_connection` |
+
+A connection that is not registered is refused with `delivery_connection_not_found`. On an
+external connection the answer is sent as a reply to the owner's newest message there. An
+answer that reaches the owner only through the transcript is pushed by notify connections
+under the same policy as an owner's web turn.
+
+`get`, `lookup` and `wait` return the receipt as `reply: { connectionId, state, externalId,
+error }`. `state` is `pending` until the answer is recorded, then `web`, `suppressed` or the
+state of the send (`queued`, `submitting`, `accepted`, `failed`, `uncertain`). A connection
+that was removed while the turn ran gives `failed` / `connection_removed`; the answer is
+still on the transcript.
+
+`reply` is accepted only for the owner conversation (`reply_requires_owner_conversation`) and
+not for compaction (`compaction_reply_unsupported`). The turn queues behind a running turn of
+the conversation like every other turn. It does not get the channel tool: that needs a
+received message. Work submitted without `reply` behaves as before, including that its
+questions are not presented.
+
+`extension.communication.input(turnId)` returns the route of such a turn as an input with
+`routed` set, and `isOwnerInput` is true for it because the route is the owner's. It is not
+a message the owner wrote: use the turn's admission to tell whose work it is. When the
+outcome of such a turn is unknown, the route gets the notice, and the retry card stays on
+the transcript; it closes the turn and does not run the work again.
+
+### Owner requests
+
+```ts
+const request = sessions.request({
+  eventId: "approval-9", kind: "approval", title: "Agent B asks for approval",
+  text: "Send the report to the customer?",
+  choices: [{ id: "allow", label: "Allow once" }, { id: "deny", label: "Deny", style: "danger" }],
+  expiresAt: "2026-01-01T12:00:00.000Z",
+});
+```
+
+A request is a card with one to six choices in the owner conversation that belongs to no
+run. Use it for a decision the product needs from the owner about something that happens
+elsewhere. It is an ordinary ledger card with `source: "product"`: the web API returns it as
+a `card` event and answers it through the card answer route, and an external conversation
+gets it as a message with buttons, or with numbered choices where the channel has no
+buttons. `connectionId` follows the table above. `kind: "approval"` takes exactly two
+choices, the first approving and the second rejecting, and closes the card as `approved` or
+`rejected`; the default `question` closes it as `answered`.
+
+- The same `eventId` returns the same request; other content under it is refused with
+  `owner_request_event_id_reused`. An `expiresAt` that has passed is refused with
+  `owner_request_expired`.
+- `lookupRequest(eventId)` returns `{ status, choice?, answeredBy?, surface?, settledAt?,
+  delivery }`. `status` is `pending`, `answered` (with the chosen `id`), `expired` or
+  `withdrawn`. A request past its deadline never reads as pending.
+- The first answer wins on every surface. Only the owner can answer. In a channel the owner
+  presses a button or replies with the label of a choice, and a reply that quotes the card's
+  message always means that card. A number is accepted only where the card was sent as a
+  numbered list, and without a quote only while the request is the only card waiting. When
+  a label could mean several cards, Router asks which one. A stop or steer command is never
+  taken for an answer. Router confirms an answer with the chosen label. A label the owner
+  types as an ordinary message while a request waits is an answer, so choose labels that are
+  not everyday replies.
+- `withdrawRequest(eventId)` closes an unanswered request as `canceled`. Expiry closes it as
+  `expired`. In both cases an external conversation that received the card gets one line
+  saying so, and a later answer is refused there with the same line.
+- A request ends as `expired` when the owner clears the conversation.
+
+### Settlements
+
+```ts
+const { data, cursor } = sessions.settlements({ after: savedCursor, limit: 100 });
+```
+
+`settlements` lists what ended since a cursor, in the order it ended: work events whose turn
+reached a terminal state (`completed`, `failed`, `cancelled`, `rejected`) and owner requests
+that were answered, expired or withdrawn. Each entry is `{ seq, settledAt, kind: "work",
+event }` or `{ seq, settledAt, kind: "request", request }` with the same result `get` and
+`lookupRequest` return. The record is written in the transaction that ends the turn or
+closes the card, and `seq` only grows, so a reader that stores `cursor` sees every ending
+once, also after a restart of either side. A turn whose outcome is unknown is listed when it
+is reconciled or closed. A turn that answers the owner is listed when its task ends; its
+`reply` receipt may still be `pending` at that moment. The list starts with this release:
+events that ended earlier are read by their id.
 
 `skills`, `configureSkill`, `memoryStatus`, `readMemory`, and `memoryMode` use explicit
 native methods. Skill discovery always supplies the selected runtime's trusted working
@@ -145,5 +296,7 @@ tool forks its active native session before the unfinished turn, then actually w
 Router starts and observes the children using the bounded reserve; their results unblock
 the parents. It then restarts Router, continues the same native parent
 thread and pages native history. The child's original tool-output source is retained.
+A second agent on a runtime that takes text only then receives the same kind of delegated
+input as text that names its source, and its ending appears in the settlement feed.
 This is deterministic
 protocol evidence, not live-model, live-account or cloud-environment acceptance.

@@ -15,6 +15,7 @@ import { ChannelTools } from "../communication/tools.js";
 import { personId, type IdentityProvider, type PersonRegistry } from "../ledger/registry.js";
 import { mailPairingCommand, pairingCommand, REPLIES, senderIdentities, type Identities } from "../ledger/identity.js";
 import { LedgerControl } from "../ledger/control.js";
+import { expireRequests } from "../ledger/requests.js";
 import { ROOM_CONNECTION, WEB_CONNECTION } from "../ledger/surfaces.js";
 import type { HubRooms } from "../ledger/rooms.js";
 import type { OwnerAttachments } from "../ledger/blobs-hub.js";
@@ -148,7 +149,8 @@ export async function createChannelRuntime(agent: ManagedAgent, runtime: AgentRu
       config.host.instructions, () => { runtime.assertLease(); instance.validate(); }, (taskId, answer) => core.saveResult(taskId, answer),
       { definitions: [channelTools.definition],
         instructions: "\nUse the channel tool to inspect native communication capabilities and send files or supported native content. Never automatically repeat an operation with an uncertain outcome.\n",
-        allowed: (_conversationId, taskId) => Boolean(core.input(taskId)),
+        // A received message admits the channel tool. A work turn that only answers along an owner route does not.
+        allowed: (_conversationId, taskId) => { const input = core.input(taskId); return Boolean(input) && !input!.routed; },
         execute: (call) => channelTools.execute(call) }, core, instance.wake, {
           // Private groups (owner plus the owner's agents) get the owner's grants; mixed groups do not.
           admission: (contextId, taskId) => core.isOwnerTask(contextId, taskId) || core.isPrivateGroupOwnerTask(contextId, taskId)
@@ -174,7 +176,7 @@ export async function createChannelRuntime(agent: ManagedAgent, runtime: AgentRu
     }
   };
   return {
-    start: async () => { await core.start(); loops = [loop(async () => { await core.reconnect(); await core.dispatch(); await core.flush(); }, 250),
+    start: async () => { await core.start(); loops = [loop(async () => { await core.reconnect(); await core.dispatch(); expireRequests(core.ledger, core); await core.flush(); }, 250),
       ...(worker ? [loop(() => worker!.tick(), 1000)] : [])]; },
     stop: async () => { controller.abort(); await core.stop(); await Promise.allSettled(loops); },
     status: () => {

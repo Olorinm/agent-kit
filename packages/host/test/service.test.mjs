@@ -784,6 +784,101 @@ for (const kernel of ["claude", "pi", "opencode"]) {
   });
 }
 
+test("runtime inspection says whether native input items and standalone tool output are accepted", async (t) => {
+  const custom = (id, extra = {}) => ({
+    id,
+    kernel: "fixture",
+    cwd: process.cwd(),
+    configurationKey: `${id}-test`,
+    close() {},
+    async *run(input) {
+      yield {
+        type: "turn.finished",
+        runId: input.runId,
+        outcome: { status: "completed" },
+      };
+    },
+    ...extra,
+  });
+  const { api, client } = await fixture(t, {
+    configure: (cwd) => [
+      createNativeRuntime(
+        {
+          id: "codex",
+          kernel: "codex",
+          cwd,
+          options: {
+            command: resolve("test/fixtures/codex-server.mjs"),
+            args: [],
+          },
+        },
+        cwd,
+      ),
+      createNativeRuntime({ id: "claude", kernel: "claude", cwd }, cwd),
+      custom("plain"),
+      custom("typed", { inputItems: true }),
+    ],
+  });
+  const feature = async (runtimeId) =>
+    (await api("/runtimes/inspect", { runtimeId })).capabilities.features[
+      "input.nativeItems"
+    ];
+  assert.equal((await feature("codex")).status, "supported");
+  assert.deepEqual(await feature("claude"), {
+    status: "unsupported",
+    reason: "host_not_integrated",
+  });
+  assert.deepEqual(await feature("plain"), {
+    status: "unsupported",
+    reason: "host_not_integrated",
+  });
+  assert.deepEqual(await feature("typed"), { status: "supported" });
+  // The description and the submission gate agree: a runtime that reports it unsupported refuses both forms.
+  const toolOutput = { namespace: "product", name: "delivery", output: "task" };
+  assert.equal(
+    (
+      await api(
+        "/runs",
+        { sessionId: "refused", runtimeId: "plain", input: "", toolOutput },
+        409,
+      )
+    ).error,
+    "native_tool_output_unsupported",
+  );
+  assert.equal(
+    (
+      await api(
+        "/runs",
+        {
+          sessionId: "refused",
+          runtimeId: "plain",
+          input: "task",
+          inputItems: [{ type: "skill", name: "plan", path: "/skills/plan" }],
+        },
+        409,
+      )
+    ).error,
+    "native_input_items_unsupported",
+  );
+  await api(
+    "/runs",
+    { sessionId: "accepted", runtimeId: "typed", input: "", toolOutput },
+    202,
+  );
+  // The capability is part of the description only: a session's stored definition does not contain it.
+  const [session] = await client().sessions();
+  assert.deepEqual(
+    { ...session, createdAt: "" },
+    {
+      id: "accepted",
+      runtimeId: "typed",
+      instructions: "",
+      tools: [],
+      configurationKey: "typed-test",
+      createdAt: "",
+    },
+  );
+});
 test("compaction rejects attachments before creating a task or saving media", async (t) => {
   const { api, client, root } = await fixture(t);
   await api(

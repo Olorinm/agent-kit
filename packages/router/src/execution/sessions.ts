@@ -1,7 +1,7 @@
 import { SendMessageRequest } from "@a2a-js/sdk";
 import { z } from "zod";
 import { setTimeout as sleep } from "node:timers/promises";
-import type { ChannelInput, CommunicationCore } from "../communication/core.js";
+import { notificationId, replyDeliveryId, type ChannelInput, type CommunicationCore, type OwnerRoute, type SendState } from "../communication/core.js";
 import type { DurableStore } from "../communication/store.js";
 import { ChannelHttpError } from "../http.js";
 import type { HostAdmission, HostPort, HostRun, HostStartInput, NativeSessionInput } from "./host.js";
@@ -9,7 +9,9 @@ import { runtimeWorkingDirectory } from "./host.js";
 import { DEFAULT_SETTINGS, type ExecutionSession, type RunBinding } from "./host-worker.js";
 import { digest, key } from "./protocol.js";
 import { CliWork, WorkError } from "./work.js";
-import { AgentLedger } from "../ledger/ledger.js";
+import type { WorkInput, WorkSender } from "./delivery.js";
+import { closeRequest, createRequest, expireRequests, ownerRequestSchema, requestCardId, requestDeliveryId, type OwnerRequestInput } from "../ledger/requests.js";
+import { AgentLedger, legacySession } from "../ledger/ledger.js";
 import { personId } from "../ledger/registry.js";
 import { WEB_CONNECTION } from "../ledger/surfaces.js";
 
@@ -22,16 +24,61 @@ const admissionSchema = z.object({ kind: z.enum(["owner", "delegation", "schedul
     connectedApps: z.object({ connections: z.array(z.string().min(1)).max(100), operations: z.array(z.string().min(1)).max(1000).optional() }).strict().optional(),
   }).strict().optional(),
 }).strict();
+const replySchema = z.object({ connectionId: z.string().min(1).max(160).optional() }).strict();
+const senderSchema = z.object({ kind: z.literal("agent"), id: identifier, name: z.string().trim().min(1).max(200) }).strict();
 export interface WorkSessionSubmission {
   eventId: string; sessionId?: string | undefined; input: string; admission: HostAdmission;
   context?: unknown | undefined; inputItems?: Record<string, unknown>[] | undefined; settings?: Record<string, unknown> | undefined; mode?: "turn" | "compact" | undefined;
+  /**
+   * Answer the owner: the turn's answer, notices and cards go to the owner as a channel turn's do. Only for the owner
+   * conversation (`openOwnerConversation`). `connectionId` follows the rule of `deliver`: omitted, the connection the owner
+   * was last on; `web`, the transcript only; a notify connection, the transcript and a push; another connection, the
+   * owner's conversation on it.
+   */
+  reply?: { connectionId?: string | undefined } | undefined;
+  /**
+   * Who the input is from when it is another agent's message. It is recorded as the sender of the input event and
+   * told to the model with the source of the delivery. Only for delegated and scheduled work: the owner's own work
+   * is the owner's.
+   */
+  sender?: WorkSender | undefined;
 }
+/**
+ * Where a turn that answers the owner sends its answer, and what became of that send. `pending` until the answer is
+ * recorded; `web`: recorded on the transcript, which is its delivery; `suppressed`: recorded only, because the owner
+ * has no conversation on the named connection (`error`); otherwise the state of the send on `connectionId`.
+ */
+export interface WorkReplyReceipt { connectionId: string; state: "pending" | "web" | "suppressed" | SendState; externalId: string | null; error: string | null }
 interface SessionMetadata { createdAt: string; title?: string; parentSessionId?: string; archived?: boolean; }
-interface WorkEvent { eventId: string; sessionId: string; hash: string; taskId: string; }
+/** What a routed output reports about its route: the connection, whether that is a push, and why it is only recorded. */
+interface RouteFacts { connectionId: string; push?: boolean; error?: string }
+interface WorkEvent { eventId: string; sessionId: string; hash: string; taskId: string; reply?: RouteFacts; }
+interface RequestRecord { hash: string; cardId: string; route: RouteFacts; expiresAt: string }
+export type { OwnerRequestInput } from "../ledger/requests.js";
+export type { WorkSender } from "./delivery.js";
+/** An owner request as the product reads it (`WorkSessions.request`). */
+export interface OwnerRequestResult {
+  eventId: string; cardId: string; sessionId: string; expiresAt: string;
+  /** `expired`: nobody answered before `expiresAt`, or the owner cleared the conversation. `withdrawn`: `withdrawRequest`. */
+  status: "pending" | "answered" | "expired" | "withdrawn";
+  /** The `id` of the chosen choice, when answered. */
+  choice?: string;
+  /** The person who answered, and where. */
+  answeredBy?: string; surface?: "web" | "channel";
+  settledAt?: string;
+  /** Where the card was sent beside the transcript, and what became of that send. */
+  delivery: WorkReplyReceipt;
+}
+/** One entry of `WorkSessions.settlements`: a work event whose turn ended, or an owner request that was closed. */
+export type Settlement = { seq: number; settledAt: string } & ({ kind: "work"; event: WorkEventResult } | { kind: "request"; request: OwnerRequestResult });
 export interface WorkEventResult {
   eventId: string; taskId: string; sessionId: string; status: string; answer: string;
   runId?: string; error?: string; outcomeUnknown: boolean;
+  /** Present for a submission with `reply`. */
+  reply?: WorkReplyReceipt;
 }
+const routeFacts = (route: OwnerRoute, requested: string | undefined): RouteFacts =>
+  route.push ? { connectionId: route.push, push: true } : route.error ? { connectionId: requested ?? route.connectionId, error: route.error } : { connectionId: route.connectionId };
 export interface WorkSessionWaitOptions {
   after?: string | undefined; timeoutMs?: number | undefined; signal?: AbortSignal | undefined;
   /** Trusted tool-execution context. Never accept these fields from model input. */
@@ -49,9 +96,15 @@ export class WorkSessions {
     readonly instanceId: string, readonly store: DurableStore, readonly work: CliWork,
     readonly host: HostPort, readonly communication: CommunicationCore,
     private readonly validate: () => void = () => {},
-    private readonly dependencyWait?: (input: WorkDependencyWait) => () => void) {}
+    private readonly dependencyWait?: (input: WorkDependencyWait) => () => void) {
+    // A work event's turn ended: recorded with the task's terminal state, in the same transaction (`settlements`).
+    work.settled = (task) => {
+      const ledger = AgentLedger.open(this.store), inputId = ledger.inputForTurn(task.id);
+      if (inputId?.startsWith("work:") && this.store.get("work_session_inputs", task.id)) ledger.settle("work", inputId.slice("work:".length));
+    };
+  }
 
-  private async request<T>(operation: () => Promise<T>): Promise<T> {
+  private async forward<T>(operation: () => Promise<T>): Promise<T> {
     try { return await operation(); }
     catch (error) {
       if (error instanceof ChannelHttpError) {
@@ -85,6 +138,28 @@ export class WorkSessions {
   private ownerInputs(sessionId: string): ChannelInput[] {
     return this.communication.sessionInputs(sessionId).filter(input => this.communication.isOwnerInput(input));
   }
+  private get ownerSession(): string { return legacySession(this.agentId, "owner-main"); }
+  private hostSession(contextId: string): string { return `h-${digest(key(this.agentId, this.instanceId, contextId)).slice(0, 40)}`; }
+  /**
+   * The agent's owner conversation: the one session every owner channel shares. It exists after this call even when
+   * the owner has never written, as the session an owner message would have opened: the same ledger session (the
+   * agent's writable chat in the web), the same Host session and so the same native thread, with the definition an
+   * owner turn gives it. A later owner message continues it.
+   */
+  openOwnerConversation(): { sessionId: string } {
+    this.validate();
+    const sessionId = this.ownerSession, ledger = AgentLedger.open(this.store);
+    ledger.atomic(() => {
+      ledger.ensureSession(sessionId, "owner_main", "owner-main");
+      // The session and its current window (a reset opens another context).
+      for (const contextId of new Set([sessionId, ledger.contextFor(sessionId)])) {
+        if (this.store.get("execution_sessions", contextId)) continue;
+        this.store.set("execution_sessions", contextId, { sessionId: this.hostSession(contextId), runtimeId: this.runtimeId, channelTools: true } satisfies ExecutionSession);
+        this.store.set("work_sessions", contextId, { createdAt: new Date().toISOString() } satisfies SessionMetadata);
+      }
+    });
+    return { sessionId };
+  }
   validateTarget(sessionId: string) {
     this.getSession(sessionId);
     if (!this.ownerInput(sessionId)) throw new WorkError("notification_requires_owner_conversation", 403);
@@ -97,7 +172,7 @@ export class WorkSessions {
   private reserve(sessionId: string) {
     identifier.parse(sessionId);
     if (!this.store.get<ExecutionSession>("execution_sessions", sessionId)) {
-      this.store.set("execution_sessions", sessionId, { sessionId: `h-${digest(key(this.agentId, this.instanceId, sessionId)).slice(0, 40)}`, runtimeId: this.runtimeId } satisfies ExecutionSession);
+      this.store.set("execution_sessions", sessionId, { sessionId: this.hostSession(sessionId), runtimeId: this.runtimeId } satisfies ExecutionSession);
       this.store.set("work_sessions", sessionId, { createdAt: new Date().toISOString() } satisfies SessionMetadata);
     }
     return this.binding(sessionId);
@@ -116,6 +191,17 @@ export class WorkSessions {
     if (input.admission.kind === "schedule" && !input.admission.toolGrants) throw new WorkError("scheduled_work_grants_required", 403);
     if (Buffer.byteLength(input.input) > 24_000) throw new WorkError("work_input_too_large", 413);
     const sessionId = input.sessionId ?? `w-${digest(key(this.agentId, input.eventId)).slice(0, 40)}`;
+    const reply = input.reply === undefined ? undefined : replySchema.parse(input.reply);
+    const sender = input.sender === undefined ? undefined : senderSchema.parse(input.sender);
+    if (sender && input.admission.kind === "owner") throw new WorkError("work_sender_admission_mismatch", 403);
+    if (reply) {
+      if (sessionId !== this.ownerSession) throw new WorkError("reply_requires_owner_conversation", 403);
+      if (input.mode === "compact") throw new WorkError("compaction_reply_unsupported", 400);
+      if (reply.connectionId !== undefined && reply.connectionId !== WEB_CONNECTION && !this.communication.connected(reply.connectionId))
+        throw new WorkError("delivery_connection_not_found", 404);
+    }
+    // Work in the owner conversation never opens it as anything else, whether or not the owner has written yet.
+    if (sessionId === this.ownerSession) this.openOwnerConversation();
     // A ledger session that was reset (ADR 0005 16.3) runs new work in its current window's execution context.
     const contextId = AgentLedger.open(this.store).contextFor(sessionId);
     // Existing owner chats retain their native catalog, but this work has no channel reply route.
@@ -124,9 +210,11 @@ export class WorkSessions {
     if (priorBinding && priorBinding.channelTools === undefined && this.ownerInput(sessionId))
       this.store.set("execution_sessions", contextId, { ...priorBinding, channelTools: priorBinding.tools !== false });
     if (contextId !== sessionId && !this.store.get<ExecutionSession>("execution_sessions", contextId) && this.ownerInput(sessionId))
-      this.store.set("execution_sessions", contextId, { sessionId: `h-${digest(key(this.agentId, this.instanceId, contextId)).slice(0, 40)}`, runtimeId: this.runtimeId, channelTools: true } satisfies ExecutionSession);
+      this.store.set("execution_sessions", contextId, { sessionId: this.hostSession(contextId), runtimeId: this.runtimeId, channelTools: true } satisfies ExecutionSession);
     const binding = this.reserve(contextId);
     if (this.store.get<SessionMetadata>("work_sessions", sessionId)?.archived) throw new WorkError("session_archived", 409);
+    // Frozen at submission, as a channel turn's reply route is frozen at receipt.
+    const route = reply ? this.communication.ownerRoute(sessionId, reply.connectionId) : undefined;
     this.work.submit(SendMessageRequest.fromJSON({ message: {
       messageId: `work-event-${digest(key(this.agentId, input.eventId))}`, contextId,
       role: input.admission.kind === "owner" ? "ROLE_USER" : "ROLE_AGENT", parts: [{ text: input.input }],
@@ -138,27 +226,48 @@ export class WorkSessions {
         ...(input.context === undefined ? {} : { context: input.context }),
         ...(input.inputItems ? { inputItems: input.inputItems } : {}),
         ...(input.settings ? { settings: input.settings } : {}), ...(input.mode ? { mode: input.mode } : {}),
-      } satisfies HostStartInput);
-      this.store.set("work_session_events", input.eventId, { eventId: input.eventId, sessionId, taskId: task.id, hash } satisfies WorkEvent);
-      this.record(input, sessionId, task.id);
+        ...(sender ? { sender } : {}),
+      } satisfies WorkInput);
+      this.store.set("work_session_events", input.eventId, { eventId: input.eventId, sessionId, taskId: task.id, hash,
+        ...(route ? { reply: routeFacts(route, reply!.connectionId) } : {}) } satisfies WorkEvent);
+      this.record({ ...input, sender }, sessionId, task.id, route);
     });
     return this.get(input.eventId);
   }
-  /** ADR 0005 6.7: the submitted input and its turn, in the target or a fresh work session, with the admission. */
-  private record(input: WorkSessionSubmission, sessionId: string, taskId: string) {
+  /**
+   * ADR 0005 6.7: the submitted input and its turn, in the target or a fresh work session, with the admission. With an
+   * owner route (ADR 20.2) the input keeps it, and the turn answers along it.
+   */
+  private record(input: WorkSessionSubmission, sessionId: string, taskId: string, route?: OwnerRoute) {
     const ledger = AgentLedger.open(this.store);
     ledger.atomic(() => {
       const kind = input.admission.kind === "owner" ? "work" : input.admission.kind;
-      ledger.ensureSession(sessionId, kind, `${kind}:${sessionId}`);
-      const owner = input.admission.kind === "owner";
-      const event = ledger.append(sessionId, { kind: "message", role: "user", senderType: owner ? "person" : "system",
-        senderId: owner ? personId(this.owner) : input.admission.kind, idempotencyKey: `work:${input.eventId}`, turnId: taskId,
-        body: { text: input.input, origin: owner ? "work" : input.admission.kind, reference: input.admission.reference } }).event;
-      ledger.queueInput(`work:${input.eventId}`, sessionId, event.eventId);
+      if (sessionId === this.ownerSession) ledger.ensureSession(sessionId, "owner_main", "owner-main");
+      else ledger.ensureSession(sessionId, kind, `${kind}:${sessionId}`);
+      const owner = input.admission.kind === "owner", sender = input.sender;
+      const event = ledger.append(sessionId, { kind: "message", role: "user", senderType: owner ? "person" : sender ? "agent" : "system",
+        senderId: owner ? personId(this.owner) : sender ? sender.id : input.admission.kind, idempotencyKey: `work:${input.eventId}`, turnId: taskId,
+        ...(route?.conversationId ? { conversationId: route.conversationId } : {}),
+        body: { text: input.input, origin: owner ? "work" : input.admission.kind, reference: input.admission.reference,
+          ...(sender ? { sender: { kind: sender.kind, id: sender.id, name: sender.name } } : {}) } }).event;
+      ledger.queueInput(`work:${input.eventId}`, sessionId, event.eventId, undefined, route ? { route } : {});
       ledger.updateInput(`work:${input.eventId}`, "started", { turnId: taskId });
-      ledger.ensureTurn({ turnId: taskId, sessionKey: sessionId, admission: kind, originEventId: event.eventId, replyRoute: null });
+      ledger.ensureTurn({ turnId: taskId, sessionKey: sessionId, admission: kind, originEventId: event.eventId, originConversationId: route?.conversationId ?? null,
+        replyRoute: route ? { connectionId: route.connectionId, target: route.target, messageId: route.messageId, data: route.data } : null });
       ledger.turnState(taskId, "queued", { agentId: this.agentId });
     });
+  }
+  /**
+   * What became of routed output: `deliveryId` is its channel send, `ref` the reference of its push, and `recorded`
+   * says its event is on the transcript.
+   */
+  private receipt(facts: RouteFacts, deliveryId: string, ref: string, recorded: boolean): WorkReplyReceipt {
+    const none = { externalId: null, error: null };
+    if (!recorded) return { connectionId: facts.connectionId, state: "pending", ...none };
+    if (facts.error) return { connectionId: facts.connectionId, state: "suppressed", externalId: null, error: facts.error };
+    // A push that was not queued (an empty or canceled answer) leaves the transcript as the delivery.
+    const sent = this.communication.sent(facts.push ? notificationId(ref, facts.connectionId) : deliveryId);
+    return sent ? { connectionId: facts.connectionId, ...sent } : { connectionId: facts.connectionId, state: "web", ...none };
   }
   lookup(eventId: string): WorkEventResult | null {
     this.validate();
@@ -174,7 +283,10 @@ export class WorkSessions {
       status: run?.phase === "unknown" ? "unknown" : task.status === "canceled" ? "cancelled" : task.status,
       answer: native?.answer ?? "", ...(run?.runId ? { runId: run.runId } : {}),
       ...(run?.error ? { error: run.error } : native?.outcome?.error ? { error: native.outcome.error } : {}),
-      outcomeUnknown: run?.phase === "unknown" || native?.outcome?.outcomeUnknown === true };
+      outcomeUnknown: run?.phase === "unknown" || native?.outcome?.outcomeUnknown === true,
+      // The answer is recorded when the channel core has published the turn's result.
+      ...(event.reply ? { reply: this.receipt(event.reply, replyDeliveryId(event.taskId), `turn:${event.taskId}`,
+        Boolean(AgentLedger.open(this.store).turn(event.taskId)?.finalEventId)) } : {}) };
   }
   async cancel(eventId: string) { const event = this.get(eventId); await this.work.cancel(event.taskId); return this.get(eventId); }
   read(sessionId: string) { return this.native(sessionId, { action: "read" }); }
@@ -187,7 +299,7 @@ export class WorkSessions {
     const run = this.store.entries<RunBinding>("communication_runs").map(({ value }) => value)
       .find(run => run.sessionId === binding.sessionId && run.phase === "running" && run.runId);
     if (!run?.runId) throw new WorkError("active_run_not_found", 404);
-    await this.request(() => this.host.steer!(run.runId!, input));
+    await this.forward(() => this.host.steer!(run.runId!, input));
   }
   /** Wait on durable Router observations; it does not wake a Host or hold the worker's dispatch loop. */
   async wait(eventIds: string[], options: WorkSessionWaitOptions = {}) {
@@ -216,7 +328,7 @@ export class WorkSessions {
     const binding = this.binding(sessionId);
     if (["list", "bindings", "adopt", "fork"].includes(options.action)) throw new WorkError("use_scoped_session_operation", 400);
     if (!this.host.nativeSessions) throw new WorkError("host_native_sessions_unsupported", 409);
-    const result = await this.request(() => this.host.nativeSessions!({ ...options, runtimeId: binding.runtimeId, sessionId: binding.sessionId }));
+    const result = await this.forward(() => this.host.nativeSessions!({ ...options, runtimeId: binding.runtimeId, sessionId: binding.sessionId }));
     if (["rename", "archive", "unarchive"].includes(options.action)) {
       const metadata = this.store.get<SessionMetadata>("work_sessions", sessionId) ?? { createdAt: new Date().toISOString() };
       this.store.set("work_sessions", sessionId, { ...metadata,
@@ -229,7 +341,7 @@ export class WorkSessions {
     if (this.store.get("execution_sessions", targetSessionId)) throw new WorkError("target_session_exists", 409);
     if (!this.host.nativeSessions) throw new WorkError("host_native_sessions_unsupported", 409);
     const target = `h-${digest(key(this.agentId, this.instanceId, targetSessionId)).slice(0, 40)}`;
-    const result = await this.request(() => this.host.nativeSessions!({ action: "fork", runtimeId: binding.runtimeId, sessionId: binding.sessionId, targetSessionId: target, ...options }));
+    const result = await this.forward(() => this.host.nativeSessions!({ action: "fork", runtimeId: binding.runtimeId, sessionId: binding.sessionId, targetSessionId: target, ...options }));
     this.store.transaction(() => {
       this.store.set("execution_sessions", targetSessionId, { ...binding, sessionId: target });
       this.store.set("work_sessions", targetSessionId, { createdAt: new Date().toISOString(), parentSessionId: sessionId });
@@ -268,13 +380,13 @@ export class WorkSessions {
   async discover() {
     this.validate();
     if (!this.host.discoverRuntime) throw new WorkError("host_discovery_unsupported", 409);
-    return this.request(() => this.host.discoverRuntime!(this.runtimeId));
+    return this.forward(() => this.host.discoverRuntime!(this.runtimeId));
   }
   /** The runtime's description as its Host reports it, including the owner's allowed settings. No native handshake. */
   async inspect() {
     this.validate();
     if (!this.host.inspectRuntime) throw new WorkError("host_runtime_inspection_unsupported", 409);
-    return this.request(() => this.host.inspectRuntime!(this.runtimeId));
+    return this.forward(() => this.host.inspectRuntime!(this.runtimeId));
   }
   /** Native settings (model, effort, ...) sent with every turn of this agent that does not select its own. */
   defaultSettings(): Record<string, unknown> {
@@ -295,11 +407,11 @@ export class WorkSessions {
   private nativeRequest(method: string, params: Record<string, unknown> = {}, runtimeId = this.runtimeId) {
     this.validate();
     if (!this.host.nativeRequest) throw new WorkError("host_native_extension_unsupported", 409);
-    return this.request(() => this.host.nativeRequest!(runtimeId, method, params));
+    return this.forward(() => this.host.nativeRequest!(runtimeId, method, params));
   }
   async skills(forceReload = false) {
     this.validate();
-    const cwd = await this.request(() => runtimeWorkingDirectory(this.host, this.runtimeId));
+    const cwd = await this.forward(() => runtimeWorkingDirectory(this.host, this.runtimeId));
     return this.nativeRequest("skills/list", { forceReload, cwds: [cwd] });
   }
   async configureSkill(path: string, enabled: boolean) {
@@ -311,7 +423,7 @@ export class WorkSessions {
   private async nativeBinding(sessionId: string) {
     const binding = this.binding(sessionId);
     if (!this.host.nativeSessions) throw new WorkError("host_native_sessions_unsupported", 409);
-    const response = await this.request(() => this.host.nativeSessions!({ runtimeId: binding.runtimeId, action: "bindings" })) as { bindings?: Array<{ sessionId: string; nativeSessionId: string }> };
+    const response = await this.forward(() => this.host.nativeSessions!({ runtimeId: binding.runtimeId, action: "bindings" })) as { bindings?: Array<{ sessionId: string; nativeSessionId: string }> };
     const native = response.bindings?.find(row => row.sessionId === binding.sessionId);
     if (!native) throw new WorkError("native_session_binding_not_found", 404);
     return { runtimeId: binding.runtimeId, nativeSessionId: native.nativeSessionId };
@@ -352,6 +464,74 @@ export class WorkSessions {
       this.store.set("work_session_deliveries", input.eventId, { hash, taskId: record.taskId!, deliveryId, ...receipt });
     });
     return this.lookupDelivery(input.eventId)!;
+  }
+  /**
+   * Ask the owner (ADR 0005 20.3): a card with choices in the owner conversation that belongs to no run, for a decision
+   * the product needs from the owner about something that happens elsewhere. It is shown and answered like a card of a
+   * run, on the web and on the route `connectionId` selects (the rule of `deliver`); the first answer wins. The same
+   * `eventId` returns the same request. It ends answered, `expired` at `expiresAt`, or `withdrawn`.
+   */
+  request(input: OwnerRequestInput): OwnerRequestResult {
+    this.validate();
+    const request = ownerRequestSchema.parse(input), target = request.connectionId;
+    const hash = digest(request), prior = this.store.get<RequestRecord>("work_session_requests", request.eventId);
+    if (prior && prior.hash !== hash) throw new WorkError("owner_request_event_id_reused", 409);
+    if (!prior) {
+      if (!(Date.parse(request.expiresAt) > Date.now())) throw new WorkError("owner_request_expired", 400);
+      if (target !== undefined && target !== WEB_CONNECTION && !this.communication.connected(target)) throw new WorkError("delivery_connection_not_found", 404);
+      const { sessionId } = this.openOwnerConversation();
+      this.store.transaction(() => {
+        const route = this.communication.ownerRoute(sessionId, target);
+        createRequest(this.communication.ledger, this.communication, this.agentId, sessionId, request, route);
+        this.store.set("work_session_requests", request.eventId, { hash, cardId: requestCardId(request.eventId), route: routeFacts(route, target),
+          expiresAt: request.expiresAt } satisfies RequestRecord);
+      });
+    }
+    return this.lookupRequest(request.eventId)!;
+  }
+  /** The request and its result, read from the ledger; a request past its deadline reads as `expired`. */
+  lookupRequest(eventId: string): OwnerRequestResult | null {
+    this.validate();
+    const record = this.store.get<RequestRecord>("work_session_requests", eventId);
+    if (!record) return null;
+    const ledger = this.communication.ledger;
+    expireRequests(ledger, this.communication);
+    const card = ledger.cardRecord(record.cardId), base = { eventId, cardId: record.cardId, sessionId: this.ownerSession, expiresAt: record.expiresAt };
+    const delivery = this.receipt(record.route, requestDeliveryId(eventId), `notice:${requestDeliveryId(eventId)}`, true);
+    // The owner cleared the conversation: the card is gone and can no longer be answered.
+    if (!card) { const at = ledger.settledAt("request", eventId); return { ...base, status: "expired", ...(at === undefined ? {} : { settledAt: new Date(at).toISOString() }), delivery }; }
+    if (card.status === "pending") return { ...base, status: "pending", delivery };
+    const settledAt = new Date(card.updatedAt).toISOString();
+    if (card.status === "expired" || card.status === "canceled") return { ...base, status: card.status === "expired" ? "expired" : "withdrawn", settledAt, delivery };
+    const choice = (card.result as { choice?: unknown } | null)?.choice;
+    return { ...base, status: "answered", ...(typeof choice === "string" ? { choice } : {}), ...(card.answeredBy ? { answeredBy: card.answeredBy } : {}),
+      ...(card.surface === "web" || card.surface === "channel" ? { surface: card.surface } : {}), settledAt, delivery };
+  }
+  /** Withdraw an unanswered request: its card closes, and an answer that arrives later is refused. Returns the request as it is now. */
+  withdrawRequest(eventId: string): OwnerRequestResult {
+    const current = this.lookupRequest(eventId);
+    if (!current) throw new WorkError("owner_request_not_found", 404);
+    const card = this.communication.ledger.cardRecord(current.cardId);
+    if (card?.status === "pending") closeRequest(this.communication.ledger, this.communication, card, "canceled");
+    return this.lookupRequest(eventId)!;
+  }
+  /**
+   * What ended since a cursor (ADR 20.4): work events whose turn reached a terminal state, and owner requests that
+   * were answered, expired or withdrawn, in the order that happened. The record is durable and its `seq` only grows,
+   * so a reader that keeps the returned `cursor` sees every ending once, also after a restart of either side.
+   */
+  settlements(options: { after?: number | undefined; limit?: number | undefined } = {}): { data: Settlement[]; cursor: number } {
+    this.validate();
+    const after = z.number().int().min(0).parse(options.after ?? 0), limit = z.number().int().min(1).max(500).parse(options.limit ?? 100);
+    expireRequests(this.communication.ledger, this.communication);
+    const rows = this.communication.ledger.settlements(after, limit);
+    const data = rows.flatMap((row): Settlement[] => {
+      const head = { seq: row.seq, settledAt: new Date(row.settledAt).toISOString() };
+      if (row.kind === "work") return this.store.get("work_session_events", row.eventId) ? [{ ...head, kind: "work", event: this.get(row.eventId) }] : [];
+      const request = this.lookupRequest(row.eventId);
+      return request ? [{ ...head, kind: "request", request }] : [];
+    });
+    return { data, cursor: rows.at(-1)?.seq ?? after };
   }
   /** Connections a schedule notice can name (`deliver` `connectionId`): `web` and every registered connection. */
   deliveryConnections(): string[] { return [...new Set([WEB_CONNECTION, ...this.communication.connectionIds()])]; }

@@ -9,12 +9,16 @@ import type { RunObservation } from "../execution/observation.js";
 import { digest, key } from "../execution/protocol.js";
 import { WorkError, type CliWork } from "../execution/work.js";
 import { RETRY_CALL_PREFIX, type AgentLedger, type CardKind, type CardRecord, type CardStatus, type CardSurface, type LedgerEvent } from "./ledger.js";
+import { closedRequestReply, expireRequests, requestInput } from "./requests.js";
+import { WEB_CONNECTION } from "./surfaces.js";
 
 /** ADR 0005 16.1: the private browser link of a handoff card is never stored in the transcript. */
 export const HANDOFF_LINK = "[私密链接，仅在卡片待处理时显示]";
 export const redactLinks = (text: string) => text.replace(/https:\/\/[^\s"'<>）)]+/g, HANDOFF_LINK);
 const redactDeep = (value: unknown): unknown => typeof value === "string" ? redactLinks(value) : Array.isArray(value) ? value.map(redactDeep)
   : value && typeof value === "object" ? Object.fromEntries(Object.entries(value).map(([name, item]) => [name, redactDeep(item)])) : value;
+/** Chat commands that stop or steer the running turn (`HostWorker.handleInput`). They are never an answer to a card. */
+export const STOP_COMMAND = /^(\/(?:cancel|stop)(?:@\w+)?|停止|停一下|取消|取消当前任务)$/i, STEER_COMMAND = /^\/steer\s+/i;
 const approvalMethod = (name: string) => name === "approval" || name === "permission" || name === "session/request_permission" || /requestApproval$/.test(name);
 
 /** Card kind of a Host interaction (ADR 4.1 `ledger_cards.kind`). */
@@ -108,8 +112,8 @@ export class LedgerControl {
     });
     // An answer given in the web is announced in the external conversation the card was sent to.
     if (closed && (fields.surface ?? card.surface) === "web") {
-      const input = this.deps.core.input(card.turnId);
-      if (input && input.connectionId !== "web" && this.deps.core.capabilities(card.turnId)) {
+      const input = card.route ? requestInput(this.deps.core, card) : this.deps.core.input(card.turnId);
+      if (input && input.connectionId !== "web" && this.deps.core.capabilitiesOf(input)) {
         try { this.deps.core.notice(input, "已在网页回答。", `web-answer:${card.cardId}`); } catch { /* The card state is already committed. */ }
       }
     }
@@ -137,6 +141,8 @@ export class LedgerControl {
    */
   async answer(cardId: string, input: AnswerInput): Promise<{ status: "accepted" | "stale"; card: CardView }> {
     let card = this.card(cardId); if (!card) throw new WorkError("card_not_found", 404);
+    // An owner request past its deadline is expired before it can be answered.
+    if (card.source === "product" && card.status === "pending") { expireRequests(this.ledger, this.deps.core); card = this.card(cardId)!; }
     const stale = async () => ({ status: "stale" as const, card: await this.view(cardId) });
     // The worker completed this request's planned answer (after a Host failure or crash): it is this request's answer.
     if (card.status !== "pending" && card.answerKey === input.key) return { status: "accepted", card: await this.view(cardId) };
@@ -152,7 +158,7 @@ export class LedgerControl {
         result = JSON.parse(String(choice.result)); summary = body.choices?.find((item) => item.choiceId === input.choiceId)?.label ?? input.choiceId;
       } else if (input.text !== undefined) {
         summary = Array.from(input.text).slice(0, 140).join("");
-        if (card.source === "router") {
+        if (card.source === "router" || card.source === "product") {
           const index = (body.choices ?? []).findIndex((item) => item.label === input.text!.trim());
           const choice = index >= 0 ? this.ledger.cardChoice(cardId, String(index)) : undefined;
           if (!choice) throw new WorkError("invalid_answer", 422).with({ detail: "interaction_choice_required" });
@@ -167,9 +173,16 @@ export class LedgerControl {
         if (card.source !== "host" || card.kind !== "question") throw new WorkError("choice_or_text_required", 422);
         result = input.result; summary = "";
       } else throw new WorkError("choice_or_text_required", 422);
-      const planned = this.tx(() => this.ledger.planAnswer(cardId, { key: input.key, result, by: input.by, surface: input.surface, ...(summary ? { summary } : {}) }));
+      const answer = { key: input.key, result, by: input.by, surface: input.surface, ...(summary ? { summary } : {}) };
+      // An owner request has no call to resolve: its answer is the card, planned and committed as one step.
+      const planned = this.tx(() => {
+        const state = this.ledger.planAnswer(cardId, answer);
+        if (state !== "closed" && state !== "taken" && card!.source === "product") this.commit(this.card(cardId)!, result, { by: input.by, ...(summary !== undefined ? { summary } : {}), surface: input.surface });
+        return state;
+      });
       if (planned === "closed" || planned === "taken") return stale();
       card = this.card(cardId)!;
+      if (card.source === "product") return { status: "accepted", card: await this.view(cardId) };
     }
     const settled = await this.deliver(card, result);
     if (settled === "stale") return stale();
@@ -179,6 +192,7 @@ export class LedgerControl {
   /** Step 6: resolve through RunObservation (Host, or Mau's synthetic calls), or run a Router-native card. */
   private async deliver(card: CardRecord, result: unknown): Promise<"done" | "stale"> {
     if (card.source === "router") { await this.retryDecision(card, result); return "done"; }
+    if (card.source === "product") return "done";
     const observation = this.deps.observation;
     if (!observation) throw new WorkError("host_observation_unavailable", 409);
     try { await observation.resolve(card.claimId, card.callId, result); return "done"; }
@@ -234,7 +248,8 @@ export class LedgerControl {
     if (ledger.card(cardId)) return;
     const text = "这一轮执行中断，结果无法确认，系统不会自动重复执行。要重新执行吗？";
     const labels = ["重新执行", "不用了"], results = [{ action: "retry" }, { action: "skip" }];
-    const input = this.deps.core.input(binding.taskId), external = input && input.connectionId !== "web";
+    // Product work is not submitted again from this card (`retryDecision`), so its card stays on the transcript only.
+    const input = this.deps.core.input(binding.taskId), external = input && !input.routed && input.connectionId !== "web";
     const nativeButtons = external ? this.deps.core.capabilities(binding.taskId)?.buttons : undefined;
     const tokens = labels.map((_label, index) => digest(key(callId, String(index))).slice(0, 32));
     this.tx(() => {
@@ -267,7 +282,8 @@ export class LedgerControl {
     }
     if ((result as { action?: unknown } | null)?.action !== "retry") return;
     const original = this.deps.core.input(card.turnId);
-    if (!original) return;
+    // Product work is the product's to submit again; only a received message is queued a second time.
+    if (!original || original.routed) return;
     const ledger = this.ledger, externalId = `${original.source.externalId}:retry:${card.turnId}`.slice(0, 512);
     this.tx(() => {
       const record = this.deps.core.receive(original.connectionId, { ...original.source, externalId,
@@ -364,12 +380,57 @@ export class LedgerControl {
     }
     if (!core.isOwnerInput(input)) return false;
     const token = input.source.action ? this.ledger.cardToken(input.source.action.token) : undefined;
+    if (await this.requestAnswer(input, token ? { cardId: String(token.card_id), choiceId: String(token.choice_id) } : undefined, text)) return true;
     const cards = this.ledger.openCards({ sessionKey: input.conversationId }).filter((card) => card.source === "router");
     const card = token ? cards.find((item) => item.cardId === token.card_id) : cards.length === 1 ? cards[0] : undefined;
     if (!card || !token && !["重新执行", "不用了"].includes(text)) return false;
     const answered = await this.answer(card.cardId, { key: `channel:${input.id}`, by: core.ownerPersonId ?? null, surface: "channel",
       ...(token ? { choiceId: String(token.choice_id) } : { text }) });
     core.notice(input, answered.status === "stale" ? "这个问题已经回答过了。" : "已收到回答。", "retry-answer");
+    return true;
+  }
+  /**
+   * The owner's answer to an owner request from a channel (ADR 20.3): its button, or a reply with the exact label or
+   * the number of a choice. A reply names its request by quoting the card's message. Without a quote a label must
+   * belong to one request while only requests wait in the session. A number is taken only for a card that was sent to
+   * this conversation as a numbered list, and without a quote only while it is the only card waiting. A stop or steer
+   * command is never an answer. Anything else is an ordinary message, or an answer to a question of a run.
+   */
+  private async requestAnswer(input: ChannelInput, token: { cardId: string; choiceId: string } | undefined, text: string): Promise<boolean> {
+    const core = this.deps.core, ledger = this.ledger, key = `channel:${input.id}`;
+    const labels = (card: CardRecord) => ((ledger.event(card.eventId)?.body.card as Partial<CardView> | undefined)?.choices ?? []).map((choice) => choice.label);
+    const confirm = (card: CardRecord) => core.notice(input, card.answerKey === key ? `已收到回答：${card.summary ?? ""}。` : closedRequestReply(card), "request-answer");
+    // This message already answered a request (a restart between the answer and the end of dispatch): it is not read again.
+    const answeredBefore = ledger.cardByAnswer(key);
+    if (answeredBefore?.source === "product") { confirm(answeredBefore); return true; }
+    if (!token && (STOP_COMMAND.test(text) || STEER_COMMAND.test(text))) return false;
+    expireRequests(ledger, core);
+    let cardId: string, choiceId: string;
+    if (token) {
+      const card = this.card(token.cardId);
+      if (!card || card.source !== "product" || card.sessionKey !== input.conversationId) return false;
+      cardId = card.cardId; choiceId = token.choiceId;
+    } else {
+      const open = ledger.openCards({ sessionKey: input.conversationId }).filter((card) => card.source === "product");
+      if (!open.length || !text) return false;
+      // The owner saw numbers only where the card was sent without buttons.
+      const listed = (card: CardRecord) => ledger.deliveriesFor(card.eventId).some((row) => row.purpose === "card" && row.connectionId === input.connectionId &&
+        !(row.content as { buttons?: unknown[] } | null)?.buttons?.length);
+      const quotedId = input.source.quoted?.messageId, waiting = ledger.pendingCards(input.conversationId);
+      const candidates = quotedId ? open.filter((card) => ledger.deliveriesFor(card.eventId).some((row) => row.platformMessageId?.split(",").includes(quotedId))) : open;
+      // A reply that quotes something else is not about a request.
+      if (!candidates.length) return false;
+      const named = candidates.filter((card) => labels(card).includes(text));
+      const numbered = !named.length && /^[1-9]$/.test(text) && (quotedId ? candidates.length === 1 : waiting === 1) && listed(candidates[0]!) && Number(text) <= labels(candidates[0]!).length;
+      if (!named.length && !numbered) return false;
+      // Several requests carry the label, or a question of a run waits as well: the owner has to say which one is meant.
+      if (named.length > 1 || named.length && !quotedId && waiting > open.length) { core.notice(input, "有多个问题等待回答，请点击对应问题的选项，或引用对应的消息回复。", "ambiguous-question"); return true; }
+      const card = named[0] ?? candidates[0]!;
+      cardId = card.cardId; choiceId = String(named.length ? labels(card).indexOf(text) : Number(text) - 1);
+    }
+    // An answer typed in the web chat is a web answer: the conversation the card was sent to is told.
+    await this.answer(cardId, { key, by: core.ownerPersonId ?? null, surface: input.connectionId === WEB_CONNECTION ? "web" : "channel", choiceId });
+    confirm(this.card(cardId)!);
     return true;
   }
 }

@@ -94,7 +94,10 @@ export class OwnerHub {
     if (match[1] === "obs" && !ledger.session(sessionKey)) throw new WorkError("chat_not_found", 404);
     return { agentId, kind: match[1] === "dm" ? "dm" : "observed", sessionKey, ledger };
   }
-  private actor(agentId: string, event: Pick<LedgerEvent, "senderType" | "senderId">): Actor {
+  private actor(agentId: string, event: Pick<LedgerEvent, "senderType" | "senderId"> & Partial<Pick<LedgerEvent, "body">>): Actor {
+    // An input another agent sent (`WorkSessions.submit` `sender`) carries the name it was sent under.
+    const named = event.body?.sender as { kind?: unknown; name?: unknown } | undefined;
+    if (event.senderType === "agent" && named?.kind === "agent" && typeof named.name === "string") return { type: "agent", id: event.senderId, name: named.name };
     if (event.senderType === "agent") return { type: "agent", id: event.senderId, name: this.directory.agentName(event.senderId) };
     if (event.senderType === "person") return { type: "person", id: event.senderId, name: this.directory.personName(event.senderId) ?? event.senderId };
     if (event.senderType === "system") return { type: "system", id: event.senderId, name: event.senderId === "router" ? "Router" : event.senderId };
@@ -119,6 +122,8 @@ export class OwnerHub {
       if (deliveries.length) picked.deliveries = deliveries.map((item) => deliveryState({ deliveryId: item.deliveryId, connectionId: item.connectionId,
         channel: (item.route as { channel?: string } | null)?.channel, status: item.status, error: item.error ?? undefined }));
     }
+    // What started an input that no channel message carried: `work`, `delegation` or `schedule`.
+    if (event.kind === "message" && event.role === "user" && typeof body.origin === "string") picked.origin = body.origin;
     const channel = body.origin === "schedule" ? "schedule" : typeof body.channel === "string" ? body.channel : undefined;
     // The client's key, on the sender's own web messages only (chats are owner-only, so the reader is the sender).
     const own = event.senderType === "person" && event.idempotencyKey?.startsWith(`${WEB_CONNECTION}:${event.senderId}:`)

@@ -19,6 +19,8 @@ export class WorkError extends Error {
 
 /** The default execution adapter is a durable CLI inbox, with no additional HTTP agent service. */
 export class CliWork implements ExecutionBackend {
+  /** Called once when a task reaches a terminal state, inside the transaction that records it. */
+  settled?: (task: Task) => void;
   constructor(readonly store: DurableStore, private readonly policy: (sender: string) => Policy) {}
   private load(id: string): Work {
     const work = this.store.get<Work>("cli_work", id);
@@ -195,6 +197,7 @@ export class CliWork implements ExecutionBackend {
     this.fit(work.task);
     this.store.set("cli_work", work.task.id, work);
     this.store.set("cli_work_events", randomUUID(), work.task);
+    if (terminal(work.task)) this.settled?.(work.task);
   }
   private fit(task: Task): void {
     task.history = task.history.slice(-20);
