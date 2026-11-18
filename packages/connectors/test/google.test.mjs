@@ -380,7 +380,15 @@ test("gws commands run with the access token only after credential-free classifi
   const pending = await s.call("gws_write", { args: send });
   assert.equal(pending.status, "approval_required");
   const operation = await s.service.operation(pending.operationId);
-  assert.match(operation.summary, /gws gmail \+send --to reader@example.test --subject 'It'\\''s done' --body hello/);
+  assert.equal(operation.summary, `Google gmail: gws gmail +send --to reader@example.test --subject "It's done" --body hello`);
+  // Line breaks and invisible characters are shown as escapes, long values in full, and a repeated option is refused.
+  const odd = await s.call("gws_write", { args: ["gmail", "+send", "--to", "reader@example.test", "--body", `a\nb‮c​${"x".repeat(900)}`] });
+  assert.ok(odd.summary.endsWith(`--body "a\\nb\\u202ec\\u200b${"x".repeat(900)}"`), odd.summary);
+  s.service.deny(odd.operationId);
+  const repeated = await s.call("gws_write", { args: [...send, "--to=other@example.test"] });
+  assert.deepEqual([repeated.status, repeated.error, repeated.detail], ["failed", "gws_flag_repeated", { flag: "--to" }]);
+  const long = await s.call("gws_write", { args: [...send, "--cc", "y".repeat(4000)] });
+  assert.deepEqual([long.status, long.error, long.detail.limit], ["failed", "approval_too_long_to_display", 3500]);
   assert.ok(!gws.runs.some((run) => run.token));
   const done = await s.approve(pending);
   assert.equal(done.status, "completed"); assert.equal(gws.runs.at(-1).token, "private-access");

@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { z } from "zod";
 import type { Json } from "../../canonical.js";
-import { ConnectorError } from "../../connector.js";
+import { ConnectorError, shownArgument } from "../../connector.js";
 import type { GoogleProduct } from "./account.js";
 
 /**
@@ -71,6 +71,15 @@ export async function classifyGws(args: string[], product: GoogleProduct, run: (
     if (short) throw new ConnectorError("gws_flag_not_allowed", { flag: `-${short}` });
   }
   if (args.includes("--help") || args.includes("-h") || args.length === 1) return { kind: "guide" };
+  // A repeated option leaves it to the CLI which value counts; the owner would read one and gws could use another.
+  const seen = new Set<string>();
+  for (const arg of args) {
+    if (arg === "--") break;
+    if (!arg.startsWith("--")) continue;
+    const flag = arg.split("=")[0]!;
+    if (seen.has(flag)) throw new ConnectorError("gws_flag_repeated", { flag });
+    seen.add(flag);
+  }
   let method: string;
   if (args[1]!.startsWith("+")) {
     if (refusedHelpers.has(args[1]!)) throw new ConnectorError("gws_command_not_allowed", { command: args[1]! });
@@ -90,8 +99,9 @@ export async function classifyGws(args: string[], product: GoogleProduct, run: (
   return { kind: parsed.httpMethod === "GET" ? "read" : "write", method: `${service}.${method}`, scopes: parsed.scopes ?? [] };
 }
 
+/** The whole command as the owner reads it; see `shownArgument`. */
 export function shellLine(args: string[]) {
-  return ["gws", ...args].map((arg) => /^[A-Za-z0-9_@%+=:,./-]+$/.test(arg) ? arg : `'${arg.replaceAll("'", "'\\''")}'`).join(" ");
+  return ["gws", ...args].map(shownArgument).join(" ");
 }
 
 export function gwsOutput(result: GwsResult): Json {

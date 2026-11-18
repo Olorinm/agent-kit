@@ -39,6 +39,10 @@ the owner set to `ask` (see [Operation policy](#operation-policy)).
    `sha256(canonical({v:1, id, owner, agentId, connectionId, tool, input}))`. Nothing has happened yet.
 3. Router (service token) fetches the operation, including the connector-generated summary and arguments,
    and shows it on the owner's trusted device. Router must not use any summary supplied by the Agent.
+   A summary is the whole operation: commands of the CLI-backed connectors show every argument, with control and
+   invisible characters as escapes, and a write whose summary exceeds 3500 characters is refused
+   (`approval_too_long_to_display`) instead of being shown in part. A command that repeats an option the CLI
+   does not collect is refused (`feishu_flag_repeated`, `gws_flag_repeated`).
 4. After the owner confirms, Router signs a grant: `sub` = owner, `op` = operation ID, `dig` = digest,
    `apv` = approving device, lifetime ≤ 10 minutes.
 5. The service decrypts the payload (its associated data binds ID, owner, Agent, connection, tool and digest,

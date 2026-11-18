@@ -67,6 +67,12 @@ export class ServiceError extends Error {
 }
 
 const STATUS_TOOL = "operation_status";
+/**
+ * The longest approval summary, in characters. A summary is what the owner reads before approving, so it is never
+ * shortened: a write whose summary is longer is refused before any approval exists. The value fits one chat message
+ * or card on the channels products use (4000-character messages) with room for the choices.
+ */
+export const APPROVAL_SUMMARY_LIMIT = 3500;
 const connectionId = /^[a-z0-9][a-z0-9-]{0,31}$/;
 const reservedKeys = new Set(["__proto__", "constructor", "prototype"]);
 
@@ -336,10 +342,14 @@ export class ConnectorService {
       detail: { operation: operation?.id ?? null, ...(operation ? { label: operation.label } : {}),
         instruction: "The owner set this operation to need their approval each time, and approval cannot be given in this context (for example scheduled or delegated work). Do not retry here." } };
     const now = this.#now(), id = randomUUID();
-    const summary = (entry.tool.summarize?.(input, entry.connection) ?? `${entry.tool.name} on ${entry.connection.label ?? entry.connection.id}`).slice(0, 2000);
+    const summary = entry.tool.summarize?.(input, entry.connection) ?? `${entry.tool.name} on ${entry.connection.label ?? entry.connection.id}`;
     const content = contentDigest(caller.owner, entry.connection.id, entry.tool.name, input);
     // Pre-approval never repeats a write whose earlier outcome is unknown; the owner decides.
     const auto = (setting === "allow" || (entry.tool.risk === "write" && this.#preApproved(entry, input))) && !this.options.store.hasStatus(content, "uncertain");
+    // The owner approves what the summary shows; one that cannot be shown whole is not asked about at all.
+    if (!auto && summary.length > APPROVAL_SUMMARY_LIMIT) return { status: "failed", error: "approval_too_long_to_display",
+      detail: { length: summary.length, limit: APPROVAL_SUMMARY_LIMIT, instruction: "The operation needs the owner's approval and is too long to show to them in full, so it was not requested. " +
+        "Split it into smaller operations or shorten its arguments; never ask the owner to approve it another way." } };
     const row: OperationRow = {
       id, owner: caller.owner, agentId: caller.agentId, connectionId: entry.connection.id, tool: entry.tool.name,
       status: auto ? "executing" : "pending", content,

@@ -3,9 +3,9 @@ import { tmpdir } from "node:os";
 import { basename, extname, join, relative, resolve, sep } from "node:path";
 import { z } from "zod";
 import type { Json } from "../../canonical.js";
-import { ConnectorError, type ConnectionConfig, type Connector, type OperationCatalog, type ToolDefinition } from "../../connector.js";
+import { ConnectorError, shownArgument, type ConnectionConfig, type Connector, type OperationCatalog, type ToolDefinition } from "../../connector.js";
 import { FeishuAccount, feishuApplicationSchema, installFeishuApplication, loadFeishuCredentials, runOfficialCli, type CliResult, type CliRunner } from "./account.js";
-import { ArgumentsError, UnconfiguredCli, checkArguments, guidanceArgs, withFlags, type Classification } from "./classify.js";
+import { ArgumentsError, UnconfiguredCli, checkArguments, checkRepeatedFlags, guidanceArgs, withFlags, type Classification } from "./classify.js";
 
 const MAX_FILES_BYTES = 20_000_000;
 const MAX_ARTIFACT_BYTES = 10_000_000;
@@ -120,7 +120,11 @@ export function feishuConnector(options: FeishuOptions = {}): Connector {
   };
   const write: ToolDefinition<Input> = {
     name: "cli_write", risk: "write", input, operations: operationsOf("write"),
-    operation: (_context, value) => feishuOperation(value.args, "write"),
+    // A repeated option the CLI resolves by keeping one value is refused before the owner is asked.
+    operation: async (_context, value) => {
+      checkRepeated(value.args, await classify(value.args));
+      return feishuOperation(value.args, "write");
+    },
     description: "Run an official lark-cli command that changes the owner's Feishu (send mail or messages, create or edit documents, records, events, approvals). " +
       "The exact arguments are shown to the owner for approval before anything runs; high-risk confirmation is added after approval, so do not pass --yes. " +
       "Attach local files through `files` and refer to them by name in args.",
@@ -128,7 +132,8 @@ export function feishuConnector(options: FeishuOptions = {}): Connector {
     async execute({ connection }, value) {
       check(value.args);
       // The owner approved these exact arguments, so a high-risk command receives its confirmation here.
-      const { risk } = await classify(value.args);
+      const classification = await classify(value.args), { risk } = classification;
+      checkRepeated(value.args, classification);
       const flags = risk === "high-risk-write" && !value.args.includes("--yes") ? ["--yes=true"] : [];
       return withSecrets(() => run(account(connection), value, { write: true, flags }));
     },
@@ -188,6 +193,15 @@ export function feishuConnector(options: FeishuOptions = {}): Connector {
     },
     async disconnect({ connection }) { return withSecrets(() => account(connection).disconnect()); },
   } };
+}
+
+function checkRepeated(args: string[], classification: Classification) {
+  try {
+    checkRepeatedFlags(args, classification.flags);
+  } catch (error) {
+    if (error instanceof ArgumentsError) throw new ConnectorError(error.message, error.detail);
+    throw error;
+  }
 }
 
 function check(args: string[]) {
@@ -305,14 +319,8 @@ const MEDIA: Record<string, string> = {
   ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document", ".mp3": "audio/mpeg", ".mp4": "video/mp4",
 };
 
-/** Owner-facing text: every argument, long values shortened, and attached files with sizes. */
+/** Owner-facing text: every argument in full (see `shownArgument`), and attached files with sizes. */
 function summary(value: Input) {
-  const quote = (arg: string) => {
-    const shown = arg.length > 300 ? `${arg.slice(0, 300)}…(${arg.length} chars)` : arg;
-    // Control and invisible formatting characters (bidi overrides, zero-width) are shown as escapes.
-    const escaped = JSON.stringify(shown).replace(/[\p{Cc}\p{Cf}]/gu, (ch) => `\\u${ch.codePointAt(0)!.toString(16).padStart(4, "0")}`);
-    return /^[\w@%+=:,./-]+$/u.test(shown) ? shown : escaped;
-  };
   const files = (value.files ?? []).map((f) => `${f.name} (${Math.floor((f.contentBase64.length * 3) / 4)} bytes)`);
-  return `Feishu: lark-cli ${value.args.map(quote).join(" ")}${files.length ? `\nFiles: ${files.join(", ")}` : ""}`;
+  return `Feishu: lark-cli ${value.args.map(shownArgument).join(" ")}${files.length ? `\nFiles: ${files.join(", ")}` : ""}`;
 }
