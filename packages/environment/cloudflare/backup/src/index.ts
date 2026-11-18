@@ -1,6 +1,6 @@
 import {DurableObject} from 'cloudflare:workers';
 import {equalSecret} from '../../src/security.mjs';
-import {uploadPath,sizeAllowed} from './policy.mjs';
+import {uploadPath,sizeAllowed,uploadSources,securityCheck} from './policy.mjs';
 interface Env { SOURCE_REVISION?:string; BACKUPS:R2Bucket; INGEST:DurableObjectNamespace<BackupIngress>; UPLOAD_TOKENS:string; STATUS_TOKEN:string; RECOVERY_TOKEN:string; HEALTH_CHECK_URL:string; }
 const json=(x:unknown,status=200)=>Response.json(x,{status,headers:{'Cache-Control':'no-store'}});
 export default {
@@ -15,7 +15,7 @@ export default {
    return new Response(object.body,{headers:{'Content-Type':'application/octet-stream','Content-Length':String(object.size),'Cache-Control':'no-store'}});
   }
   if(url.pathname==='/v1/status'&&env.STATUS_TOKEN&&await equalSecret(request.headers.get('Authorization'),`Bearer ${env.STATUS_TOKEN}`)) {
-   const entries=await Promise.all(['router','relay'].map(async s=>[s,await env.INGEST.getByName(s).status()]));
+   const entries=await Promise.all(uploadSources(env.UPLOAD_TOKENS).map(async s=>[s,await env.INGEST.getByName(s).status()]));
    return json(Object.fromEntries(entries));
   }
   if(!env.UPLOAD_TOKENS)return json({error:'not_configured'},503);
@@ -28,12 +28,13 @@ export default {
   return json({error:'unauthorized'},401);
  },
  async scheduled(_event:ScheduledController,env:Env) {
-  const sources=await Promise.all(['router','relay'].map(async source=>({source,...await env.INGEST.getByName(source).status()})));
+  const sources=await Promise.all(uploadSources(env.UPLOAD_TOKENS).map(async source=>({source,...await env.INGEST.getByName(source).status()})));
   let healthy=false;
   try {healthy=(await fetch(env.HEALTH_CHECK_URL,{signal:AbortSignal.timeout(10000),redirect:'error'})).ok;}catch{}
-  const backups=sources.map(s=>({source:s.source,fresh:!!s.lastSuccess&&Date.now()-s.lastSuccess<36*3600000}));
-  const ok=healthy&&backups.every(s=>s.fresh);
-  (ok?console.log:console.error)(JSON.stringify({event:'mau_security_check',ok,healthy,backups}));
+  const check=securityCheck(healthy,sources);
+  (check.ok?console.log:console.error)(JSON.stringify({event:'mau_security_check',...check}));
+  // A failed check is a failed invocation, so an alert on this Worker's failures sees it.
+  if(!check.ok)throw new Error('security_check_failed');
  }
 } satisfies ExportedHandler<Env>;
 export class BackupIngress extends DurableObject<Env> {

@@ -217,9 +217,16 @@ password manager/offline location. A successful upload is not a restore test: re
 parts, verify their hashes, decrypt locally, run SQLite `quick_check`, and restore the
 PostgreSQL logical dump in a disposable database before relying on the backup.
 
-Configure a Cloudflare custom email alert for the three service Workers' safe error
-logs and failed health checks, plus budget notifications. The monitor runs hourly;
-notification delivery and retention settings must be verified in the account console.
+The monitor runs hourly. It checks the product's liveness endpoint and that every
+source with an upload credential in `UPLOAD_TOKENS` committed a backup within 36 hours.
+A failed check logs `mau_security_check` with `ok: false` and throws, so the invocation
+counts as failed; a deployment without any upload credential fails it too. Remove a
+retired server's credential from `UPLOAD_TOKENS`, otherwise the check keeps failing for
+it and hides a later failure of another source. `GET /v1/status` reports the same sources.
+
+Configure a Cloudflare email alert on the three service Workers' failures and safe error
+logs, plus budget notifications. Notification delivery and retention settings must be
+verified in the account console: let the check fail once and confirm the message arrives.
 `backup/scripts/agent-backup-mirror.py` keeps two checksum-verified encrypted Agent
 exports outside Cloudflare. Its root-only `/etc/mau-agent-backup-mirror.json` contains
 the `gateway` and `backupUrl` HTTPS endpoints, an operator gateway credential and the ciphertext recovery API credential, **not**
