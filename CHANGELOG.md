@@ -16,6 +16,9 @@ section in the version-bump commit before tagging. Changes up to the versions li
   check throws, so the invocation is recorded as failed. Remove a retired server's upload
   credential, otherwise the check keeps failing for it. A deployment without an upload
   credential fails the check.
+- **Environment:** the same check's liveness request used a fetch option the Workers runtime
+  rejects, so it reported the product as down on every run. It now passes when the endpoint
+  answers 2xx without a redirect.
 - **Environment:** `backup/scripts/server-backup.py` takes its configuration file as its
   argument and accepts `exclude` patterns. It no longer dumps a PostgreSQL container, keeps no
   archive on the machine after the upload, and applies no built-in exclusions.

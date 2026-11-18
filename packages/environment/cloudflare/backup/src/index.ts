@@ -30,7 +30,8 @@ export default {
  async scheduled(_event:ScheduledController,env:Env) {
   const sources=await Promise.all(uploadSources(env.UPLOAD_TOKENS).map(async source=>({source,...await env.INGEST.getByName(source).status()})));
   let healthy=false;
-  try {healthy=(await fetch(env.HEALTH_CHECK_URL,{signal:AbortSignal.timeout(10000),redirect:'error'})).ok;}catch{}
+  // The runtime rejects redirect:'error'. A redirect answer is not ok, so it fails the check as well.
+  try {healthy=(await fetch(env.HEALTH_CHECK_URL,{signal:AbortSignal.timeout(10000),redirect:'manual'})).ok;}catch{}
   const check=securityCheck(healthy,sources);
   (check.ok?console.log:console.error)(JSON.stringify({event:'mau_security_check',...check}));
   // A failed check is a failed invocation, so an alert on this Worker's failures sees it.
