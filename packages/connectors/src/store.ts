@@ -21,7 +21,7 @@ export interface OperationRow {
   payload: string;
 }
 
-/** SQLite state. Rollback journal (not WAL) so every file on disk keeps the 0600 mode. */
+/** SQLite state in WAL mode, as the other stores are, so one replication tool covers them all. SQLite creates the WAL and shared-memory files with the database file's 0600 mode. */
 export class Store {
   readonly db: DatabaseSync;
   constructor(directory: string) {
@@ -31,7 +31,9 @@ export class Store {
     this.db = new DatabaseSync(file);
     chmodSync(file, 0o600);
     this.db.exec(`
-      PRAGMA journal_mode = DELETE;
+      PRAGMA journal_mode = WAL;
+      PRAGMA synchronous = FULL;
+      PRAGMA busy_timeout = 5000;
       PRAGMA foreign_keys = ON;
       CREATE TABLE IF NOT EXISTS credentials (connection_id TEXT PRIMARY KEY, sealed TEXT NOT NULL, updated_at TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS operations (

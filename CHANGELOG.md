@@ -5,6 +5,25 @@ tag publishes a GitHub Release whose notes are this file's section for that vers
 section in the version-bump commit before tagging. Changes up to the versions listed under
 0.8.0-alpha.1 are in each package's own `CHANGELOG.md`.
 
+## [0.11.0-alpha.3] - 2026-11-18
+
+- **Connectors:** the store's SQLite database runs in WAL mode with `synchronous = FULL` and a
+  five-second busy timeout, as Router's stores do, so one replication or backup tool handles
+  every database of a deployment. SQLite creates the WAL and shared-memory files with the
+  database file's 0600 mode. An existing database is converted when the service opens it.
+- **Environment:** the backup ingress's hourly check covers the sources named in
+  `UPLOAD_TOKENS` instead of two names fixed in code, as does `GET /v1/status`, and a failed
+  check throws, so the invocation is recorded as failed. Remove a retired server's upload
+  credential, otherwise the check keeps failing for it. A deployment without an upload
+  credential fails the check.
+- **Environment:** the same check's liveness request used a fetch option the Workers runtime
+  rejects, so it reported the product as down on every run. It now passes when the endpoint
+  answers 2xx without a redirect.
+- **Environment:** `backup/scripts/server-backup.py` takes its configuration file as its
+  argument and accepts `exclude` patterns. It no longer dumps a PostgreSQL container, keeps no
+  archive on the machine after the upload, and applies no built-in exclusions.
+  `backup/scripts/agent-backup-mirror.py` is removed.
+
 ## [0.11.0-alpha.2] - 2026-11-18
 
 - **Environment:** the model endpoints a sandbox may reach are selected per environment. The
