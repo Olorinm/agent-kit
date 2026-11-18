@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { APPROVAL_BY_BUTTON, APPROVAL_ELSEWHERE } from "../communication/interaction.js";
 import { noticeDeliveryId, type ChannelInput, type CommunicationCore, type OwnerRoute } from "../communication/core.js";
 import { digest, key } from "../execution/protocol.js";
 import { REQUEST_CALL_PREFIX, type AgentLedger, type CardRecord } from "./ledger.js";
@@ -63,7 +64,9 @@ export function createRequest(ledger: AgentLedger, core: CommunicationCore, agen
     return { label: choice.label, token };
   });
   const input = core.routed(callId, sessionKey, route), native = core.capabilitiesOf(input)?.buttons;
-  const body = native ? `${text}\n可点击选项，或直接回复选项名称。` : `${text}\n${buttons.map((button, index) => `${index + 1}. ${button.label}`).join("\n")}\n请回复选项名称或编号。`;
+  // An approval is decided by a button; a channel without buttons shows the request and points to the web console.
+  const body = request.kind === "approval" ? `${text}\n${native ? APPROVAL_BY_BUTTON : APPROVAL_ELSEWHERE}`
+    : native ? `${text}\n可点击选项，或直接回复选项名称。` : `${text}\n${buttons.map((button, index) => `${index + 1}. ${button.label}`).join("\n")}\n请回复选项名称或编号。`;
   // The card event is the web delivery; an external route also gets the message, and a notify connection the push.
   ledger.attachDelivery(core.notice(input, body, `question:${callId}`, { text: body, ...(native ? { buttons } : {}) }), event.eventId);
 }

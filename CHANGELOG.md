@@ -5,6 +5,52 @@ tag publishes a GitHub Release whose notes are this file's section for that vers
 section in the version-bump commit before tagging. Changes up to the versions listed under
 0.8.0-alpha.1 are in each package's own `CHANGELOG.md`.
 
+## [0.11.0-alpha.6] - 2026-11-19
+
+- **Router:** approvals (kernel permission requests, connector approvals, `approval` owner
+  requests) are decided only by a button or the card answer route with `choiceId`. A typed
+  reply no longer approves or rejects; it is delivered to the agent as an ordinary message. On
+  channels without buttons an approval message points to the web console.
+- **Router:** a pending pairing code that appears in a message outside a direct chat is
+  revoked when the message is received.
+- **Router:** a Cloudflare Access service token is an operator by default. It reads as its
+  owner and may only send a web chat message, open a DM chat, mark a chat read and request a
+  socket ticket; other requests return `403 owner_sign_in_required`. Set
+  `{ "owner": "...", "access": "owner" }` in `serviceTokens` to keep full access.
+  `OwnerRequest` accepts `originalUrl`; `OwnerPrincipal` has `operator`.
+- **Router:** the CSRF check accepts the request's own host as `Origin` only over HTTPS (HTTP
+  only for loopback hosts).
+- **Connectors:** approval summaries are never shortened. A write whose summary exceeds 3500
+  characters fails with `approval_too_long_to_display` before any operation is created. `gws`
+  and `lark-cli` summaries show every argument in full, with control, bidirectional,
+  zero-width and unusual space characters written as escapes; `gws` summaries use JSON-style
+  quoting.
+- **Connectors:** a command that repeats an option is refused before approval:
+  `feishu_flag_repeated` unless lark-cli's help declares the option repeatable,
+  `gws_flag_repeated` for any repeated long option.
+- **Connectors:** lark-cli runs with an allow-listed environment instead of inheriting the
+  service's environment.
+- **Connectors:** browser site permissions per connection. New sites open directly (default)
+  or ask first; always-allowed sites and per-task permissions (`task` in the tool input, 24 h
+  idle) are managed with `GET|PUT /v1/connections/:id/access`. Commands and page-started
+  top-level navigations are held to permitted sites; refusals are
+  `browser_site_permission_required` / `browser_site_command_too_long`, and blocked
+  navigations are reported in the command output. Connectors can expose owner-managed access
+  rules (`Connector.access`).
+- **Connectors:** browser URL checks refuse trailing-dot and single-label hosts, CGNAT,
+  further IPv6 private forms and metadata names, and no longer refuse names that start like
+  an IPv6 prefix. Download capture reads the response as a bounded stream. The handoff banner
+  keeps no link from the Agent; the upload approval summary names the site first and quotes
+  file names.
+- **Environment:** `modelAccounts` on create and resume holds an environment to its own
+  account at a model service. With `{ openai: [...] }` the gateway requires a ChatGPT access
+  token of a listed account on `chatgpt.com/backend-api/**` and refuses `api.openai.com`.
+  `/security` reports the stored value.
+- **Environment:** backup ingress: refused uploads no longer count against the daily quota. A
+  manifest is committed only when the first part starts with an age header for one
+  non-passphrase recipient and, when `BACKUP_RECIPIENTS` is set, names one of those
+  recipients. The example configuration disables `workers_dev`.
+
 ## [0.11.0-alpha.5] - 2026-11-19
 
 - **Router:** Feishu group chats follow the group allowlist. The owner can mention the bot in

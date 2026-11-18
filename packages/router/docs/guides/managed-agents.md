@@ -29,11 +29,18 @@ configured owner. `AGENT_EDGE_IDENTITY_FILE` points to a JSON file:
 - `teamDomain` is an HTTPS origin without a path or trailing slash. The signing keys are read from
   `<teamDomain>/cdn-cgi/access/certs`.
 - `owners` maps a lowercase email address to an owner id, or to `{ "owner": "...", "sub": "..." }` to also require the
-  JWT subject. `serviceTokens` maps the `common_name` of an Access service token to an owner id.
+  JWT subject.
+- `serviceTokens` maps the `common_name` of an Access service token to an owner id, or to
+  `{ "owner": "...", "access": "operator" | "owner" }`. A service token is not the owner's sign-in: by default
+  (`operator`) it reads as that owner (every `GET` and `HEAD` that is not a protocol upgrade) and may only send a web
+  chat message, open a DM chat, mark a chat read and request a socket ticket. Every other request gets
+  `403 owner_sign_in_required`, on the Router routes and on the routes of a product that authenticates through Router.
+  `"access": "owner"` gives the token all of the owner's requests; use it only for automation that needs them.
 - Every owner id must be in the service's namespace; otherwise the service does not start.
 - `clockSkewSeconds` (default 60) is the accepted clock difference.
 - `origins` lists the browser origins allowed for requests that change state. The default is the origin of
-  `AGENT_SERVICE_URL`; a request whose `Origin` matches its own `Host` is also accepted.
+  `AGENT_SERVICE_URL`; an HTTPS `Origin` that matches the request's own `Host` is also accepted (plain HTTP only for
+  a loopback host).
 - `bearer` is `allow` (default) or `deny`. With `deny`, a request without an assertion is rejected even when the
   embedding product supplies a bearer authenticator.
 

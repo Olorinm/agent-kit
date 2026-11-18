@@ -39,6 +39,10 @@ the owner set to `ask` (see [Operation policy](#operation-policy)).
    `sha256(canonical({v:1, id, owner, agentId, connectionId, tool, input}))`. Nothing has happened yet.
 3. Router (service token) fetches the operation, including the connector-generated summary and arguments,
    and shows it on the owner's trusted device. Router must not use any summary supplied by the Agent.
+   A summary is the whole operation: commands of the CLI-backed connectors show every argument, with control and
+   invisible characters as escapes, and a write whose summary exceeds 3500 characters is refused
+   (`approval_too_long_to_display`) instead of being shown in part. A command that repeats an option the CLI
+   does not collect is refused (`feishu_flag_repeated`, `gws_flag_repeated`).
 4. After the owner confirms, Router signs a grant: `sub` = owner, `op` = operation ID, `dig` = digest,
    `apv` = approving device, lifetime ≤ 10 minutes.
 5. The service decrypts the payload (its associated data binds ID, owner, Agent, connection, tool and digest,
@@ -243,9 +247,14 @@ The Agent passes agent-browser arguments, checked against an allowlist before an
   `plugin`, `mcp`, `chat`, `dashboard`, `stream`, `inspect`, `batch` (it would bypass per-command checks), and
   debugging or recording commands.
 
-Navigation URLs (`open`, `goto`, `navigate`, `tab new`) must be http(s) without embedded credentials, and loopback,
-private, link-local and `.internal` hosts are refused before a browser is attached; a bare host gets `https://`
-and the checked URL is what the CLI receives. Output paths (`screenshot`, `pdf`, `download`) are replaced by a file
+Navigation URLs (`open`, `goto`, `navigate`, `tab new`) must be http(s) without embedded credentials. Loopback,
+private, carrier-grade NAT, link-local, multicast and reserved addresses (IPv4 in any spelling; IPv6 including
+unique-local, link-local, site-local, IPv4-mapped, NAT64 and 6to4 forms of a private IPv4), single-label hosts,
+`.localhost`, `.internal`, `.local`, `.home.arpa` and cloud metadata names are refused before a browser is
+attached; a trailing dot or upper case changes nothing. Address rules apply to address literals only, so a name
+such as `fd.io` is an ordinary host. Names are not resolved by this service: the browser resolves them on
+Cloudflare's network, so a public name that points at a private address is not detected here. A bare host gets
+`https://` and the checked URL is what the CLI receives. Output paths (`screenshot`, `pdf`, `download`) are replaced by a file
 in a private per-call directory; only the requested file name is kept, the files are returned and the directory is
 deleted.
 
@@ -258,20 +267,53 @@ covers what agent-browser cannot do against a remote browser; it is not a second
   targets a loopback, private, link-local or `.internal` host. This applies to clicks, `click --new-tab`, form posts,
   script navigations and redirects, not only to URLs the Agent types. Commands do not run unless the guard is
   connected; a dropped connection is restored before the next command. Subresources (images, scripts, fetch/XHR) are
-  not intercepted, matching the earlier connector.
+  not intercepted, matching the earlier connector. With [site permissions](#site-permissions) in force, top-level
+  document requests are also held to the permitted sites.
 - **Downloads.** Browser Run saves a download on its own machine and blocks reading it back, so agent-browser's
   `download` cannot deliver the file. For `download <element> <name>` agent-browser clicks the element while the
-  guard, for that command only, also pauses document responses: an attachment (or any non-HTML document) is read with
-  `Fetch.getResponseBody`, answered with an empty 204 so the page stays, and returned (links on any site, form posts,
-  redirects checked hop by hop). Script-generated downloads (`blob:`/`data:` URLs) are read inside the page, through a
-  small hook that keeps created blobs readable after the page revokes their URL; the remote download is cancelled. At
-  most 10 MB.
+  guard, for that command only, also pauses document responses: an attachment (or any non-HTML document) is read as a
+  stream (`Fetch.takeResponseBodyAsStream`, `IO.read` in 1 MiB chunks) that is abandoned once it passes the limit,
+  whatever length the response declared; it is answered with an empty 204 so the page stays, and returned (links on
+  any site, form posts, redirects checked hop by hop). Script-generated downloads (`blob:`/`data:` URLs) are read
+  inside the page, through a small hook that keeps created blobs readable after the page revokes their URL, and the
+  returned text is measured before it is decoded; the remote download is cancelled. At most 10 MB.
 - **Structured handoff.** `Cloudflare.handoff` shows the Agent's instructions with Done/Failed buttons in the live
-  view; `handoff_status` reads `Cloudflare.getHandoffState` and the `Cloudflare.handoffComplete` outcome.
+  view, on one line and with every link in them replaced by a marker; `handoff_status` reads `Cloudflare.getHandoffState` and the `Cloudflare.handoffComplete` outcome.
 
 `upload` lets agent-browser select the file input and name the files, then a fixed page script places the approved
 bytes into that input, because the remote browser cannot read this host's files. Page scripts are part of this
-service; Agent input reaches them only as JSON values.
+service; Agent input reaches them only as JSON values. The approval summary names the site first and each file
+last on its own line, quoted and without control, bidirectional or zero-width characters.
+
+### Site permissions
+
+By default a new site opens directly. The owner can switch a browser connection to `ask`
+(`PUT /v1/connections/:id/access` with `{ "webAccess": "ask" }`, service token only). Then a command runs only when
+the site it opens (`open`, `goto`, `navigate`, `tab new <url>`), or otherwise the page it acts on, is
+
+- on the connection's always-allowed list (`{ "allow": { "site": "example.com" } }`, removed with
+  `{ "remove": { "site": "example.com" } }`), or
+- allowed for the call's task (`{ "allow": { "site": "example.com", "task": "<id>" } }`). The product that admits
+  the call passes `task` in the tool input; it names the conversation the permission belongs to and must never come
+  from the Agent. A task permission lapses 24 hours after the task's last command.
+
+Any other command fails with `browser_site_permission_required` and a detail of `site` and the whole `command` for
+the product to put before the owner (`browser_site_command_too_long` when the command is too long to show whole).
+A call without `task` (scheduled or delegated work that cannot ask the owner) reaches always-allowed sites only.
+The CDP guard holds navigations the page starts (clicks, form posts, redirects, history, new tabs and pop-ups) to
+the same sites: a top-level document request to another site is failed, and the command's output tells the Agent
+to request it with `agent-browser open <url>`. `back`, `forward` and `tab` are not checked against the page they
+leave; the next command is checked against the page they arrive at.
+
+A site is the URL's host in lower case without a trailing dot or a leading `www.`, plus a non-default port. Matching
+is exact: a subdomain is another site, because grouping by registrable domain needs the public suffix list.
+`GET /v1/connections/:id/access` returns `{ "webAccess", "sites" }`. The setting and the always-allowed sites are
+sealed with the connection's state and kept across disconnect; task permissions are not.
+
+Not covered: frames and other sub-resources of a permitted page (images, scripts, fetch/XHR, WebSocket, beacons) can
+still reach any public host, so a permitted page that is itself hostile, or that embeds the Agent's input in such a
+request, can pass data on. Site permissions bound where the Agent can navigate and act, not what a permitted page
+loads.
 
 **Deliberate exception to "anything with an external effect is a write".** By product decision, matching how
 comparable assistants behave, navigation, clicks, typing, `screenshot`, `pdf` and `download` run without approval,

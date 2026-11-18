@@ -241,7 +241,10 @@ a `card` event and answers it through the card answer route, and an external con
 gets it as a message with buttons, or with numbered choices where the channel has no
 buttons. `connectionId` follows the table above. `kind: "approval"` takes exactly two
 choices, the first approving and the second rejecting, and closes the card as `approved` or
-`rejected`; the default `question` closes it as `answered`.
+`rejected`; the default `question` closes it as `answered`. An `approval` request is decided
+only by its button or through the card answer route with `choiceId`: a typed label or number
+never answers it, and a channel without buttons gets the text with a line that says to decide
+it in the web console.
 
 - The same `eventId` returns the same request; other content under it is refused with
   `owner_request_event_id_reused`. An `expiresAt` that has passed is refused with
@@ -254,7 +257,7 @@ choices, the first approving and the second rejecting, and closes the card as `a
   delivery }`. `status` is `pending`, `answered` (with the chosen `id`), `expired` or
   `withdrawn`. A request past its deadline never reads as pending.
 - The first answer wins on every surface. Only the owner can answer. In a channel the owner
-  presses a button or replies with the label of a choice, and a reply that quotes the card's
+  presses a button or, for a `question` request, replies with the label of a choice, and a reply that quotes the card's
   message always means that card. A number is accepted only where the card was sent as a
   numbered list, and without a quote only while the request is the only card waiting. When
   a label could mean several cards, Router asks which one. A stop or steer command is never

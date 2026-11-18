@@ -15,7 +15,11 @@ export interface CreateEnvironment {
   metadata?: Record<string, string>;
   /** Model endpoints the environment may reach; the provider's default when omitted. */
   modelServices?: string[];
+  /** Per model service, the accounts the environment's requests must belong to, e.g. `{ openai: ["<account id>"] }`. */
+  modelAccounts?: Record<string, string[]>;
 }
+/** What a resume may change; an omitted field keeps what the provider has stored. An empty `modelAccounts` removes it. */
+export type ResumeOptions = Pick<CreateEnvironment, "modelServices" | "modelAccounts">;
 export interface ExecOptions {
   cwd?: string;
   env?: Record<string, string>;
@@ -41,7 +45,7 @@ export interface EnvironmentProvider {
   create(request: CreateEnvironment): Promise<EnvironmentRef>;
   info(id: string): Promise<EnvironmentInfo>;
   list(metadata?: Record<string, string>): Promise<EnvironmentInfo[]>;
-  resume(id: string, timeoutSeconds?: number, options?: { modelServices?: string[] }): Promise<EnvironmentInfo>;
+  resume(id: string, timeoutSeconds?: number, options?: ResumeOptions): Promise<EnvironmentInfo>;
   pause(id: string): Promise<void>;
   destroy(id: string): Promise<void>;
   setTimeout(id: string, seconds: number): Promise<void>;

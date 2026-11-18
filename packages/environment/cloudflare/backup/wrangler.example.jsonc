@@ -2,7 +2,7 @@
   "name": "agent-backups",
   "main": "./src/index.ts",
   "compatibility_date": "2026-10-20",
-  "workers_dev": true,
+  "workers_dev": false,
   "preview_urls": false,
   "observability": {
     "enabled": true,
@@ -33,7 +33,14 @@
       "bucket_name": "YOUR-PRIVATE-BACKUP-BUCKET"
     }
   ],
+  "routes": [
+    {
+      "pattern": "backups.example.test",
+      "custom_domain": true
+    }
+  ],
   "vars": {
+    "BACKUP_RECIPIENTS": "[\"age1YOUR-PUBLIC-RECOVERY-RECIPIENT\"]",
     "HEALTH_CHECK_URL": "https://product.example.test/health/live",
     "SOURCE_REVISION": "YOUR-COMMIT-SHA"
   },

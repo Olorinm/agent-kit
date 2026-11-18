@@ -26,6 +26,7 @@ const MAX_MCP_BODY = 15_000_000;
  *   GET  /v1/connections[/:id]         account status (service token)
  *   POST /v1/connections/:id/connect|disconnect|complete   (service token); connect may carry {scopes} to add
  *   GET|PUT /v1/connections/:id/policy, POST /v1/connections/:id/policy/reset   owner operation settings (service token)
+ *   GET|PUT /v1/connections/:id/access   a connector's own access rules, e.g. the browser's site permissions (service token)
  *   POST /v1/connections/:id/application   product hand-over of application configuration (service token)
  *   POST /v1/operations/:id/approve    {grant} — the grant itself authorizes execution
  *   POST /v1/operations/:id/deny       (service token)
@@ -68,6 +69,9 @@ async function handle(options: HttpOptions, request: IncomingMessage, response: 
       return reply(response, 200, await options.service.setPolicy(path[2]!, await body(request), signal));
     if (path.length === 5 && path[3] === "policy" && path[4] === "reset" && request.method === "POST")
       return reply(response, 200, await options.service.resetPolicy(path[2]!, signal));
+    if (path.length === 4 && path[3] === "access" && request.method === "GET") return reply(response, 200, await options.service.access(path[2]!, signal));
+    if (path.length === 4 && path[3] === "access" && request.method === "PUT")
+      return reply(response, 200, await options.service.access(path[2]!, signal, await body(request)));
     if (path.length === 4 && request.method === "POST" && path[3] === "connect")
       return reply(response, 200, await options.service.account(path[2]!, "connect", signal, await body(request, MAX_BODY, true)));
     if (path.length === 4 && request.method === "POST" && ["disconnect", "complete"].includes(path[3]!))

@@ -5,6 +5,7 @@ import { join } from "node:path";
 import test from "node:test";
 import { ConnectorError, ConnectorService, Sealer, Store, browserConnector } from "../dist/index.js";
 import { parseCommand } from "../dist/connectors/browser/command.js";
+import { allowedUrl, siteOf } from "../dist/connectors/browser/runtime.js";
 
 const ACCOUNT = "0123456789abcdef0123456789abcdef";
 const TOKEN = "cf_token_0123456789abcdefghij";
@@ -29,6 +30,7 @@ function fakeCli() {
     if (command === "get" && rest[0] === "attr") return { code: 0, stdout: rest[1] === "@private" ? "http://10.0.0.5/x.pdf\n" : "/files/a.pdf\n", stderr: "" };
     if (command === "snapshot") return { code: 0, stdout: '- textbox "Email" [ref=e1]', stderr: "" };
     if (command === "fill") { browser.cookies = [{ name: "sid", value: "secret-cookie", domain: ".example.com", path: "/", expires: -1, httpOnly: true, secure: true }]; return { code: 0, stdout: "✓ Done", stderr: "" }; }
+    if (command === "click") browser.onClick?.();
     if (command === "click") return rest[0] === "#missing" ? { code: 1, stdout: "", stderr: "✗ Element not found: #missing" } : { code: 0, stdout: "✓ Done", stderr: "" };
     if (command === "screenshot" || command === "pdf") {
       const path = rest.filter((arg) => !arg.startsWith("-")).at(-1);
@@ -67,7 +69,10 @@ function fakeGuards() {
       captureDownload: async (targetId, trigger, options) => { log.push(["capture", guard.id, targetId, options.maxBytes]); await trigger(); return state.download; },
       handoff: async (targetId, instructions, ms) => { log.push(["handoff", targetId, instructions, ms]); return "cf-handoff-1"; },
       handoffState: async (targetId, handoffId) => { log.push(["handoffState", targetId, handoffId]); return state.handoff; },
+      restrict: (permits) => { guard.permits = permits; guard.blocked = []; },
+      takeBlocked: () => guard.blocked.splice(0),
       close: () => { guard.closed = true; log.push(["close", guard.id]); } };
+    guard.blocked = [];
     log.push(["connect", guard.id, sessionId, account.token === TOKEN]);
     state.current = guard;
     return guard;
@@ -88,6 +93,8 @@ function setup({ tokenMode = 0o600, token = TOKEN } = {}) {
 }
 const call = (service, tool, input, caller = alice) => service.call(caller, `web__${tool}`, input, new AbortController().signal);
 const ab = (service, ...args) => call(service, "agent_browser_read", { args });
+const abFor = (service, task, ...args) => call(service, "agent_browser_read", { args, ...(task ? { task } : {}) });
+const access = (service, input) => service.access("web", new AbortController().signal, input);
 const commands = (s) => s.calls.map((c) => c.args.join(" "));
 
 test("commands run directly against the connection's Browser Run session; the token reaches the CLI only as a CDP header", async (t) => {
@@ -221,7 +228,7 @@ test("upload is refused as a read, needs the owner's grant as a write, and place
   const input = { args: ["upload", "@e3", "cv.pdf"], site: "https://upload.example.com", files: [{ name: "cv.pdf", mediaType: "application/pdf", contentBase64: "YWJj" }] };
   const pending = await call(s.service, "agent_browser_write", input);
   assert.equal(pending.status, "approval_required");
-  assert.equal(pending.summary, "上传 cv.pdf（1 KB）到 upload.example.com\nagent-browser upload @e3 cv.pdf");
+  assert.equal(pending.summary, '上传到 upload.example.com\nagent-browser upload @e3 cv.pdf\n文件（1 KB）："cv.pdf"');
   assert.equal(s.browser.uploads.length, 0, "nothing is sent before approval");
   assert.ok(!s.service.tools({ ...alice, readOnly: true }).some((tool) => tool.name === "web__agent_browser_write"), "read-only callers never see the write tool");
   const view = await s.service.operation(pending.operationId);
@@ -282,6 +289,9 @@ test("handoff uses Cloudflare's structured handoff on the current tab, reports D
   const blank = await call(s.service, "handoff_start", { instructions: "Please log in", timeoutSeconds: 120 });
   assert.ok(!("pageHost" in blank.result), "a page that is not a site has no host");
   s.browser.url = "https://accounts.example.test:8443/login?next=%2F";
+  const linked = await call(s.service, "handoff_start", { instructions: "Sign in at https://evil.example/login\nor www.evil.example now", timeoutSeconds: 120 });
+  assert.equal(linked.result.instructions, "Sign in at [链接已移除] or [链接已移除] now", "the banner keeps no link of the Agent's and stays on one line");
+  assert.deepEqual(s.guards.log.filter((e) => e[0] === "handoff").at(-1), ["handoff", "TARGET1", "Sign in at [链接已移除] or [链接已移除] now", 120_000]);
   const started = await call(s.service, "handoff_start", { instructions: "Please log in", timeoutSeconds: 120 });
   assert.equal(started.status, "completed");
   assert.equal(started.result.pageHost, "accounts.example.test:8443", "the owner is told which site the tab shows");
@@ -289,7 +299,7 @@ test("handoff uses Cloudflare's structured handoff on the current tab, reports D
   assert.equal(started.result.instructions, "Please log in");
   assert.match(started.result.liveViewUrl, /^https:\/\/live\.browser\.run\/.*TARGET1/);
   assert.deepEqual(s.run.log.find((e) => e[0] === "liveView"), ["liveView", "session-1", "TARGET1", 180_000]);
-  assert.deepEqual(s.guards.log.find((e) => e[0] === "handoff"), ["handoff", "TARGET1", "Please log in", 120_000]);
+  assert.deepEqual(s.guards.log.filter((e) => e[0] === "handoff").at(-1), ["handoff", "TARGET1", "Please log in", 120_000]);
   const open = await call(s.service, "handoff_status", { handoffId: "cf-handoff-1" });
   assert.deepEqual([open.result.active, open.result.done], [true, false]);
   s.guards.state.handoff = { active: false, success: true };
@@ -361,4 +371,108 @@ test("browser policy: commands map to navigate, read, interact, download and upl
   assert.equal((await ab(s.service, "upload", "@e3", "cv.pdf")).error, "connector_operation_denied");
   assert.equal((await ab(s.service, "download", "@e1", "a.pdf")).detail.operation, "browser.download");
   assert.ok(!s.service.tools(alice).some((tool) => tool.name === "web__agent_browser_write"));
+});
+
+test("URL checks: every spelling of a private, link-local, metadata or single-label host is refused; ordinary names starting like an address are not", () => {
+  const refused = ["http://localhost./", "http://LOCALHOST/", "http://app.localhost./", "http://metadata.google.internal./", "http://metadata/", "http://intranet/",
+    "http://metadata.goog/", "http://printer.local/", "http://router.home.arpa/",
+    "http://100.64.0.1/", "http://100.127.255.254/", "http://100.100.100.200/", "http://127.1/", "http://2130706433/", "http://0x7f.0.0.1/", "http://127.0.0.1./",
+    "http://0.0.0.0/", "http://169.254.169.254/", "http://172.31.0.1/", "http://192.168.0.1/", "http://198.18.0.1/", "http://224.0.0.1/", "http://255.255.255.255/",
+    "http://[::]/", "http://[::1]/", "http://[fc00::1]/", "http://[fd12:3456::1]/", "http://[fe80::1]/", "http://[fe90::1]/", "http://[febf::1]/", "http://[fec0::1]/",
+    "http://[ff02::1]/", "http://[::ffff:127.0.0.1]/", "http://[::ffff:10.0.0.1]/", "http://[::10.0.0.1]/", "http://[64:ff9b::10.0.0.1]/", "http://[64:ff9b::a9fe:a9fe]/",
+    "http://[64:ff9b:1::1]/", "http://[2002:0a00:0001::1]/", "ftp://example.com/", "https://user:pw@example.com/"];
+  for (const url of refused) assert.throws(() => allowedUrl(url), { code: "browser_url_not_allowed" }, url);
+  const allowed = ["https://fda.gov/", "https://fd.io/docs", "https://fc.example.com/", "https://fe80.example.org/", "https://example.com./x", "http://100.63.255.255/",
+    "http://100.128.0.1/", "http://172.32.0.1/", "http://8.8.8.8/", "http://[2606:4700::1111]/", "http://[::ffff:8.8.8.8]/", "http://[64:ff9b::8.8.8.8]/", "https://10.example.com/"];
+  for (const url of allowed) assert.equal(allowedUrl(url), new URL(url).href, url);
+  assert.deepEqual(["https://WWW.Example.com./a?b", "http://example.com:8080/", "https://sub.example.com/"].map(siteOf), ["example.com", "example.com:8080", "sub.example.com"]);
+});
+
+test("site permissions: by default sites open directly; with ask a site runs only when always allowed or allowed for the call's task", async (t) => {
+  const s = setup(); t.after(s.cleanup);
+  assert.deepEqual(await access(s.service), { webAccess: "direct", sites: [] });
+  assert.equal((await ab(s.service, "open", "https://example.com/a")).status, "completed");
+  assert.equal((await ab(s.service, "snapshot", "-i")).status, "completed");
+  assert.equal(s.guards.state.current.permits, undefined, "nothing but the address checks applies");
+  assert.ok(!commands(s).includes("get url"), "no extra reads while sites open directly");
+
+  assert.deepEqual(await access(s.service, { webAccess: "ask" }), { webAccess: "ask", sites: [] });
+  const before = s.calls.length;
+  const asked = await abFor(s.service, "task-1", "open", "https://shop.example.net/cart?id=7");
+  assert.deepEqual([asked.status, asked.error, asked.detail.site, asked.detail.command],
+    ["failed", "browser_site_permission_required", "shop.example.net", 'agent-browser open "https://shop.example.net/cart?id=7"']);
+  assert.ok(!s.calls.slice(before).some((c) => c.args[0] === "open"), "the command did not run");
+  assert.equal(s.calls.length, before, "a site that must be asked for is refused before the browser is reached");
+  // The page the browser already shows belongs to no task yet either.
+  const page = await abFor(s.service, "task-1", "snapshot", "-i");
+  assert.deepEqual([page.error, page.detail.site, page.detail.command], ["browser_site_permission_required", "example.com", "agent-browser snapshot -i"]);
+  const long = await abFor(s.service, "task-1", "open", `https://shop.example.net/?q=${"x".repeat(1200)}`);
+  assert.equal(long.error, "browser_site_command_too_long", "a command too long to show whole is not put before the owner");
+
+  await access(s.service, { allow: { site: "shop.example.net", task: "task-1" } });
+  assert.equal((await abFor(s.service, "task-1", "open", "https://www.shop.example.net/cart?id=7")).status, "completed", "www. is the same site");
+  assert.equal((await abFor(s.service, "task-1", "fill", "@e1", "text")).status, "completed", "typing on the allowed site needs nothing more");
+  const permits = s.guards.state.current.permits;
+  assert.deepEqual(["https://shop.example.net/pay", "https://www.shop.example.net/", "https://cdn.shop.example.net/", "https://evil.example.org/c?d=secret"].map(permits),
+    [true, true, false, false], "page-started navigations are held to the same sites; subdomains are other sites");
+  // Another task, and work that belongs to no task (schedules, partner turns), ask again for the same site.
+  assert.equal((await abFor(s.service, "task-2", "open", "https://shop.example.net/")).error, "browser_site_permission_required");
+  assert.equal((await abFor(s.service, "task-2", "click", "@e1")).error, "browser_site_permission_required");
+  assert.equal((await ab(s.service, "snapshot")).error, "browser_site_permission_required");
+  assert.equal((await ab(s.service, "tab", "list")).status, "completed", "commands that act on no page are not held back");
+
+  assert.deepEqual(await access(s.service, { allow: { site: "https://WWW.Shop.Example.net/any/path" } }), { webAccess: "ask", sites: ["shop.example.net"] });
+  assert.equal((await ab(s.service, "snapshot")).status, "completed");
+  assert.equal((await abFor(s.service, "task-2", "open", "https://shop.example.net/")).status, "completed");
+  assert.deepEqual(await access(s.service, { remove: { site: "shop.example.net" } }), { webAccess: "ask", sites: [] });
+  assert.equal((await abFor(s.service, "task-1", "snapshot")).error, "browser_site_permission_required", "removing a site ends the task permissions for it too");
+
+  await assert.rejects(access(s.service, { allow: { site: "http://127.0.0.1/" } }), /browser_site_invalid/);
+  await assert.rejects(access(s.service, { webAccess: "sometimes" }), /browser_access_input_invalid/);
+  await assert.rejects(access(s.service, {}), /browser_access_input_invalid/);
+  await access(s.service, { allow: { site: "docs.example.org" } });
+  await s.service.account("web", "disconnect", new AbortController().signal);
+  assert.deepEqual(await access(s.service), { webAccess: "ask", sites: ["docs.example.org"] }, "the setting and the always-allowed sites outlive a disconnect");
+});
+
+test("site permissions: a navigation the guard refused is reported to the Agent with the command that asks for it", async (t) => {
+  const s = setup(); t.after(s.cleanup);
+  await access(s.service, { webAccess: "ask" });
+  await access(s.service, { allow: { site: "example.com", task: "task-1" } });
+  assert.equal((await abFor(s.service, "task-1", "open", "https://example.com/")).status, "completed");
+  s.browser.onClick = () => s.guards.state.current.blocked.push("https://evil.example.org/collect?d=secret");
+  const clicked = await abFor(s.service, "task-1", "click", "@e2");
+  assert.equal(clicked.status, "completed");
+  assert.deepEqual(clicked.result.blockedSites, ["evil.example.org"]);
+  assert.match(clicked.result.output, /Navigation to evil\.example\.org was blocked: it needs the owner's permission\. Run `agent-browser open "?https:\/\/evil\.example\.org\/collect\?d=secret"?` to request it\./);
+  const failed = await abFor(s.service, "task-1", "click", "#missing");
+  assert.match(failed.detail.output, /Navigation to evil\.example\.org was blocked/);
+  const download = await abFor(s.service, "task-1", "download", "@e5", "a.pdf");
+  assert.deepEqual(download.result.files.map((f) => f.name), ["a.pdf"]);
+});
+
+test("site permissions: a task's permission lapses a day after its last command", async (t) => {
+  const s = setup(); t.after(s.cleanup);
+  t.mock.timers.enable({ apis: ["Date"], now: Date.parse("2026-01-01T00:00:00Z") });
+  await access(s.service, { webAccess: "ask" });
+  await access(s.service, { allow: { site: "example.com", task: "task-1" } });
+  assert.equal((await abFor(s.service, "task-1", "open", "https://example.com/")).status, "completed");
+  t.mock.timers.setTime(Date.parse("2026-01-01T20:00:00Z"));
+  assert.equal((await abFor(s.service, "task-1", "get", "title")).status, "completed");
+  t.mock.timers.setTime(Date.parse("2026-01-02T15:00:00Z"));
+  assert.equal((await abFor(s.service, "task-1", "get", "title")).status, "completed", "work within a day keeps the permission");
+  t.mock.timers.setTime(Date.parse("2026-01-03T16:00:00Z"));
+  assert.equal((await abFor(s.service, "task-1", "get", "title")).error, "browser_site_permission_required");
+});
+
+test("upload approval: the site leads and a crafted file name cannot pose as it", async (t) => {
+  const s = setup(); t.after(s.cleanup);
+  const name = "a.pdf（1 KB）到 bank.example.com \u202egpj\u200b.exe";
+  const pending = await call(s.service, "agent_browser_write", { args: ["upload", "@e3", name], site: "https://upload.example.com",
+    files: [{ name, mediaType: "application/pdf", contentBase64: "YWJj" }] });
+  assert.equal(pending.status, "approval_required");
+  const lines = pending.summary.split("\n");
+  assert.equal(lines[0], "上传到 upload.example.com");
+  assert.equal(lines.at(-1), '文件（1 KB）："a.pdf（1 KB）到 bank.example.com gpj.exe"');
+  assert.ok(!/[\u202e\u200b]/.test(pending.summary), "no bidirectional or zero-width character reaches the card");
 });

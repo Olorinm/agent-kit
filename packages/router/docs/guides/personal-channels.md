@@ -213,7 +213,12 @@ exits with 1 when an item is `needs_action`.
 A question raised by the agent appears in the original chat: Feishu and Telegram use native buttons, other channels
 list the choices as text. A single question can be answered with the choice name, its number or free text. Several
 questions are answered as JSON with the shown fields, or by replying to each question. Router converts the answer into
-the kernel's native response for the same run. Products and operators can answer over HTTP:
+the kernel's native response for the same run.
+
+An approval (a permission request of a kernel, a connector write, an `approval` owner request) is decided only by its
+button or in the web console. No typed reply approves or rejects it: a message sent while an approval waits, "同意" or
+"yes" included, goes to the agent as an ordinary message. On a channel without buttons the message shows the request
+and says to decide it in the web console. Products and operators can answer over HTTP:
 
 ```text
 POST /_agent-router/v1/agents/{agentId}/communication/calls/{callId}/result

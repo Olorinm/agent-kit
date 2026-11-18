@@ -181,7 +181,30 @@ next start. `/security` reports the effective list as `modelServices`: the store
 selection, or the default when there is none. After such a change it is the list for
 the next start.
 
-Only the holder of the operator credential can select services. Nothing inside the
+A destination rule does not say whose account a request uses: a guest that is talked into it could send the
+owner's data to the same provider with someone else's credential. `modelAccounts` in the create or resume body
+(`{"modelAccounts":{"openai":["<ChatGPT account id>"]}}`, at most eight ids) holds an environment to its own
+account:
+
+- `chatgpt.com/backend-api/**`, WebSocket upgrades included, needs `Authorization: Bearer <access token>` whose
+  `https://api.openai.com/auth` claim `chatgpt_account_id` is listed, and a `ChatGPT-Account-ID` header, when
+  present, must be listed too. Otherwise the answer is `403` with `model_account_required` (no token, or not a
+  ChatGPT access token) or `model_account_not_allowed`. The gateway decodes the token without verifying its
+  signature: the provider refuses a token it did not sign, so a token that names a listed account is that
+  account's or useless.
+- `api.openai.com` is refused (`model_api_key_not_allowed`). An API key names no account, and a kernel signed in
+  with ChatGPT does not use that host. Do not set `modelAccounts` for an environment whose kernel uses an API key.
+- `auth.openai.com/oauth/token` stays open: a token refresh stores nothing.
+- Only `openai` can be listed. An Anthropic credential (`x-api-key` or a bearer token) cannot be mapped to an
+  account without asking the provider, so the `anthropic` service is not held to an account.
+
+Without `modelAccounts` nothing about a request's credential is checked, as before. The value is stored with the
+environment and applied when its container starts; a resume without the field keeps it, `{}` removes it, and a
+resume of a running environment stores it for the next start (pause and resume to apply it at once). An invalid
+value is refused with `invalid_create` or `invalid_model_accounts`. `/security` reports it as `modelAccounts`
+(`null` when unset).
+
+Only the holder of the operator credential can select services or accounts. Nothing inside the
 guest can change the list, and no request can add a destination: the rule sets are
 reviewed source. Admitting another provider or a private model gateway host means
 adding a service to `src/egress.mjs` with tests and redeploying the gateway.
@@ -204,7 +227,15 @@ only while paused. Neither endpoint is available without the operator credential
 `backup/src/index.ts` is the separate server-backup ingress and monitor. Each server
 has an upload-only credential scoped to its source and current dated prefix. It cannot
 list, read, overwrite or delete R2 objects. Uploads have per-source daily byte/object
-limits; a manifest is committed only after every part is present. Recovery uses a
+limits, which only stored objects count against; a manifest is committed only after every part is present, the
+first part starts with an age header for exactly one recipient that is not a passphrase, and, when the
+`BACKUP_RECIPIENTS` variable (a JSON array of age public keys) is set, the manifest's `recipient` is one of them
+(`recipient_refused`, `not_an_age_archive`). These checks catch a wrong or missing recipient in a server's backup
+configuration. They do not hold against whoever has an upload credential: an age header does not reveal its
+recipient's public key and the manifest's `recipient` is the uploader's own statement, so such a holder can commit an
+archive nobody can decrypt and keep the status fresh. A second secret for the uploader would sit on the same machine
+as the credential and add nothing. Only a restore with the recovery identity shows that a backup is usable; do one
+on a schedule. The ingress has its own hostname (`routes`); `workers_dev` and `preview_urls` stay off. Recovery uses a
 separate operator credential that returns ciphertext only. Retention policy belongs
 to the private R2 bucket: daily objects are locked for 30 days and expire after 31;
 weekly objects are locked for 84 days and expire after 85. Cloudflare administrators

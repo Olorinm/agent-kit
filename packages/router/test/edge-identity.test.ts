@@ -129,7 +129,38 @@ describe("CloudflareAccessAuthenticator", () => {
     expect(loadEdgeIdentityConfig(join(dir, "edge.json"))).toMatchObject({ clockSkewSeconds: 60, bearer: "allow" });
     for (const bad of [{ teamDomain: "http://example-team.cloudflareaccess.com" }, { teamDomain: `${team}/path` }, { teamDomain: `${team}/` },
       { audiences: [] }, { owners: { "Owner@example.test": owner } }, { owners: { "owner@example.test": "@_ar_agent:example.test" } },
-      { clockSkewSeconds: 301 }]) expect(() => edgeIdentityConfigSchema.parse(config(bad as Partial<EdgeIdentityConfig>))).toThrow();
+      { clockSkewSeconds: 301 }, { serviceTokens: { "x.access": { owner, access: "admin" } } }, { serviceTokens: { "x.access": { owner, extra: true } } }]) expect(() => edgeIdentityConfigSchema.parse(config(bad as Partial<EdgeIdentityConfig>))).toThrow();
+  });
+
+  it("marks a service token as an operator unless the file gives it owner access", async () => {
+    const signer = await key("k1"), jwks = await jwksServer([signer]);
+    const auth = new CloudflareAccessAuthenticator(config({ serviceTokens: { "plain.access": owner, "object.access": { owner }, "full.access": { owner, access: "owner" } } }), { certsUrl: jwks.url });
+    const token = (common_name: string) => sign(signer, { email: undefined, sub: "", common_name });
+    for (const name of ["plain.access", "object.access"]) expect(await auth.verify(await token(name))).toMatchObject({ ownerId: owner, via: "edge-service", operator: true });
+    expect(await auth.verify(await token("full.access"))).not.toHaveProperty("operator");
+    expect(await auth.verify(await sign(signer))).not.toHaveProperty("operator");
+    const request = async (method: string | undefined, originalUrl?: string, extra: Record<string, string> = {}) =>
+      auth.authenticate({ headers: { "cf-access-jwt-assertion": await token("plain.access"), ...extra }, method, originalUrl });
+    for (const [method, path] of [["GET", `${root}/agents`], ["HEAD", "/_other/v1/anything"], [undefined, undefined], ["POST", `${root}/web/chats/dm`], ["POST", `${root}/web/socket-tickets?x=1`],
+      ["POST", `${root}/web/chats/dm%3Aagent/messages`], ["POST", `${root}/web/chats/dm%3Aagent/read`]] as const)
+      await expect(request(method, path)).resolves.toMatchObject({ operator: true });
+    for (const [method, path, extra] of [["POST", undefined], ["POST", `${root}/agents`], ["DELETE", `${root}/agents/a`], ["DELETE", `${root}/web/chats/dm`], ["PUT", `${root}/web/chats/c/messages`],
+      ["POST", `${root}/web/chats/c/purge`], ["POST", `${root}/web/chats/c/reset`], ["POST", `${root}/web/chats/c/cards/k/answer`], ["POST", `${root}/web/chats/c/messages/extra`],
+      ["POST", `${root}/web/chats/c/events/e/redact`], ["POST", `${root}/web/identities/pairing-codes`], ["POST", `${root}/web/attachments`], ["POST", `/prefix${root}/web/chats/dm`],
+      ["POST", `${root}/web/chats/dm/`], ["POST", "/_other/v1/web/chats/dm"], ["GET", `${root}/agents`, { upgrade: "websocket" }]] as const)
+      expect(await rejected(request(method, path, extra))).toMatchObject({ error: "owner_sign_in_required", status: 403 });
+  });
+
+  it("accepts the request's own host as Origin over HTTPS, and over HTTP only on loopback", () => {
+    const auth = new CloudflareAccessAuthenticator(config({ origins: ["https://console.example.test"] }));
+    const allows = (origin: string, host: string) => auth.allowsOrigin({ headers: { origin, host } });
+    expect(allows("https://console.example.test", "other.example.test")).toBe(true);
+    expect(allows("https://app.example.test", "app.example.test")).toBe(true);
+    expect(allows("http://app.example.test", "app.example.test")).toBe(false);
+    expect(allows("http://console.example.test", "console.example.test")).toBe(false);
+    for (const host of ["127.0.0.1:8790", "localhost:8790", "[::1]:8790"]) expect(allows(`http://${host}`, host)).toBe(true);
+    expect(allows("http://127.0.0.1:8790", "127.0.0.1:9999")).toBe(false);
+    expect(allows("ftp://app.example.test", "app.example.test")).toBe(false);
   });
 });
 
@@ -170,6 +201,36 @@ describe("owner API with edge identity", () => {
     // Bearer callers keep working when no assertion is present.
     expect((await t.api(`${root}/agents`, { Authorization: "Bearer owner" })).status).toBe(200);
     expect(await t.api(`${root}/agents`, { Authorization: "Bearer owner", ...jwt })).toMatchObject({ status: 200 });
+  });
+
+  it("limits a service token to reads and the operator's writes; the owner and an owner-access token are unaffected", async () => {
+    const t = await service({ serviceTokens: { "1a2b3c4d5e6f.access": owner, "full.access": { owner, access: "owner" } } });
+    const agent = await t.managed.create(owner, "helper"), self = `http://127.0.0.1:${t.port}`;
+    const operator = { "cf-access-jwt-assertion": await t.sign({ email: undefined, sub: "", common_name: "1a2b3c4d5e6f.access" }), Origin: self };
+    const full = { "cf-access-jwt-assertion": await t.sign({ email: undefined, sub: "", common_name: "full.access" }), Origin: self };
+    const human = { "cf-access-jwt-assertion": await t.sign(), Origin: self };
+    expect((await t.api(`${root}/agents`, operator)).data.data.map((item: ManagedAgent) => item.name)).toEqual(["helper"]);
+    expect((await t.api(`${root}/web/me`, operator)).data).toMatchObject({ ownerId: owner, auth: { via: "edge-service" } });
+    expect((await t.api(`${root}/web/chats`, operator)).status).toBe(200);
+    expect((await t.api(`${root}/web/socket-tickets`, operator, "POST", {})).status).toBe(200);
+    const dm = await t.api(`${root}/web/chats/dm`, operator, "POST", { agentId: agent.id });
+    expect(dm.status).toBe(200);
+    const chat = encodeURIComponent(dm.data.chatId);
+    const refused = { status: 403, data: { error: "owner_sign_in_required" } };
+    // The message and read routes are reached: their own answers, not the operator refusal.
+    for (const path of [`${root}/web/chats/${chat}/messages`, `${root}/web/chats/${chat}/read`])
+      expect((await t.api(path, operator, "POST", {})).data.error).not.toBe("owner_sign_in_required");
+    for (const [method, path] of [["POST", `${root}/agents`], ["DELETE", `${root}/agents/${agent.id}`], ["POST", `${root}/web/chats/${chat}/purge`], ["POST", `${root}/web/chats/${chat}/reset`],
+      ["POST", `${root}/web/chats/${chat}/cards/card/answer`], ["POST", `${root}/web/identities/pairing-codes`], ["DELETE", `${root}/web/identities/1`], ["POST", `${root}/web/groups`],
+      ["PUT", `${root}/agents/${agent.id}/configuration`]] as const)
+      expect(await t.api(path, operator, method, {}), `${method} ${path}`).toEqual(refused);
+    expect(t.managed.agents(owner).map((item) => item.status)).toEqual(["active"]);
+    // A matching bearer does not turn the service token into the owner.
+    expect(await t.api(`${root}/agents`, { ...operator, Authorization: "Bearer owner" }, "POST", { name: "other" })).toEqual(refused);
+    expect((await t.api(`${root}/agents`, full, "POST", { name: "by-token" })).status).toBe(201);
+    expect((await t.api(`${root}/web/identities/pairing-codes`, human, "POST", {})).data.error).not.toBe("owner_sign_in_required");
+    expect((await t.api(`${root}/agents`, human, "POST", { name: "by-owner" })).status).toBe(201);
+    expect((await fetch(`${self}${root}/agents/${agent.id}`, { method: "DELETE", headers: human })).status).toBe(204);
   });
 
   it("never falls back to the bearer, never trusts the plain email header and detects conflicts", async () => {

@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { HANDOFF_LINK } from "../src/ledger/control.js";
 import { personId } from "../src/ledger/registry.js";
 import { enc, ik, owner, root, setup, until } from "./ledger-fixture.js";
+import { digest, key as joined } from "../src/execution/protocol.js";
 
 const cleanup: Array<() => void | Promise<void>> = [];
 afterEach(async () => { for (const close of cleanup.splice(0).reverse()) await close(); });
@@ -62,7 +63,8 @@ describe("card answers through the web (ADR 0005 16.1)", () => {
       native: { method: "approval", params: { tool: "发送邮件给 bob" } } });
     expect(await t.answer(first.cardId, { idempotencyKey: ik(), result: { choice: "once" } })).toEqual({ status: 422, data: { error: "choice_or_text_required" } });
     expect((await t.answer(first.cardId, { idempotencyKey: ik(), choiceId: "0" })).data).toMatchObject({ status: "accepted", card: { status: "approved" } });
-    expect((await t.answer(second.cardId, { idempotencyKey: ik(), text: "拒绝" })).data).toMatchObject({ status: "accepted", card: { status: "rejected" } });
+    expect(await t.answer(second.cardId, { idempotencyKey: ik(), text: "允许一次" })).toMatchObject({ status: 422, data: { error: "invalid_answer" } });
+    expect((await t.answer(second.cardId, { idempotencyKey: ik(), choiceId: "1" })).data).toMatchObject({ status: "accepted", card: { status: "rejected" } });
     // ConnectorApprovals.decide reads `{ choice: "once" | "deny" }`.
     expect(t.host.resolved.map((item) => [item.callId, item.result])).toEqual([["mau-approval:c1", { choice: "once" }], ["mau-approval:c2", { choice: "deny" }]]);
   }, 20_000);
@@ -126,9 +128,9 @@ describe("card answers through the web (ADR 0005 16.1)", () => {
     await until(() => t.extension().status() as any, (status) => status.host.calls.some((call: any) => call.id === "c3"));
     expect((await t.api(`${root}/agents/${t.agent.id}/communication/calls/c3/result`, "alice", "POST", { result: { decision: "accept" } })).data).toEqual({ status: "accepted" });
     expect(t.ledger.cardRecord(c3.cardId)).toMatchObject({ status: "approved", surface: "run-api" });
-    // A chat answer (an owner DM on a channel) to the last open card.
-    t.extension().communication!.receive("chat", { externalId: "$answer", sender: owner, scope: "direct", threadId: "!dm:example.test", text: "同意",
-      reply: { target: "!dm:example.test", messageId: "$answer", data: { sender: owner, thread: "" } } });
+    // A chat answer (an owner DM on a channel) to the last open card: its button, since text never approves.
+    t.extension().communication!.receive("chat", { externalId: "$answer", sender: owner, scope: "direct", threadId: "!dm:example.test", text: "",
+      action: { token: digest(joined("c4", "0")).slice(0, 32) }, reply: { target: "!dm:example.test", messageId: "$answer", data: { sender: owner, thread: "" } } });
     await until(() => t.ledger.cardRecord(c4.cardId)!, (card) => card.status !== "pending");
     expect(t.ledger.cardRecord(c4.cardId)).toMatchObject({ status: "approved", surface: "channel", answeredBy: personId(owner), summary: "同意" });
     expect((await t.answer(c4.cardId, { idempotencyKey: ik(), choiceId: "1" })).data.status).toBe("stale");

@@ -1,7 +1,7 @@
 import {DurableObject} from 'cloudflare:workers';
 import {equalSecret} from '../../src/security.mjs';
-import {uploadPath,sizeAllowed,uploadSources,securityCheck} from './policy.mjs';
-interface Env { SOURCE_REVISION?:string; BACKUPS:R2Bucket; INGEST:DurableObjectNamespace<BackupIngress>; UPLOAD_TOKENS:string; STATUS_TOKEN:string; RECOVERY_TOKEN:string; HEALTH_CHECK_URL:string; }
+import {uploadPath,sizeAllowed,uploadSources,securityCheck,backupRecipients,assertRecipient} from './policy.mjs';
+interface Env { SOURCE_REVISION?:string; BACKUPS:R2Bucket; INGEST:DurableObjectNamespace<BackupIngress>; UPLOAD_TOKENS:string; STATUS_TOKEN:string; RECOVERY_TOKEN:string; HEALTH_CHECK_URL:string; BACKUP_RECIPIENTS?:string; }
 const json=(x:unknown,status=200)=>Response.json(x,{status,headers:{'Cache-Control':'no-store'}});
 export default {
  async fetch(request:Request,env:Env) {
@@ -45,13 +45,15 @@ export class BackupIngress extends DurableObject<Env> {
   if(!sizeAllowed(size)||!request.body)return json({error:'invalid_size'},413);
   const checksum=request.headers.get('X-Content-SHA256');if(!checksum||!/^[a-f0-9]{64}$/.test(checksum))return json({error:'checksum_required'},400);
   const day=new Date().toISOString().slice(0,10);
-  const accepted=await this.ctx.storage.transaction(async txn=>{
+  // Reserved first so concurrent uploads cannot pass the limit together; a request that stores nothing gives it back.
+  const charge=(sign:1|-1)=>this.ctx.storage.transaction(async txn=>{
    const old=await txn.get<{day:string;bytes:number;objects:number}>('usage');
    const usage=old?.day===day?old:{day,bytes:0,objects:0};
-   if(usage.bytes+size>4*1024**3||usage.objects>=200)return false;
-   await txn.put('usage',{day,bytes:usage.bytes+size,objects:usage.objects+1});return true;
+   if(sign>0&&(usage.bytes+size>4*1024**3||usage.objects>=200))return false;
+   await txn.put('usage',{day,bytes:Math.max(0,usage.bytes+sign*size),objects:Math.max(0,usage.objects+sign)});return true;
   });
-  if(!accepted)return json({error:'daily_backup_quota'},429);
+  if(!await charge(1))return json({error:'daily_backup_quota'},429);
+  let stored=false;
   try {
    if(key.endsWith('/manifest.json')) {
     if(size>65536)return json({error:'manifest_too_large'},413);
@@ -65,15 +67,21 @@ export class BackupIngress extends DurableObject<Env> {
      total+=part.bytes;
     }
     if(total!==manifest.encryptedBytes)throw Error('size');
+    const first=await this.env.BACKUPS.get(prefix+manifest.parts[0].name,{range:{offset:0,length:4096}});
+    if(!first)throw Error('missing_part');
+    assertRecipient(manifest,new Uint8Array(await first.arrayBuffer()),backupRecipients(this.env.BACKUP_RECIPIENTS));
     const saved=await this.env.BACKUPS.put(key,text,{sha256:checksum,onlyIf:{etagDoesNotMatch:'*'},httpMetadata:{contentType:'application/json'}});
     if(!saved)return json({error:'already_exists'},409);
+    stored=true;
     await this.ctx.storage.put({lastSuccess:Date.now(),lastArchive:key});
     console.log(JSON.stringify({event:'backup_complete',source:key.split('/')[1],bytes:total}));
    } else {
     const saved=await this.env.BACKUPS.put(key,request.body,{sha256:checksum,onlyIf:{etagDoesNotMatch:'*'},customMetadata:{sha256:checksum}});
     if(!saved)return json({error:'already_exists'},409);
+    stored=true;
    }
    return json({ok:true});
-  }catch{return json({error:'upload_incomplete'},409);}
+  }catch(error){return json({error:error instanceof Error&&['not_an_age_archive','recipient_refused'].includes(error.message)?error.message:'upload_incomplete'},409);}
+  finally {if(!stored)await charge(-1);}
  }
 }

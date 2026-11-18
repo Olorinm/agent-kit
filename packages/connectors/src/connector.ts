@@ -116,6 +116,14 @@ export interface Connector {
     /** Returns false for a state belonging to another connection. */
     callback?(context: ToolContext, state: string, code?: string): Promise<boolean>;
   };
+  /**
+   * Owner-managed access rules beyond the per-operation settings (the browser's site permissions). Trusted
+   * management only; `set` throws ConnectorError for input it refuses and returns the rules as `get` does.
+   */
+  access?: {
+    get(context: ToolContext): Promise<Json>;
+    set(context: ToolContext, input: unknown): Promise<Json>;
+  };
 }
 
 /** A known failure: the operation did not take effect. Other exceptions are treated as uncertain. */
@@ -123,4 +131,17 @@ export class ConnectorError extends Error {
   constructor(readonly code: string, readonly detail?: Json) {
     super(code);
   }
+}
+
+/**
+ * One command-line argument as the owner reads it on an approval: bare when it is plain, otherwise JSON-quoted with
+ * every control, invisible or formatting character (line breaks, bidi overrides, zero-width, unusual spaces) written
+ * as an escape. The whole argument is shown; nothing is shortened.
+ */
+export function shownArgument(arg: string) {
+  if (/^[\w@%+=:,./-]+$/u.test(arg)) return arg;
+  return JSON.stringify(arg).replace(/[\p{C}\p{Zl}\p{Zp}]|(?! )\p{Zs}/gu, (ch) => {
+    const code = ch.codePointAt(0)!.toString(16);
+    return code.length > 4 ? `\\u{${code}}` : `\\u${code.padStart(4, "0")}`;
+  });
 }

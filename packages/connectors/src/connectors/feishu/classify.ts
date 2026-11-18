@@ -14,7 +14,9 @@ const RESERVED_FLAGS = /^(--help|-h|--yes)=/;
 /** Long-running consumers subscribe server-side and hold the account's command queue. */
 const LONG_RUNNING = /^\+(watch|subscribe)/;
 
-export class ArgumentsError extends Error {}
+export class ArgumentsError extends Error {
+  constructor(message: string, readonly detail?: Record<string, string>) { super(message); }
+}
 
 /**
  * Rejects argument lists that leave the linked owner's identity or the supported domains, run indefinitely,
@@ -33,6 +35,44 @@ export function checkArguments(args: string[]) {
       /^[A-Za-z]:[\\/]/.test(value) || /(^|[\\/])\.\.([\\/]|$)/.test(value))
       throw new ArgumentsError("feishu_local_path_not_allowed");
   });
+}
+
+/** A flag as the command's own help declares it. */
+export interface Flag { name: string; short?: string; takesValue: boolean; repeatable: boolean }
+
+/** The flag table of a command's help: `-q, --jq string   description`. A type such as `stringArray` marks a flag the CLI collects. */
+export function helpFlags(text: string): Flag[] {
+  const flags: Flag[] = [];
+  for (const line of text.split("\n")) {
+    const match = /^\s+(?:-(\w), )?--([\w-]+)(?: ([^\s]+))?(?:\s{2,}|$)/.exec(line);
+    if (!match) continue;
+    const type = match[3];
+    flags.push({ name: `--${match[2]}`, ...(match[1] ? { short: `-${match[1]}` } : {}), takesValue: type !== undefined,
+      repeatable: type !== undefined && /^(strings|ints|uints|count|stringToString|stringToInt|\w+(Array|Slice))$/.test(type) });
+  }
+  return flags;
+}
+
+/**
+ * Refuses an option given more than once unless the command declares it as collected (`--to` of `mail +send`). The CLI
+ * keeps the last value of any other option, so an earlier one the owner reads first would not be the one used. A flag
+ * the help does not list is counted wherever its name appears.
+ */
+export function checkRepeatedFlags(args: string[], flags: Flag[]) {
+  const seen = new Set<string>();
+  for (let index = 1; index < args.length; index++) {
+    const arg = args[index]!;
+    if (arg === "--") break;
+    if (!/^-[^-]|^--[^=]/.test(arg)) continue;
+    const written = arg.startsWith("--") ? arg.split("=")[0]! : arg.slice(0, 2);
+    const flag = flags.find((candidate) => candidate.name === written || candidate.short === written);
+    // The next argument is this flag's value, whatever it looks like.
+    if (flag?.takesValue && arg === written) index++;
+    if (flag?.repeatable) continue;
+    const name = flag?.name ?? written;
+    if (seen.has(name)) throw new ArgumentsError("feishu_flag_repeated", { flag: name });
+    seen.add(name);
+  }
 }
 
 /**
@@ -67,13 +107,14 @@ export interface Classification {
   command: string;
   /** Undefined when the CLI declares no risk (unknown command): never treated as read. */
   risk?: FeishuRisk;
+  flags: Flag[];
 }
 
 export function classify(help: CliResult): Classification {
   const text = `${help.stdout}\n${help.stderr}`;
   const usage = /^Usage:\s*\n\s+lark-cli ((?:[^\s[]+ ?)+)/m.exec(text)?.[1]?.trim() ?? "";
   const risk = /^Risk: (read|write|high-risk-write)\s*$/m.exec(text)?.[1] as FeishuRisk | undefined;
-  return { command: usage, ...(help.code === 0 && risk ? { risk } : {}) };
+  return { command: usage, ...(help.code === 0 && risk ? { risk } : {}), flags: help.code === 0 ? helpFlags(help.stdout) : [] };
 }
 
 /** POST endpoints that only read. Everything else that is not GET is treated as a write. */

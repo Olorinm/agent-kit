@@ -58,6 +58,9 @@ export function installFeishuApplication(directory: string, application: FeishuA
   privateFile(credentialsFile, { version: 1, appId: application.appId, appSecretFile: "app-secret", domain: application.domain, ownerOpenId: application.ownerOpenId });
   return { changed };
 }
+/** Environment variables lark-cli inherits: executable lookup, locale, temporary files, trusted certificates and the network proxy. */
+const INHERITED = ["PATH", "LANG", "LC_ALL", "TZ", "TMPDIR", "SystemRoot", "SSL_CERT_FILE", "SSL_CERT_DIR",
+  "HTTPS_PROXY", "HTTP_PROXY", "ALL_PROXY", "NO_PROXY", "https_proxy", "http_proxy", "all_proxy", "no_proxy"];
 export interface CliResult { code: number; stdout: string; stderr: string; }
 export type CliRunner = (args: string[], options: { cwd: string; env: NodeJS.ProcessEnv; timeout: number }) => Promise<CliResult>;
 export const runOfficialCli: CliRunner = (args, options) => new Promise((resolveResult, reject) => {
@@ -108,14 +111,12 @@ export class FeishuAccount {
   }
   command(args: string[], timeout = 30_000, cwd = this.workspace): Promise<CliResult> {
     const operation = this.queue.then(() => {
-      const env = { ...process.env };
-      for (const name of Object.keys(env)) if (/^(OPENCLAW_|HERMES_)/.test(name) || name === "LARK_CHANNEL" ||
-        /^LARKSUITE_CLI_(APP_ID|APP_SECRET|BRAND|PROFILE|DEFAULT_AS|USER_ACCESS_TOKEN|TENANT_ACCESS_TOKEN.*|AUTH_PROXY|TOKEN_ONLY__.*)$/.test(name)) delete env[name];
-      // The CLI also allows ~/files; give each account its own empty home.
-      env.HOME = this.homeDirectory;
-      env.LARKSUITE_CLI_CONFIG_DIR = this.configDirectory;
-      env.LARKSUITE_CLI_DATA_DIR = this.dataDirectory;
-      env.LARKSUITE_CLI_NO_UPDATE_NOTIFIER = "1"; env.LARKSUITE_CLI_NO_SKILLS_NOTIFIER = "1";
+      // Only what the CLI needs: nothing else of this process (storage or service credentials) reaches it. Its own
+      // credentials come from the account's configuration directory. The CLI also allows ~/files, so each account
+      // has its own empty home.
+      const env: NodeJS.ProcessEnv = { HOME: this.homeDirectory, LARKSUITE_CLI_CONFIG_DIR: this.configDirectory, LARKSUITE_CLI_DATA_DIR: this.dataDirectory,
+        LARKSUITE_CLI_NO_UPDATE_NOTIFIER: "1", LARKSUITE_CLI_NO_SKILLS_NOTIFIER: "1" };
+      for (const name of INHERITED) if (process.env[name] !== undefined) env[name] = process.env[name];
       // After the first word and in --name=value form, so no preceding flag can take it as a value.
       return this.runner([args[0]!, `--profile=${this.credentials.appId}`, ...args.slice(1)], { cwd, env, timeout });
     });

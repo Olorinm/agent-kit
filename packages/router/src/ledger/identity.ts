@@ -80,6 +80,18 @@ class HubPairing {
   cancel(person: string, id: string): boolean {
     return this.db.prepare("DELETE FROM hub_pairing_codes WHERE code_id=? AND person_id=? AND consumed_at IS NULL").run(id, person).changes === 1;
   }
+  /**
+   * A code written where others can read it is void: the pending codes of `person` that appear anywhere in `text`
+   * (with or without the hyphen, or with a space in its place) are deleted. Returns how many.
+   */
+  exposed(person: string, text: string, now: number): number {
+    if (!this.pending(person, now).length) return 0;
+    const remove = this.db.prepare("DELETE FROM hub_pairing_codes WHERE code_hash=? AND person_id=? AND consumed_at IS NULL");
+    let removed = 0;
+    for (const match of text.matchAll(/(?<![0-9A-Za-z])(?=([0-9A-Za-z]{4}[-\s]?[0-9A-Za-z]{4})(?![0-9A-Za-z]))/g))
+      removed += Number(remove.run(this.hash(normalizeCode(match[1]!)), person).changes);
+    return removed;
+  }
   code(normalized: string) {
     return this.db.prepare("SELECT * FROM hub_pairing_codes WHERE code_hash=?").get(this.hash(normalized));
   }
@@ -157,6 +169,8 @@ export class Identities {
   }
   createCode(ownerId: string, now = Date.now()) { return this.pairing(ownerId).create(personId(ownerId), now); }
   pendingCodes(ownerId: string, now = Date.now()) { return this.pairing(ownerId).pending(personId(ownerId), now); }
+  /** A message outside a direct chat was read by others: the owner's pending codes in it stop working at once. */
+  exposedCodes(ownerId: string, text: string, now = Date.now()) { return this.pairing(ownerId).exposed(personId(ownerId), text, now); }
   cancelCode(ownerId: string, id: string) {
     if (!this.pairing(ownerId).cancel(personId(ownerId), id)) throw new WorkError("pairing_code_not_found", 404);
   }

@@ -161,7 +161,15 @@ describe("native communication round trips", () => {
 });
 it("preserves different native approval response shapes", () => {
   const call = { id: "call", runId: "run", kind: "interaction", status: "pending", deadlineAt: "2999-01-01" };
-  expect(interaction({ ...call, name: "permission", input: { input: { command: "echo test" }, toolUseID: "native" } }).answer("同意")).toMatchObject({ behavior: "allow", updatedInput: { command: "echo test" } });
-  expect(interaction({ ...call, name: "item/commandExecution/requestApproval", input: {} }).answer("拒绝")).toEqual({ decision: "decline" });
-  expect(interaction({ ...call, name: "approval", input: {} }).answer("同意")).toEqual({ choice: "once" });
+  const permission = interaction({ ...call, name: "permission", input: { input: { command: "echo test" }, toolUseID: "native" } });
+  expect(permission.choices[0]!.result).toMatchObject({ behavior: "allow", updatedInput: { command: "echo test" } });
+  expect(interaction({ ...call, name: "item/commandExecution/requestApproval", input: {} }).choices[1]!.result).toEqual({ decision: "decline" });
+  expect(interaction({ ...call, name: "approval", input: {} }).choices[0]!.result).toEqual({ choice: "once" });
+  // An approval is a choice: no text answers it, in any wording.
+  const acp = interaction({ ...call, name: "session/request_permission", input: { options: [{ optionId: "allow", name: "Allow", kind: "allow_once" }] } });
+  for (const view of [permission, acp, interaction({ ...call, name: "approval", input: {} }), interaction({ ...call, name: "item/fileChange/requestApproval", input: {} })]) {
+    expect(view.approval).toBe(true);
+    for (const text of ["同意", "yes", "y", "允许一次", "1", "Allow"]) expect(() => view.answer(text)).toThrow("approval_requires_choice");
+  }
+  expect(interaction({ ...call, name: "clarify", input: { question: "继续吗？" } }).approval).toBeUndefined();
 });

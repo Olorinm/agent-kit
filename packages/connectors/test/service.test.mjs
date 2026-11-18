@@ -39,6 +39,17 @@ test("reads run directly; writes wait for a grant and run exactly once", async (
   assert.equal(status.result.input, undefined);
 });
 
+test("a summary too long to show in full refuses the write before any approval exists; pre-approved writes are unaffected", async (t) => {
+  const s = await setup(); t.after(s.cleanup);
+  const text = "x".repeat(3600);
+  const refused = await s.service.call(alice, "alice_notes__send", { to: "carol", text }, signal());
+  assert.deepEqual([refused.status, refused.error, refused.detail.limit, refused.detail.length], ["failed", "approval_too_long_to_display", 3500, 3600 + 'Send "" to carol'.length]);
+  assert.deepEqual(await s.service.pending(), []);
+  const shown = await s.service.call(alice, "alice_notes__send", { to: "carol", text: "y".repeat(3400) }, signal());
+  assert.equal(shown.summary.length, 3400 + 'Send "" to carol'.length);
+  assert.equal((await s.service.call(alice, "alice_notes__send", { to: "invoice-table", text }, signal())).status, "completed");
+});
+
 test("a grant must match the operation's owner and digest, and is single use", async (t) => {
   const s = await setup(); t.after(s.cleanup);
   const pending = await s.service.call(alice, "alice_notes__send", { to: "carol", text: "hi" }, signal());

@@ -16,7 +16,7 @@ function fakeCli({ authorized = true } = {}) {
   // Mutable account state: "valid", "missing" (never logged in), "expired" (refresh token lapsed); `consent` completes a device flow.
   const auth = { user: authorized ? "valid" : "missing", consent: false, appId: "cli_app", ownerOpenId: "ou_owner" };
   const runner = async (args, { cwd, env }) => {
-    const call = { args, cwd, configDir: env.LARKSUITE_CLI_CONFIG_DIR, files: existsSync(cwd) ? readdirSync(cwd) : [] };
+    const call = { args, cwd, env, configDir: env.LARKSUITE_CLI_CONFIG_DIR, files: existsSync(cwd) ? readdirSync(cwd) : [] };
     calls.push(call);
     if (args.includes("--dry-run=true")) {
       const command = args.filter((a) => !a.startsWith("-")).slice(0, 2).join(" ");
@@ -27,7 +27,9 @@ function fakeCli({ authorized = true } = {}) {
     if (args.includes("--help=true")) {
       const command = args.filter((a) => !a.startsWith("-")).slice(0, 2).join(" ");
       if (args.at(-1) === "--body") return { code: 2, stdout: "", stderr: '{"ok":false,"error":{"type":"validation"}}' };
-      return RISK[command] ? { code: 0, stdout: `Usage:\n  lark-cli ${command} [flags]\n\nRisk: ${RISK[command]}\n`, stderr: "" } : { code: 0, stdout: "Usage:\n  lark-cli mail [flags]\n", stderr: "" };
+      const flags = command === "mail +send" ? "Flags:\n      --attach stringArray   Attachment file path. Repeat --attach once per file.\n      --body string          Email body.\n" +
+        "      --confirm-send         Send the email immediately.\n  -q, --jq string            jq expression\n      --to stringArray       Recipient email address.\n\n" : "";
+      return RISK[command] ? { code: 0, stdout: `Usage:\n  lark-cli ${command} [flags]\n\n${flags}Risk: ${RISK[command]}\n`, stderr: "" } : { code: 0, stdout: "Usage:\n  lark-cli mail [flags]\n", stderr: "" };
     }
     if (args[0] === "skills") return { code: 0, stdout: "skill text", stderr: "" };
     const words = args.filter((a) => !a.startsWith("-"));
@@ -234,6 +236,44 @@ test("the approval summary shows invisible characters as escapes", async (t) => 
   const f = await feishu(t);
   const pending = await f.call("cli_write", ["im", "+messages-send", "--text", "pay \u202Eevil\u200B"]);
   assert.ok(pending.summary.includes("\\u202e") && pending.summary.includes("\\u200b") && !/[\u202E\u200B]/.test(pending.summary), pending.summary);
+});
+
+test("the approval summary shows every argument in full, or the write is refused before any approval", async (t) => {
+  const f = await feishu(t);
+  const body = `line one\n${"长".repeat(1200)} end`;
+  const pending = await f.call("cli_write", ["mail", "+send", "--to", "a@example.com", "--body", body]);
+  assert.equal(pending.summary, `Feishu: lark-cli mail +send --to a@example.com --body ${JSON.stringify(body)}`);
+  const refused = await f.call("cli_write", ["mail", "+send", "--to", "a@example.com", "--body", "x".repeat(3500)]);
+  assert.deepEqual([refused.status, refused.error, refused.operationId], ["failed", "approval_too_long_to_display", undefined]);
+  assert.equal((await f.service.pending()).length, 1);
+});
+
+test("an option given twice is refused before approval unless the CLI declares it repeatable", async (t) => {
+  const f = await feishu(t);
+  const send = ["mail", "+send", "--to", "a@example.com"];
+  // --to and --attach are collected; a value that looks like a flag is a value.
+  assert.equal((await f.call("cli_write", [...send, "--to", "b@example.com", "--attach=a.pdf", "--attach", "b.pdf", "--body", "--jq", "-q", ".a"])).status, "approval_required");
+  for (const [extra, flag] of [[["--body", "seen", "--body", "used"], "--body"], [["--body=seen", "--body=used"], "--body"], [["--confirm-send=false", "--confirm-send"], "--confirm-send"],
+    [["-q", ".a", "--jq=.b"], "--jq"], [["--unlisted", "a", "--unlisted", "b"], "--unlisted"]]) {
+    const result = await f.call("cli_write", [...send, ...extra]);
+    assert.deepEqual([result.status, result.error, result.detail], ["failed", "feishu_flag_repeated", { flag }], extra.join(" "));
+  }
+  // A command whose help lists no flags: every repeat is refused.
+  assert.equal((await f.call("cli_write", ["mail", "+message-trash", "--message-ids", "m1", "--message-ids", "m2"])).error, "feishu_flag_repeated");
+  assert.equal((await f.service.pending()).length, 1);
+});
+
+test("lark-cli receives a minimal environment, not this process's", async (t) => {
+  const f = await feishu(t);
+  process.env.AGENT_CONNECTORS_TEST_SECRET = "storage-credential"; process.env.LARKSUITE_CLI_APP_SECRET = "other"; process.env.HTTPS_PROXY = "http://proxy.test:8080";
+  t.after(() => { delete process.env.AGENT_CONNECTORS_TEST_SECRET; delete process.env.LARKSUITE_CLI_APP_SECRET; delete process.env.HTTPS_PROXY; });
+  assert.equal((await f.call("cli_read", ["mail", "+triage"])).status, "completed");
+  const [run] = f.cli.executed();
+  const allowed = new Set(["PATH", "LANG", "LC_ALL", "TZ", "TMPDIR", "SystemRoot", "SSL_CERT_FILE", "SSL_CERT_DIR", "HTTPS_PROXY", "HTTP_PROXY", "ALL_PROXY", "NO_PROXY",
+    "https_proxy", "http_proxy", "all_proxy", "no_proxy", "HOME", "LARKSUITE_CLI_CONFIG_DIR", "LARKSUITE_CLI_DATA_DIR", "LARKSUITE_CLI_NO_UPDATE_NOTIFIER", "LARKSUITE_CLI_NO_SKILLS_NOTIFIER"]);
+  assert.deepEqual(Object.keys(run.env).filter((name) => !allowed.has(name)), []);
+  assert.equal(run.env.HTTPS_PROXY, "http://proxy.test:8080"); assert.equal(run.env.PATH, process.env.PATH);
+  assert.equal(run.env.HOME, join(f.directory, "feishu", "home")); assert.equal(run.env.LARKSUITE_CLI_CONFIG_DIR, f.accountConfig);
 });
 
 /** A connection configured without an application: the product hands over the app its chat bot already uses. */

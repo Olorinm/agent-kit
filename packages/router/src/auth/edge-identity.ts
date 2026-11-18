@@ -13,9 +13,14 @@ export interface OwnerPrincipal {
   email?: string;
   /** Epoch milliseconds; set for edge principals (the JWT `exp`). */
   expiresAt?: number;
+  /** A service token without owner access: it reads as the owner and writes only what `restrictOperator` admits. */
+  operator?: true;
 }
-/** `method` is set for HTTP requests; a request without it (socket re-checks) is treated as safe. */
-export interface OwnerRequest { headers: IncomingHttpHeaders; method?: string | undefined }
+/**
+ * `method` is set for HTTP requests; a request without it (socket re-checks) is treated as safe. `originalUrl` is the
+ * full request path as received (Express `originalUrl`); an operator's unsafe request without it is refused.
+ */
+export interface OwnerRequest { headers: IncomingHttpHeaders; method?: string | undefined; originalUrl?: string | undefined }
 export interface OwnerAuthenticator {
   authenticate(request: OwnerRequest): Promise<OwnerPrincipal>;
   /** Cross-site check for a browser WebSocket upgrade made with an edge principal's ticket. */
@@ -40,7 +45,8 @@ export const edgeIdentityConfigSchema = z.object({
   clockSkewSeconds: z.number().int().min(0).max(300).default(60),
   bearer: z.enum(["allow", "deny"]).default("allow"),
   owners: z.record(email, z.union([ownerId, z.object({ owner: ownerId, sub: z.string().min(1).max(256) }).strict()])).default({}),
-  serviceTokens: z.record(z.string().min(1).max(256), ownerId).default({}),
+  /** A service token acts as its owner for reads. `access: "owner"` also gives it every write; the default is the operator's few. */
+  serviceTokens: z.record(z.string().min(1).max(256), z.union([ownerId, z.object({ owner: ownerId, access: z.enum(["operator", "owner"]).default("operator") }).strict()])).default({}),
   /** Browser origins allowed for unsafe edge requests. Default: the origin of the service's public URL. */
   origins: z.array(z.string().url().refine((value) => new URL(value).origin === value, "origin_required")).min(1).max(10).optional(),
 }).strict();
@@ -54,7 +60,7 @@ export function loadEdgeIdentityConfig(path: string): ParsedConfig {
 }
 /** Start-time check that every configured owner id belongs to this server. */
 export function assertEdgeOwners(config: EdgeIdentityConfig, serverName: string) {
-  const owners = [...Object.values(config.owners ?? {}).map((value) => typeof value === "string" ? value : value.owner), ...Object.values(config.serviceTokens ?? {})];
+  const owners = [...Object.values(config.owners ?? {}), ...Object.values(config.serviceTokens ?? {})].map((value) => typeof value === "string" ? value : value.owner);
   for (const owner of owners) if (!owner.endsWith(`:${serverName}`)) throw new Error("edge_identity_owner_not_local");
 }
 
@@ -63,6 +69,20 @@ const MAX_ASSERTION = 8 * 1024;
 const SAFE_METHODS = new Set(["GET", "HEAD", "OPTIONS"]);
 /** Content types a cross-site form or no-cors fetch can send without a CORS preflight. */
 const SIMPLE_TYPES = new Set(["application/x-www-form-urlencoded", "multipart/form-data", "text/plain"]);
+/** The writes of a service token without owner access: a chat message, opening a DM, marking read, a socket ticket. */
+const OPERATOR_WRITES = /^\/_agent-router\/v1\/web\/(?:socket-tickets|chats\/dm|chats\/[^/]+\/(?:messages|read))$/;
+/**
+ * A service token is not the owner's sign-in. Without owner access it may read (no protocol upgrade: a tunnel is not
+ * a read) and make the requests of `OPERATOR_WRITES`; everything else needs the owner.
+ */
+export function restrictOperator(principal: OwnerPrincipal, request: OwnerRequest) {
+  if (!principal.operator || request.method === undefined) return;
+  const method = request.method.toUpperCase();
+  if (SAFE_METHODS.has(method) ? request.headers.upgrade === undefined
+    : method === "POST" && OPERATOR_WRITES.test((request.originalUrl ?? "").split("?")[0]!)) return;
+  throw new WorkError("owner_sign_in_required", 403);
+}
+const LOOPBACK = new Set(["localhost", "127.0.0.1", "[::1]"]);
 const unavailable = (error: unknown) => !(error instanceof errors.JOSEError) || error instanceof errors.JWKSTimeout ||
   error instanceof errors.JWKSInvalid || error.code === "ERR_JOSE_GENERIC";
 
@@ -98,13 +118,17 @@ export class CloudflareAccessAuthenticator implements OwnerAuthenticator {
   /**
    * Cloudflare adds the JWT to every proxied request that carries the Access cookie, including cross-site ones, so an
    * edge principal is ambient authority. A browser always sends `Origin` on a cross-site or same-origin unsafe request
-   * and on a WebSocket upgrade; it must be a configured origin or this request's own host.
+   * and on a WebSocket upgrade; it must be a configured origin or this request's own host over HTTPS. Plain HTTP
+   * counts only for a loopback host (local development).
    */
   allowsOrigin(request: OwnerRequest): boolean {
     const origin = request.headers.origin;
     if (typeof origin !== "string" || !origin || origin === "null") return false;
     if (this.origins.has(origin)) return true;
-    try { return ["http:", "https:"].includes(new URL(origin).protocol) && new URL(origin).host === request.headers.host; } catch { return false; }
+    try {
+      const url = new URL(origin);
+      return (url.protocol === "https:" || url.protocol === "http:" && LOOPBACK.has(url.hostname)) && url.host === request.headers.host;
+    } catch { return false; }
   }
   /** CSRF guard for edge principals: unsafe methods need an allowed `Origin` and a body type a form cannot send. */
   guard(request: OwnerRequest) {
@@ -121,7 +145,9 @@ export class CloudflareAccessAuthenticator implements OwnerAuthenticator {
   async authenticate(request: OwnerRequest): Promise<OwnerPrincipal> {
     const token = CloudflareAccessAuthenticator.assertion(request);
     if (!token) throw new WorkError("edge_identity_invalid", 401);
-    return this.verify(token);
+    const principal = await this.verify(token);
+    restrictOperator(principal, request);
+    return principal;
   }
   async verify(token: string): Promise<OwnerPrincipal> {
     const hash = digest(["edge-assertion", token]), now = this.now(), cached = this.cache.get(hash);
@@ -152,9 +178,10 @@ export class CloudflareAccessAuthenticator implements OwnerAuthenticator {
       return { personId: personId(owner), ownerId: owner, via: "edge", email: address, expiresAt };
     }
     if (typeof payload.common_name === "string" && payload.common_name) {
-      const id = payload.common_name, owner = Object.hasOwn(this.config.serviceTokens, id) ? this.config.serviceTokens[id] : undefined;
-      if (!owner) throw new WorkError("service_token_not_configured", 403);
-      return { personId: personId(owner), ownerId: owner, via: "edge-service", expiresAt };
+      const id = payload.common_name, entry = Object.hasOwn(this.config.serviceTokens, id) ? this.config.serviceTokens[id] : undefined;
+      if (!entry) throw new WorkError("service_token_not_configured", 403);
+      const owner = typeof entry === "string" ? entry : entry.owner;
+      return { personId: personId(owner), ownerId: owner, via: "edge-service", expiresAt, ...(typeof entry === "string" || entry.access !== "owner" ? { operator: true as const } : {}) };
     }
     throw new WorkError("edge_identity_invalid", 401);
   }
@@ -189,6 +216,7 @@ export class CompositeAuthenticator implements OwnerAuthenticator {
       const deny = this.edge.config.bearer === "deny";
       if (assertion) {
         const principal = await this.edge.verify(assertion);
+        restrictOperator(principal, request);
         if (token && !deny) {
           const other = await this.bearer(token).catch(() => undefined);
           if (other?.ownerId !== principal.ownerId) throw new WorkError("principal_conflict", 401);
