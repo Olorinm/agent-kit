@@ -89,12 +89,14 @@ export function identityHooks(identity: Identities, ownerId: string, namespaces:
   return {
     person: (connectionId, source) => { try { const ids = scoped(connectionId, source); return ids ? identity.resolve(ids) : undefined; } catch { return undefined; } },
     seen: (connectionId, source) => { const ids = scoped(connectionId, source); if (ids) identity.seen(ids[0]!); },
+    exposed: (_connectionId, source) => { identity.exposedCodes(ownerId, source.text); },
     pair: (connectionId, source) => {
       const scope = namespaces.get(connectionId); if (!scope) return undefined;
       const mail = scope.provider === "grove-mail" || scope.provider === "agentmail";
       const code = mail ? mailPairingCommand(source) : pairingCommand(source.text);
       if (!code) return undefined;
       // In groups the command is dropped without a reply, so a code is never confirmed in front of others.
+      // `exposed` has already made the code void.
       if (source.scope !== "direct") return {};
       if (mail && !(mailPairing.has(connectionId) && source.native?.senderVerified === true)) return { reply: REPLIES.unverified };
       try { return { reply: identity.attempt(ownerId, scoped(connectionId, source)!, code).reply }; }

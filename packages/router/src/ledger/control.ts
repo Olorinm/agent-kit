@@ -159,6 +159,8 @@ export class LedgerControl {
         if (!choice) throw new WorkError("choice_not_found", 422);
         result = JSON.parse(String(choice.result)); summary = body.choices?.find((item) => item.choiceId === input.choiceId)?.label ?? input.choiceId;
       } else if (input.text !== undefined) {
+        // An approval is a choice on every surface; text is not a decision.
+        if (card.kind === "approval" || card.kind === "connector_approval") throw new WorkError("invalid_answer", 422).with({ detail: "approval_requires_choice" });
         summary = Array.from(input.text).slice(0, 140).join("");
         if (card.source === "router" || card.source === "product") {
           const index = (body.choices ?? []).findIndex((item) => item.label === input.text!.trim());
@@ -392,8 +394,8 @@ export class LedgerControl {
     return true;
   }
   /**
-   * The owner's answer to an owner request from a channel (ADR 20.3): its button, or a reply with the exact label or
-   * the number of a choice. A reply names its request by quoting the card's message. Without a quote a label must
+   * The owner's answer to an owner request from a channel (ADR 20.3): its button, or for a `question` request a reply
+   * with the exact label or the number of a choice (an `approval` request takes its button only). A reply names its request by quoting the card's message. Without a quote a label must
    * belong to one request while only requests wait in the session. A number is taken only for a card that was sent to
    * this conversation as a numbered list, and without a quote only while it is the only card waiting. A stop or steer
    * command is never an answer. Anything else is an ordinary message, or an answer to a question of a run.
@@ -413,7 +415,8 @@ export class LedgerControl {
       if (!card || card.source !== "product" || card.sessionKey !== input.conversationId) return false;
       cardId = card.cardId; choiceId = token.choiceId;
     } else {
-      const open = ledger.openCards({ sessionKey: input.conversationId }).filter((card) => card.source === "product");
+      // An approval request is answered by its button or in the web console, never by a typed label or number.
+      const open = ledger.openCards({ sessionKey: input.conversationId }).filter((card) => card.source === "product" && card.kind === "question");
       if (!open.length || !text) return false;
       // The owner saw numbers only where the card was sent without buttons.
       const listed = (card: CardRecord) => ledger.deliveriesFor(card.eventId).some((row) => row.purpose === "card" && row.connectionId === input.connectionId &&

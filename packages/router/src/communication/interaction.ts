@@ -1,5 +1,13 @@
 import type { HostCall } from "../execution/host.js";
-export interface InteractionView { text: string; choices: Array<{ label: string; result: unknown }>; sensitive?: boolean; answer(text: string): unknown; }
+export interface InteractionView {
+  text: string; choices: Array<{ label: string; result: unknown }>; sensitive?: boolean;
+  /** A permission or approval decision: answered only by one of `choices` (a button or the card answer route), never by text. */
+  approval?: boolean;
+  answer(text: string): unknown;
+}
+/** What a channel message of an approval says below the request, with and without buttons. */
+export const APPROVAL_BY_BUTTON = "请点击按钮选择；文字回复不会被当作批准。", APPROVAL_ELSEWHERE = "这个渠道不能批准，请到网页控制台操作。";
+const byChoice = () => { throw new Error("approval_requires_choice"); };
 const object = (value: unknown): Record<string, any> => value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, any> : {};
 
 /** Translate chat gestures to the exact native response; keep each kernel's semantics. */
@@ -11,11 +19,11 @@ export function interaction(call: HostCall): InteractionView {
   if (details.length && (call.name === "permission" || /requestApproval$/.test(call.name) || call.name === "session/request_permission" || call.name === "approval")) questionText += "\n" + details.map((value) => typeof value === "string" ? value : JSON.stringify(value)).join("\n");
   if (call.name === "session/request_permission") {
     const choices = (p.options ?? []).map((option: any) => ({ label: option.name ?? option.kind, result: { outcome: { outcome: "selected", optionId: option.optionId } } }));
-    return { text: String(questionText), choices, answer: (text) => choose(text, choices) };
+    return { text: String(questionText), choices, approval: true, answer: byChoice };
   }
   if (call.name === "approval") {
     const choices = [{ label: "允许一次", result: { choice: "once" } }, { label: "拒绝", result: { choice: "deny" } }];
-    return { text: String(questionText), choices, answer: (text) => decision(text, choices) };
+    return { text: String(questionText), choices, approval: true, answer: byChoice };
   }
   if (call.name === "permission" || /requestApproval$/.test(call.name)) {
     const allow = call.name === "permission" ? { behavior: "allow", updatedInput: p.input ?? {}, toolUseID: p.toolUseID } :
@@ -23,7 +31,7 @@ export function interaction(call: HostCall): InteractionView {
     const deny = call.name === "permission" ? { behavior: "deny", message: "User declined", toolUseID: p.toolUseID } :
       call.name === "item/permissions/requestApproval" ? { permissions: {}, scope: "turn" } : { decision: "decline" };
     const choices = [{ label: "同意", result: allow }, { label: "拒绝", result: deny }];
-    return { text: String(questionText), choices, answer: (text) => decision(text, choices) };
+    return { text: String(questionText), choices, approval: true, answer: byChoice };
   }
   if (call.name === "clarify") return { text: questionText, choices: [], answer: (text) => {
     if (Array.isArray(questions)) {
@@ -56,13 +64,4 @@ export function interaction(call: HostCall): InteractionView {
     } };
   }
   return { text: `${questionText}\n请使用 /answer 后跟原生响应 JSON。`, choices: [], answer: (text) => JSON.parse(text) };
-}
-function choose(text: string, choices: InteractionView["choices"]) {
-  const choice = choices.find((item) => item.label === text.trim()) ?? choices[Number(text.trim()) - 1];
-  if (!choice) throw new Error("interaction_choice_required"); return choice.result;
-}
-function decision(text: string, choices: InteractionView["choices"]) {
-  if (/^(同意|允许|继续|yes|y|approve|允许一次)$/i.test(text.trim())) return choices[0]!.result;
-  if (/^(拒绝|不同意|不允许|no|n|deny)$/i.test(text.trim())) return choices[1]!.result;
-  return choose(text, choices);
 }

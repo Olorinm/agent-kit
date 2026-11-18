@@ -8,6 +8,7 @@ import type { HostCall, HostPort, HostRun } from "../src/execution/host.js";
 import { AgentLedger, legacySession } from "../src/ledger/ledger.js";
 import { PersonRegistry, personId } from "../src/ledger/registry.js";
 import { ChannelSendError, type ChannelAdapter, type ChannelContext, type ChannelKind, type ChannelMessage, type ReplyRoute } from "../src/communication/types.js";
+import { digest, key } from "../src/execution/protocol.js";
 
 const cleanup: Array<() => void | Promise<void>> = [];
 afterEach(async () => { for (const fn of cleanup.splice(0).reverse()) await fn(); });
@@ -193,7 +194,7 @@ describe("ledger turns and deliveries", () => {
     expect(card.body.card).toMatchObject({ kind: "approval", callId: "call-1", choices: [{ choiceId: "0", label: "允许一次" }, { choiceId: "1", label: "拒绝" }] });
     expect(h.ledger.pendingCards(ownerMain)).toBe(1);
     expect(h.ledger.deliveriesFor(card.eventId)).toMatchObject([{ purpose: "card", status: "sent" }]);
-    const answer = h.core.receive("feishu", message("two", "owner-feishu", { text: "1" }));
+    const answer = h.core.receive("feishu", message("two", "owner-feishu", { text: "", action: { token: digest(key("call-1", "0")).slice(0, 32) } }));
     await h.core.dispatch();
     expect(h.host.resolved).toHaveLength(1);
     expect(h.ledger.pendingCards(ownerMain)).toBe(0);

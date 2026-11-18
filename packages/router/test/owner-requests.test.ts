@@ -15,6 +15,8 @@ const OWNER_CHAT = legacySession(AGENT, "owner-main");
 const soon = (ms = 3_600_000) => new Date(Date.now() + ms).toISOString();
 const approval = (eventId = "approve-1", extra: Record<string, unknown> = {}) => ({ eventId, kind: "approval" as const, title: "Partner needs your approval",
   text: "Send the report to the customer?", choices: [{ id: "allow", label: "允许一次" }, { id: "deny", label: "拒绝", style: "danger" as const }], expiresAt: soon(), ...extra });
+/** The same card as a `question`: its choices can also be answered by a typed label or number. */
+const question = (eventId = "approve-1", extra: Record<string, unknown> = {}) => approval(eventId, { kind: "question", ...extra });
 async function ownerOnChat(h: Harness) {
   h.chat.say("m1", "hello", OWNER_ON_CHAT);
   await h.round(); h.host.finish(h.host.starts.length, "hi"); await h.round();
@@ -64,7 +66,7 @@ describe("owner requests", () => {
   it("follow the owner to an external conversation, where a reply with the label answers", async () => {
     const h = await setup();
     await ownerOnChat(h);
-    const request = h.sessions.request(approval());
+    const request = h.sessions.request(question());
     await h.round();
     expect(h.chat.sent).toEqual([{ route: { connectionId: "chat", target: OWNER_ON_CHAT, messageId: "m1", data: {} },
       text: "Partner needs your approval\n\nSend the report to the customer?\n1. 允许一次\n2. 拒绝\n请回复选项名称或编号。", buttons: undefined }]);
@@ -75,8 +77,8 @@ describe("owner requests", () => {
     h.chat.say("m2", "拒绝", OWNER_ON_CHAT);
     await h.round();
     expect(h.sessions.lookupRequest("approve-1")).toMatchObject({ status: "answered", choice: "deny", answeredBy: OWNER_PERSON, surface: "channel" });
-    expect(h.ledger.cardRecord(request.cardId)).toMatchObject({ status: "rejected" });
-    expect(updates(h)).toEqual([{ cardId: request.cardId, status: "rejected", answeredBy: OWNER_PERSON, summary: "拒绝" }]);
+    expect(h.ledger.cardRecord(request.cardId)).toMatchObject({ status: "answered" });
+    expect(updates(h)).toEqual([{ cardId: request.cardId, status: "answered", answeredBy: OWNER_PERSON, summary: "拒绝" }]);
     expect(h.chat.sent.at(-1)!.text).toBe("已收到回答：拒绝。");
     // The answer was consumed as an answer: it started no turn.
     expect(h.host.starts).toHaveLength(1);
@@ -86,7 +88,7 @@ describe("owner requests", () => {
     await ownerOnChat(h);
     const request = h.sessions.request(approval());
     await h.round();
-    expect(h.chat.sent[0]).toMatchObject({ text: "Partner needs your approval\n\nSend the report to the customer?\n可点击选项，或直接回复选项名称。",
+    expect(h.chat.sent[0]).toMatchObject({ text: "Partner needs your approval\n\nSend the report to the customer?\n请点击按钮选择；文字回复不会被当作批准。",
       buttons: [{ label: "允许一次", token: expect.stringMatching(/^[0-9a-f]{32}$/) }, { label: "拒绝", token: expect.any(String) }] });
     const [allow, deny] = h.chat.sent[0]!.buttons!;
     h.chat.say("press-1", "", OWNER_ON_CHAT, { action: { token: allow!.token } });
@@ -130,12 +132,12 @@ describe("owner requests", () => {
   it("accept a number only while the request is the only card waiting, and ask when two requests share a label", async () => {
     const h = await setup();
     await ownerOnChat(h);
-    h.sessions.request(approval("one"));
+    h.sessions.request(question("one"));
     await h.round();
     h.chat.say("n1", "2", OWNER_ON_CHAT);
     await h.round();
     expect(h.sessions.lookupRequest("one")).toMatchObject({ status: "answered", choice: "deny" });
-    h.sessions.request(approval("two")); h.sessions.request(approval("three"));
+    h.sessions.request(question("two")); h.sessions.request(question("three"));
     await h.round();
     h.chat.say("n2", "1", OWNER_ON_CHAT);
     await h.round(); h.host.finish(h.host.starts.length, "ok"); await h.round();
@@ -159,22 +161,22 @@ describe("owner requests", () => {
     const h = await setup();
     h.chat.say("m1", "deploy", OWNER_ON_CHAT);
     await h.round();
-    h.host.ask(1, { id: "a1", name: "item/commandExecution/requestApproval", input: { command: "make deploy" } });
+    h.host.ask(1, { id: "a1", name: "item/tool/requestUserInput", input: { questions: [{ id: "go", question: "Deploy?", options: [{ label: "允许一次" }, { label: "拒绝" }] }] } });
     await h.round();
-    const question = h.chat.sent.at(-1)!;
-    h.sessions.request(approval("beside", { choices: [{ id: "allow", label: "允许一次" }, { id: "deny", label: "拒绝" }] }));
+    const asked = h.chat.sent.at(-1)!;
+    h.sessions.request(question("beside", { choices: [{ id: "allow", label: "允许一次" }, { id: "deny", label: "拒绝" }] }));
     await h.round();
-    // "拒绝" is a choice of the request and an answer to the run's approval.
+    // "拒绝" is a choice of the request and an answer to the run's question.
     h.chat.say("m2", "拒绝", OWNER_ON_CHAT);
     await h.round();
     expect(h.chat.sent.at(-1)!.text).toBe("有多个问题等待回答，请点击对应问题的选项，或引用对应的消息回复。");
     expect(h.host.resolved).toEqual([]);
     expect(h.sessions.lookupRequest("beside")!.status).toBe("pending");
     // Quoting the run's question answers the run; the request still waits.
-    const questionId = h.ledger.recentDeliveries().find((row) => row.purpose === "card" && row.text === question.text)!.platformMessageId!;
+    const questionId = h.ledger.recentDeliveries().find((row) => row.purpose === "card" && row.text === asked.text)!.platformMessageId!;
     h.chat.say("m3", "拒绝", OWNER_ON_CHAT, { quoted: { messageId: questionId } });
     await h.round();
-    expect(h.host.resolved).toEqual([{ runId: "run-1", callId: "a1", result: { decision: "decline" } }]);
+    expect(h.host.resolved).toEqual([{ runId: "run-1", callId: "a1", result: { answers: { go: { answers: ["拒绝"] } } } }]);
     expect(h.sessions.lookupRequest("beside")!.status).toBe("pending");
     // Now the request is the only card waiting.
     h.chat.say("m4", "允许一次", OWNER_ON_CHAT);
@@ -186,7 +188,7 @@ describe("owner requests", () => {
     // With buttons no numbers were shown.
     const buttons = await setup({ buttons: true });
     await ownerOnChat(buttons);
-    buttons.sessions.request(approval("with-buttons"));
+    buttons.sessions.request(question("with-buttons"));
     await buttons.round();
     buttons.chat.say("n1", "1", OWNER_ON_CHAT);
     await buttons.round();
@@ -195,7 +197,7 @@ describe("owner requests", () => {
     // A card that is only on the transcript was never listed in this conversation; its label still answers it.
     const elsewhere = await setup();
     await ownerOnChat(elsewhere);
-    elsewhere.sessions.request(approval("web-only", { connectionId: "web" }));
+    elsewhere.sessions.request(question("web-only", { connectionId: "web" }));
     elsewhere.chat.say("n1", "1", OWNER_ON_CHAT);
     await elsewhere.round(); elsewhere.host.finish(2, "ok"); await elsewhere.round();
     expect(elsewhere.sessions.lookupRequest("web-only")!.status).toBe("pending");
@@ -221,7 +223,7 @@ describe("owner requests", () => {
   it("read a message that answered a request only once, also when dispatch is repeated after a restart", async () => {
     const h = await setup();
     await ownerOnChat(h);
-    const request = h.sessions.request(approval());
+    const request = h.sessions.request(question());
     await h.round();
     h.chat.say("m2", "允许一次", OWNER_ON_CHAT);
     await h.round();
@@ -238,13 +240,36 @@ describe("owner requests", () => {
   it("count an answer typed in the web chat as a web answer and tell the conversation the card was sent to", async () => {
     const h = await setup();
     await ownerOnChat(h);
-    h.sessions.request(approval("typed", { connectionId: "chat" }));
+    h.sessions.request(question("typed", { connectionId: "chat" }));
     await h.round();
     h.web.say("w1", "拒绝", OWNER_PERSON);
     await h.round();
     expect(h.sessions.lookupRequest("typed")).toMatchObject({ status: "answered", choice: "deny", surface: "web" });
     expect(h.chat.sent.at(-1)!.text).toBe("已在网页回答。");
     expect(h.host.starts).toHaveLength(1);
+  });
+  it("decide an approval by its button or in the web console only: a typed label, number or quoted reply is an ordinary message", async () => {
+    const h = await setup();
+    await ownerOnChat(h);
+    const request = h.sessions.request(approval());
+    await h.round();
+    // Without buttons the channel shows the request and where to decide it; no numbered choices invite a reply.
+    expect(h.chat.sent[0]!.text).toBe("Partner needs your approval\n\nSend the report to the customer?\n这个渠道不能批准，请到网页控制台操作。");
+    const message = h.sessions.lookupRequest("approve-1")!.delivery.externalId!;
+    for (const [id, text, extra] of [["t1", "允许一次", {}], ["t2", "1", {}], ["t3", "允许一次", { quoted: { messageId: message } }]] as const) {
+      const starts = h.host.starts.length;
+      h.chat.say(id, text, OWNER_ON_CHAT, extra);
+      await h.round(); h.host.finish(h.host.starts.length, "ok"); await h.round();
+      expect(h.sessions.lookupRequest("approve-1")!.status).toBe("pending");
+      // The agent got it as a message of the conversation.
+      expect(h.host.starts).toHaveLength(starts + 1);
+    }
+    h.web.say("w1", "允许一次", OWNER_PERSON);
+    await h.round(); h.host.finish(h.host.starts.length, "ok"); await h.round();
+    expect(h.sessions.lookupRequest("approve-1")!.status).toBe("pending");
+    await expect(h.control.answer(request.cardId, { key: "k1", by: OWNER_PERSON, surface: "web", text: "允许一次" })).rejects.toMatchObject({ message: "invalid_answer", status: 422 });
+    expect((await h.control.answer(request.cardId, { key: "k2", by: OWNER_PERSON, surface: "web", choiceId: "0" })).card.status).toBe("approved");
+    expect(h.sessions.lookupRequest("approve-1")).toMatchObject({ status: "answered", choice: "allow", surface: "web" });
   });
   it("only take an answer from the owner", async () => {
     const h = await setup({ buttons: true });

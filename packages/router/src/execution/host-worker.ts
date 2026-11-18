@@ -1,4 +1,4 @@
-import { interaction } from "../communication/interaction.js";
+import { APPROVAL_BY_BUTTON, APPROVAL_ELSEWHERE, interaction } from "../communication/interaction.js";
 import { archiveRun } from "./run-archive.js";
 import type { ChannelInput, CommunicationCore } from "../communication/core.js";
 import { Message } from "@a2a-js/sdk";
@@ -426,8 +426,9 @@ export class HostWorker {
       return { label: choice.label, token };
     });
     const nativeButtons = core.capabilities(binding.taskId)?.buttons;
-    const choices = buttons.length && !nativeButtons ? "\n" + buttons.map((button, index) => `${index + 1}. ${button.label}`).join("\n") : "";
-    const instructions = view.sensitive ? "" : buttons.length ? nativeButtons ? "\n可点击选项，或直接回复选项名称/编号。" : "\n请回复选项名称或编号。" : "\n请直接回复答案；多个问题请用 JSON 按问题填写。";
+    // An approval is decided by a button; a channel without buttons shows the request and points to the web console.
+    const choices = buttons.length && !nativeButtons && !view.approval ? "\n" + buttons.map((button, index) => `${index + 1}. ${button.label}`).join("\n") : "";
+    const instructions = view.sensitive ? "" : view.approval ? `\n${nativeButtons ? APPROVAL_BY_BUTTON : APPROVAL_ELSEWHERE}` : buttons.length ? nativeButtons ? "\n可点击选项，或直接回复选项名称/编号。" : "\n请回复选项名称或编号。" : "\n请直接回复答案；多个问题请用 JSON 按问题填写。";
     const text = view.text + choices + instructions;
     const noticeId = core.notice(input, text, `question:${call.id}`, { text, ...(nativeButtons ? { buttons } : {}) });
     this.store.set("communication_questions", call.id, { call, taskId: binding.taskId, conversationId: binding.contextId, source: input.source, connectionId: input.connectionId, noticeId, closed: false });
@@ -484,7 +485,9 @@ export class HostWorker {
     const candidates = this.store.entries<any>("communication_questions").map(({ value }) => value).filter((item) =>
       !item.closed && this.sessionOf(item.conversationId) === input.conversationId && (item.connectionId === input.connectionId && item.source.sender === input.source.sender || core.isOwnerInput(input) && core.isOwnerTask(item.conversationId, item.taskId)) &&
       (!input.source.quoted?.messageId || AgentLedger.open(this.store).delivery(item.noticeId)?.platformMessageId?.split(",").includes(input.source.quoted.messageId)) &&
-      (!action || item.call.id === action.callId) && Date.parse(item.call.deadlineAt) > Date.now());
+      (!action || item.call.id === action.callId) && Date.parse(item.call.deadlineAt) > Date.now() &&
+      // Text never answers an approval: while only approvals wait, a message is an ordinary message.
+      (action || !interaction(item.call).approval));
     if (!candidates.length) return false;
     if (candidates.length !== 1) { core.notice(input, "有多个问题等待回答，请点击对应问题的选项。", "ambiguous-question"); return true; }
     const question = candidates[0], call: HostCall = question.call;

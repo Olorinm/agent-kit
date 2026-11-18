@@ -89,6 +89,8 @@ export interface CoreIdentity {
    * (none for a command in a group, so a code is never confirmed in front of others).
    */
   pair(connectionId: string, source: ChannelMessage): { reply?: string | undefined } | undefined;
+  /** Called for each new message outside a direct chat: a pairing code others could read there stops working. */
+  exposed?(connectionId: string, source: ChannelMessage): void;
   /** Called for each accepted owner message resolved by person (`last_seen_at`). */
   seen?(connectionId: string, source: ChannelMessage): void;
 }
@@ -262,6 +264,7 @@ export class CommunicationCore {
       if (existing.hash !== hash) throw new Error("channel_event_id_reused_with_different_payload");
       return this.view(existing, source)!;
     }
+    if (source.scope !== "direct") { try { this.identity?.exposed?.(connectionId, source); } catch { /* The message is still received. */ } }
     const pairing = !adapter.ledgerDelivery && !source.event && !source.action && !source.attachments?.length ? this.identity?.pair(connectionId, source) : undefined;
     if (pairing) return this.receivePairing(connectionId, id, hash, source, pairing.reply);
     const owner = this.isOwner(connectionId, source);

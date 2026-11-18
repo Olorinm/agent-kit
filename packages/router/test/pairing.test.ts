@@ -166,7 +166,7 @@ describe("pairing at channel ingress", () => {
     expect(events.map((event) => [event.body.channel, event.senderType, event.senderId])).toEqual([
       ["matrix", "person", person], ["matrix", "person", person], ["feishu", "person", person], ["web", "person", person]]);
   });
-  it("ignores /link in groups without a reply and keeps the code pending", async () => {
+  it("ignores /link in groups without a reply, and a code seen in a group stops working at once", async () => {
     const h = await harness();
     const code = h.identity.createCode(owner);
     const message: ChannelMessage = { ...dm("ou_new", `/link ${code.code}`), scope: "group", groupId: "oc_group", threadId: "oc_group" };
@@ -174,8 +174,23 @@ describe("pairing at channel ingress", () => {
     expect(h.inbox("feishu", message.externalId)).toMatchObject({ state: "ignored", reason: "pairing" });
     await h.core.flush();
     expect(h.adapters.feishu.sent).toEqual([]);
-    expect(h.identity.pendingCodes(owner)).toHaveLength(1);
     expect(h.ledger.counts()).toMatchObject({ events: 0, sessions: 0 });
+    // Whoever read the group cannot use the code in a direct chat.
+    expect(h.identity.pendingCodes(owner)).toEqual([]);
+    h.core.receive("feishu", dm("ou_reader", `/link ${code.code}`));
+    await h.core.flush();
+    expect(h.adapters.feishu.sent.map((item) => item.text)).toEqual([REPLIES.invalid]);
+    expect(h.persons.resolve("feishu", "cli_one", "ou_reader")).toBeUndefined();
+    // Anywhere in a group message, in any written form, with or without the command; other pending codes stay.
+    const kept = h.identity.createCode(owner);
+    for (const write of [(text: string) => `我的关联码是 ${text}，帮我看看`, (text: string) => text.replace("-", "").toLowerCase(), (text: string) => `code:${text.replace("-", " ")}.`]) {
+      const shown = h.identity.createCode(owner);
+      h.core.receive("matrix", { ...dm("@someone:example.test", write(shown.code)), scope: "group", groupId: "!room", threadId: "!room", attachments: [] });
+      expect(h.identity.pendingCodes(owner).map((item) => item.id)).toEqual([kept.id]);
+    }
+    // A direct message never revokes: a wrong guess there is a failed attempt only.
+    h.core.receive("feishu", dm("ou_other", "/link 0000-0000"));
+    expect(h.identity.pendingCodes(owner).map((item) => item.id)).toEqual([kept.id]);
   });
   it("replies to wrong codes and locks the sender out after five failures", async () => {
     const h = await harness();

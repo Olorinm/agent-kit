@@ -1682,6 +1682,9 @@ Ingress hook. It runs after the claim and **before** authorization, so an unknow
 - **Match.** Only `scope:"direct"` messages whose whole text matches
   `^\s*(?:/link|绑定)\s+[0-9A-Za-z]{4}-?[0-9A-Za-z]{4}\s*$`. In groups, `/link` is ignored without a reply,
   so a code is never confirmed in front of others.
+- **Exposure.** A pending code of the agent's owner that appears anywhere in a message outside a direct chat (with or
+  without the command, the hyphen, or a space in its place) is deleted when the message is received, so nobody who
+  read it there can use it in a direct chat.
 - **Lockout.** `hub_pairing_failures` is keyed by `digest(provider, namespace, subject)` in the hub of the
   receiving agent's owner. Five failures in 1 h lock the sender for 1 h: "尝试次数过多，请一小时后再试。"
 - **Match the code** against the agent owner's pending codes. On success, `persons.link(person, provider,
@@ -1728,7 +1731,7 @@ CREATE INDEX hub_pairing_pending ON hub_pairing_codes(person_id) WHERE consumed_
   - Sockets: a ticket from an edge principal; a 4401 close at `exp`.
 - `test/pairing.test.ts`:
   - success: a Feishu DM links (with `union_id`); a Matrix DM links
-  - ignored: `/link` in a group
+  - ignored: `/link` in a group; a code that appears in a group message is void
   - failures: an expired, reused or wrong code; lockout after five failures; an identity already linked to
     another person; an unverified mail
   - no event or turn is written
@@ -1987,7 +1990,9 @@ the web API, the socket, the chat index (`pendingCards`) and channel buttons (`l
 - **Idempotent and durable.** The first call records the card, its tokens, its delivery and a request record in one
   transaction. A repeated call returns the request; other content under the same event id is refused.
 - **Answers.** The web answers through `POST …/cards/:cardId/answer` with `choiceId` or the label as `text`. A channel
-  answers by button, by the label of a choice, or by its number (`LedgerControl.command`). There is no call to resolve,
+  answers by button, by the label of a choice, or by its number (`LedgerControl.command`). An `approval` request, like
+  every approval card of a run (`approval`, `connector_approval`), takes a button or `choiceId` only: `text` is refused
+  with `invalid_answer` (`approval_requires_choice`), and a typed message in a channel is an ordinary message. There is no call to resolve,
   so the answer is planned and committed in one transaction; the first one wins and later ones are `stale`. The result
   of a choice is `{ choice: <id> }`. `approval` requests have two choices and close as `approved` / `rejected` by the
   existing mapping of choice 0 and 1; `question` requests close as `answered`.

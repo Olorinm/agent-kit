@@ -326,8 +326,8 @@ describe("notifications of a turn that answers the owner", () => {
 
 describe("interactions of a turn that answers the owner", () => {
   const approval = { id: "a1", name: "item/commandExecution/requestApproval", input: { command: "make deploy" } };
-  it("reach the owner as a card on the turn's route, answered there by text", async () => {
-    const h = await setup();
+  it("reach the owner as a card on the turn's route, answered there by its button and never by text", async () => {
+    const h = await setup({ buttons: true });
     await ownerTurnOnChat(h);
     const submitted = await h.sessions.submit({ eventId: "asks", sessionId: OWNER_CHAT, input: "Deploy what the partner built.", admission: admission("delegation"), reply: {} });
     await h.round();
@@ -337,15 +337,22 @@ describe("interactions of a turn that answers the owner", () => {
     expect(h.chat.sent[0]).toMatchObject({ route: { connectionId: "chat", target: OWNER_ON_CHAT }, text: expect.stringContaining("make deploy") });
     const [card] = h.ledger.openCards({ sessionKey: OWNER_CHAT });
     expect(card).toMatchObject({ kind: "approval", status: "pending", callId: "a1", turnId: submitted.taskId, source: "host" });
-    h.chat.say("m2", "同意", OWNER_ON_CHAT);
+    expect(h.chat.sent[0]!.text).toBe("make deploy\nmake deploy\n请点击按钮选择；文字回复不会被当作批准。");
+    // A typed "同意" is a message for the agent, not a decision.
+    for (const [id, text] of [["m2", "同意"], ["m3", "yes"], ["m4", "1"]] as const) { h.chat.say(id, text, OWNER_ON_CHAT); await h.round(); }
+    expect(h.host.resolved).toEqual([]);
+    expect(h.ledger.cardRecord(card!.cardId)!.status).toBe("pending");
+    expect(["m2", "m3", "m4"].map((id) => h.ledger.input(h.ledger.claimFor("chat", id)!.inputId)!.state)).not.toContain("control");
+    h.chat.say("press", "", OWNER_ON_CHAT, { action: { token: h.chat.sent[0]!.buttons![0]!.token } });
     await h.round();
     expect(h.host.resolved).toEqual([{ runId: "run-2", callId: "a1", result: { decision: "accept" } }]);
     expect(h.ledger.cardRecord(card!.cardId)).toMatchObject({ status: "approved", surface: "channel", answeredBy: OWNER_PERSON });
     h.host.finish(2, "Deployed.");
     await h.round();
     expect(h.chat.sent.map((item) => item.text).at(-1)).toBe("Deployed.");
-    // The answer was a control message, not a new turn.
-    expect(h.host.starts).toHaveLength(2);
+    // The button was a control message, not a new turn; the typed messages are the agent's next turn.
+    expect(h.host.starts).toHaveLength(3);
+    expect(JSON.stringify(h.host.starts[2])).toContain("同意");
   });
   it("are answered from the web as well, first answer wins, and the external conversation is told", async () => {
     const h = await setup();
