@@ -121,6 +121,9 @@ test("policy over HTTP needs the service token and validates its input", async (
   const reset = await request("POST", "policy/reset", undefined, token);
   assert.equal((await reset.json()).groups[0].operations[1].setting, "ask");
   assert.equal((await fetch(`${started.url}/v1/connections/missing/policy`, { headers: { Authorization: `Bearer ${token}` } })).status, 404);
+  // A connector without access rules of its own has none to manage; the route still needs the service token.
+  assert.equal((await request("GET", "access", undefined, await s.callerToken())).status, 401);
+  assert.deepEqual([(await request("GET", "access", undefined, token)).status, (await request("PUT", "access", { webAccess: "ask" }, token)).status], [404, 404]);
 });
 
 test("policy is per connection: one owner's settings do not affect another connection", async (t) => {

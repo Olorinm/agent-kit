@@ -118,17 +118,62 @@ export const runAgentBrowser = (binary: () => string): AgentBrowserRunner => (ar
   child.stdin.end(options.input ?? "");
 });
 
-/** Refuses non-http(s) URLs, embedded credentials and loopback, private, link-local and `.internal` hosts. */
+const METADATA_HOSTS = new Set(["metadata.goog", "metadata.tencentyun.com"]);
+const PRIVATE_SUFFIXES = [".localhost", ".internal", ".local", ".home.arpa"];
+/** Loopback, private, carrier-grade NAT, link-local, benchmark, multicast and reserved IPv4 ranges. */
+function privateV4(a: number, b: number) {
+  return a === 0 || a === 10 || a === 127 || a >= 224 || (a === 100 && b >= 64 && b <= 127) || (a === 169 && b === 254) ||
+    (a === 172 && b >= 16 && b <= 31) || (a === 192 && (b === 168 || b === 0)) || (a === 198 && (b === 18 || b === 19));
+}
+/** The eight groups of an IPv6 literal as the URL parser serializes it (hexadecimal groups, at most one `::`). */
+function groupsV6(literal: string) {
+  const [head = "", tail] = literal.split("::"), parse = (part: string) => part ? part.split(":").map((group) => Number.parseInt(group, 16)) : [];
+  const left = parse(head), right = tail === undefined ? [] : parse(tail);
+  const groups = tail === undefined ? left : [...left, ...new Array<number>(Math.max(8 - left.length - right.length, 0)).fill(0), ...right];
+  return groups.length === 8 && groups.every((group) => group >= 0 && group <= 0xffff) ? groups : undefined;
+}
+/** Unspecified, loopback, unique-local, link-local, site-local and multicast addresses, and those embedding a private IPv4. */
+function privateV6(literal: string) {
+  const g = groupsV6(literal);
+  if (!g) return true;
+  const embedded = (high: number) => privateV4(high >> 8, high & 0xff);
+  const zero = (count: number) => g.slice(0, count).every((group) => group === 0);
+  if ((g[0]! & 0xfe00) === 0xfc00 || (g[0]! & 0xff80) === 0xfe80 || (g[0]! & 0xff00) === 0xff00) return true;
+  // IPv4-compatible (::a.b.c.d, which includes :: and ::1) and IPv4-mapped (::ffff:a.b.c.d).
+  if (zero(5) && (g[5] === 0 || g[5] === 0xffff)) return embedded(g[6]!);
+  // NAT64: the well-known prefix carries an IPv4 address; the local-use prefix is private by definition.
+  if (g[0] === 0x64 && g[1] === 0xff9b) return g[2] === 1 || !g.slice(2, 6).every((group) => group === 0) || embedded(g[6]!);
+  // 6to4 carries an IPv4 address in its second and third groups.
+  if (g[0] === 0x2002) return embedded(g[1]!);
+  return false;
+}
+
+/**
+ * Refuses non-http(s) URLs, embedded credentials and loopback, private, link-local, metadata and single-label hosts.
+ * Address checks apply to address literals only: the URL parser has already turned every IPv4 spelling (decimal, hex,
+ * short forms, trailing dot) into dotted decimal and every IPv6 literal into bracketed hexadecimal groups.
+ * Names are not resolved here: the remote browser resolves them on Cloudflare's network, so a lookup from this
+ * process would prove nothing about the address the browser reaches.
+ */
 export function allowedUrl(url: string) {
   let parsed: URL;
   try { parsed = new URL(url); } catch { throw new ConnectorError("browser_url_invalid"); }
   if (!["http:", "https:"].includes(parsed.protocol) || parsed.username || parsed.password) throw new ConnectorError("browser_url_not_allowed");
-  const host = parsed.hostname.replace(/^\[|\]$/g, "");
-  // The remote browser runs on Cloudflare; still refuse obvious private and metadata targets.
-  if (host === "localhost" || host.endsWith(".localhost") || host.endsWith(".internal") ||
-    /^(127\.|10\.|192\.168\.|169\.254\.|0\.)/.test(host) || /^172\.(1[6-9]|2\d|3[01])\./.test(host) || /^(::1?|f[cd]|fe80)/i.test(host))
+  const host = parsed.hostname.toLowerCase().replace(/\.$/, ""), v4 = /^(\d+)\.(\d+)\.\d+\.\d+$/.exec(host);
+  if (host.startsWith("[") ? privateV6(host.slice(1, -1)) : v4 ? privateV4(Number(v4[1]), Number(v4[2]))
+    : !host.includes(".") || METADATA_HOSTS.has(host) || PRIVATE_SUFFIXES.some((suffix) => host.endsWith(suffix)))
     throw new ConnectorError("browser_url_not_allowed");
   return parsed.href;
+}
+
+/**
+ * The key a site permission is stored and matched under: the URL's host in lower case without a trailing dot or a
+ * leading `www.`, plus a non-default port. Matching is exact on that key: no subdomain or registrable-domain
+ * matching, which would need the public suffix list to avoid treating `a.github.io` and `b.github.io` as one site.
+ */
+export function siteOf(url: string) {
+  const parsed = new URL(allowedUrl(url));
+  return `${parsed.hostname.toLowerCase().replace(/\.$/, "").replace(/^www\./, "")}${parsed.port ? `:${parsed.port}` : ""}`;
 }
 
 export function safeName(name: string) {

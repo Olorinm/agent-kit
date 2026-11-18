@@ -6,10 +6,13 @@ import { allowedUrl, cdpEndpoint, safeName, type BrowserRunAccount } from "./run
  *
  * It exists for what agent-browser cannot do against a remote browser, not for compatibility:
  * - Navigation guard: every document request in the browser (typed URLs, clicks, `--new-tab`, form posts, redirects)
- *   is paused and refused when it targets a private, loopback, link-local or non-http(s) address.
+ *   is paused and refused when it targets a private, loopback, link-local or non-http(s) address. While the owner's
+ *   site permissions are in force (`restrict`), a top-level navigation to a site they do not cover is refused as well
+ *   and reported (`takeBlocked`); frames and other sub-resources are not checked against the permissions.
  * - Downloads: Browser Run saves downloads on its own machine and blocks reading them back, so agent-browser's
  *   `download` cannot deliver the file. The guard captures the response body (links, cross-origin links, form posts)
- *   or the blob/data URL a script created, and cancels the remote download.
+ *   or the blob/data URL a script created, and cancels the remote download. A response body is read as a stream in
+ *   bounded chunks and abandoned at the size limit; page-supplied data is measured before it is decoded.
  * - Structured handoff: Cloudflare's `Cloudflare.handoff` banner (instructions, Done, Failed) and its state.
  * Uses Node's built-in WebSocket; the bearer token travels only in the connection's Authorization header.
  */
@@ -19,6 +22,10 @@ export interface BrowserGuard {
   readonly closed: boolean;
   /** Runs `trigger` (an agent-browser click) and returns the first download it starts. */
   captureDownload(targetId: string, trigger: () => Promise<void>, options: { maxBytes: number; timeoutMs: number }): Promise<Download>;
+  /** Top-level navigations are limited to URLs `permits` accepts; without it only the address checks apply. */
+  restrict(permits?: (url: string) => boolean): void;
+  /** URLs of the top-level navigations refused by the site permissions since the last call. */
+  takeBlocked(): string[];
   handoff(targetId: string, instructions: string, timeoutMs: number): Promise<string>;
   /** Cloudflare's state for the tab, with the Done/Failed outcome when its completion event was seen. */
   handoffState(targetId: string, handoffId: string): Promise<HandoffState>;
@@ -123,7 +130,14 @@ const fileName = (disposition: string, url: string) => {
   return safeName(name);
 };
 
+const READ_CHUNK = 1_048_576;
+const base64Limit = (bytes: number) => Math.ceil(bytes / 3) * 4;
+
 class Guard implements BrowserGuard {
+  #permits?: (url: string) => boolean;
+  #blocked: string[] = [];
+  /** Page targets; a page's main frame has the target's ID. */
+  #tabs = new Set<string>();
   #capture?: { maxBytes: number; resolve(download: Download): void; reject(error: Error): void };
   readonly #pages = new Map<string, string>();
   readonly #completed = new Map<string, { success: boolean; reason?: string }>();
@@ -140,6 +154,11 @@ class Guard implements BrowserGuard {
   async #paused(event: any) {
     const { requestId, request } = event, response = event.responseStatusCode !== undefined || event.responseErrorReason !== undefined;
     if (!allowed(request.url)) { await this.cdp.send("Fetch.failRequest", { requestId, errorReason: "BlockedByClient" }); return; }
+    if (!response && this.#permits && !this.#permits(request.url) && await this.#topLevel(event.frameId)) {
+      if (this.#blocked.length < 20) this.#blocked.push(String(request.url));
+      await this.cdp.send("Fetch.failRequest", { requestId, errorReason: "BlockedByClient" });
+      return;
+    }
     const capture = this.#capture, status = Number(event.responseStatusCode ?? 0);
     if (response && capture) {
       if (status >= 300 && status < 400) {
@@ -153,9 +172,7 @@ class Guard implements BrowserGuard {
         this.#capture = undefined;
         try {
           if (Number(header(event.responseHeaders, "content-length") || 0) > capture.maxBytes) throw new ConnectorError("browser_download_too_large");
-          const body = await this.cdp.send("Fetch.getResponseBody", { requestId });
-          const bytes = Buffer.from(body.body ?? "", body.base64Encoded ? "base64" : "utf8");
-          if (bytes.length > capture.maxBytes) throw new ConnectorError("browser_download_too_large");
+          const bytes = await this.#body(requestId, capture.maxBytes);
           capture.resolve({ name: fileName(disposition, request.url), mediaType: type || "application/octet-stream", size: bytes.length, contentBase64: bytes.toString("base64") });
         } catch (error) { capture.reject(error as Error); }
         // The page stays where it was; nothing is saved on the remote machine.
@@ -165,24 +182,64 @@ class Guard implements BrowserGuard {
     }
     await this.cdp.send("Fetch.continueRequest", { requestId });
   }
+  /** Whether a document request belongs to a page's main frame; a request that cannot be placed counts as one. */
+  async #topLevel(frameId: unknown) {
+    if (typeof frameId !== "string") return true;
+    if (this.#tabs.has(frameId)) return true;
+    try {
+      const { targetInfos } = await this.cdp.send("Target.getTargets");
+      this.#tabs = new Set((Array.isArray(targetInfos) ? targetInfos : []).filter((target) => target?.type === "page").map((target) => String(target.targetId)));
+    } catch { return true; }
+    return this.#tabs.has(frameId);
+  }
+  /** The paused response's body, read in chunks so that no more than the limit (plus one chunk) is ever held. */
+  async #body(requestId: string, maxBytes: number) {
+    const { stream } = await this.cdp.send("Fetch.takeResponseBodyAsStream", { requestId });
+    if (typeof stream !== "string") throw new ConnectorError("browser_download_failed", { reason: "stream_unavailable" });
+    const chunks: Buffer[] = [];
+    let size = 0, empty = 0;
+    try {
+      for (;;) {
+        const part = await this.cdp.send("IO.read", { handle: stream, size: READ_CHUNK });
+        const data = typeof part.data === "string" ? part.data : "";
+        if (data.length > base64Limit(READ_CHUNK) + 4) throw new ConnectorError("browser_download_failed", { reason: "chunk_too_large" });
+        const bytes = Buffer.from(data, part.base64Encoded ? "base64" : "utf8");
+        size += bytes.length;
+        if (size > maxBytes) throw new ConnectorError("browser_download_too_large");
+        chunks.push(bytes);
+        if (part.eof === true) break;
+        if (!bytes.length && ++empty > 100) throw new ConnectorError("browser_download_failed", { reason: "stream_stalled" });
+      }
+    } finally { await this.cdp.send("IO.close", { handle: stream }).catch(() => undefined); }
+    return Buffer.concat(chunks);
+  }
   /** Downloads that are not a document response: blob: and data: URLs a script created, or links Chrome downloads directly. */
   async #download(event: any) {
     const capture = this.#capture;
     await this.cdp.send("Browser.cancelDownload", { guid: event.guid }).catch(() => undefined);
     if (!capture) return;
     this.#capture = undefined;
+    // The capture is no longer the guard's, so a failure from here on is reported to it directly.
+    try { await this.#deliver(event, capture); }
+    catch (error) { capture.reject(error instanceof Error ? error : new Error("browser_download_failed")); }
+  }
+  async #deliver(event: any, capture: { maxBytes: number; resolve(download: Download): void }) {
     const url = String(event.url ?? ""), name = safeName(String(event.suggestedFilename ?? "download"));
     let bytes: Buffer, type = "";
     if (url.startsWith("data:")) {
       const match = /^data:([^,]*?)(;base64)?,(.*)$/s.exec(url);
       if (!match) throw new ConnectorError("browser_download_failed", { reason: "data_url_invalid" });
       type = match[1]!.split(";")[0]!;
+      // Percent-encoding spends at most three characters on a byte.
+      if (match[3]!.length > (match[2] ? base64Limit(capture.maxBytes) : capture.maxBytes * 3)) throw new ConnectorError("browser_download_too_large");
       bytes = match[2] ? Buffer.from(match[3]!, "base64") : Buffer.from(decodeURIComponent(match[3]!), "utf8");
     } else if (url.startsWith("blob:")) {
       const session = await this.#page(String(event.frameId));
       const read = await this.cdp.send("Runtime.evaluate", { expression: blobReader(url, capture.maxBytes), awaitPromise: true, returnByValue: true }, session);
       const value = read?.result?.value;
       if (!value || value.error || typeof value.base64 !== "string") throw new ConnectorError(value?.error === "too_large" ? "browser_download_too_large" : "browser_download_failed", { reason: value?.error ?? "blob_unavailable" });
+      // The page could have replaced what the reader measures with; the text is measured again before it is decoded.
+      if (value.base64.length > base64Limit(capture.maxBytes)) throw new ConnectorError("browser_download_too_large");
       bytes = Buffer.from(value.base64, "base64"); type = String(value.type ?? "");
     } else {
       // An http(s) download that did not pass as a document response: fetch it again in a separate tab with capture on.
@@ -234,6 +291,8 @@ class Guard implements BrowserGuard {
       }
     }
   }
+  restrict(permits?: (url: string) => boolean) { this.#permits = permits; this.#blocked = []; }
+  takeBlocked() { return this.#blocked.splice(0); }
   async handoff(targetId: string, instructions: string, timeoutMs: number) {
     const result = await this.cdp.send("Cloudflare.handoff", { instructions, timeout: timeoutMs }, await this.#page(targetId));
     if (typeof result?.handoffId !== "string" || !/^[A-Za-z0-9_.:-]{1,100}$/.test(result.handoffId)) throw new Error("browser_handoff_unexpected_response");

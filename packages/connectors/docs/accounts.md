@@ -147,6 +147,9 @@ Owner operation settings (allow, ask, deny per operation) use the same service t
 default and availability. `POST /v1/connections/:id/connect` with `{ "scopes": [...] }` adds scopes that
 operations marked `grantable` need (Google incremental consent). See [Security model](security-model.md#operation-policy).
 
+A connector's own access rules use `GET|PUT /v1/connections/:id/access` with the service token; today these are the
+browser's [site permissions](security-model.md#site-permissions).
+
 The remote `connection_status` tool is safe for Agents, but connect/disconnect are trusted management actions.
 No generic credential-import command is accepted for the three OAuth connectors.
 Google status includes `backend: "google-api"`, `verification: "oauth"`, and `apiAccess: "checked_on_use"`;
@@ -210,8 +213,8 @@ agent-browser CLI inside this service, attached to the connection's Browser Run 
 
 | Tool | Risk | Input |
 | --- | --- | --- |
-| `agent_browser_read` | read | `args`: an agent-browser argument list, e.g. `["snapshot","-i"]`. Navigation, snapshots, `get`/`is`/`find`/`wait`, clicks, typing, keys, `screenshot`, `pdf`, `download <element> <name>`, `close`, `--help` and `skills` |
-| `agent_browser_write` | write | `args` (`["upload","<file input>","<name>",…]`), `site` (the current page's https origin) and `files` (name, media type, base64) |
+| `agent_browser_read` | read | `args`: an agent-browser argument list, e.g. `["snapshot","-i"]`, and optionally `task` (set by the product, see [site permissions](security-model.md#site-permissions)). Navigation, snapshots, `get`/`is`/`find`/`wait`, clicks, typing, keys, `screenshot`, `pdf`, `download <element> <name>`, `close`, `--help` and `skills` |
+| `agent_browser_write` | write | `args` (`["upload","<file input>","<name>",…]`), `site` (the current page's https origin), `files` (name, media type, base64) and optionally `task` |
 | `handoff_start`, `handoff_status`, `handoff_cancel` | read | Live View of the current tab with Cloudflare's instructions banner and Done/Failed; `handoff_status` reports `done` and `success` |
 
 `agent_browser_read` refuses `upload` with `agent_browser_command_requires_write_tool`, every command outside its

@@ -21,6 +21,8 @@ export interface Command {
   /** download: the element selector. upload: the selector and the file names. */
   selector?: string;
   files?: string[];
+  /** The checked URL an `open`, `goto`, `navigate` or `tab new` command goes to. */
+  target?: string;
 }
 
 interface Spec {
@@ -126,10 +128,10 @@ export function parseCommand(input: string[]): Command {
   const name = spec.sub ? `${command} ${values[0]}` : command;
   const result: Command = { kind: "browser", name, args, outputs: [], ...(INSPECT.has(command) ? { inspect: true } : {}) };
 
-  if (NAVIGATION.has(command) && values.length) args[positionals[0]!] = navigable(values[0]!);
+  if (NAVIGATION.has(command) && values.length) result.target = args[positionals[0]!] = navigable(values[0]!);
   if (command === "tab") {
     // tab [list|new [url]|close [ref]|<ref>]
-    if (values[0] === "new" && values.length === 2) args[positionals[1]!] = navigable(values[1]!);
+    if (values[0] === "new" && values.length === 2) result.target = args[positionals[1]!] = navigable(values[1]!);
     else if (values.length === 2 && values[0] !== "close") throw new ConnectorError("agent_browser_arguments_invalid", { command });
   }
   if (command === "wait" && args.some((arg) => /^--state=?/.test(arg)) && !values.length)
@@ -182,10 +184,10 @@ function outputName(requested: string, extension: string) {
   return extension && !base.toLowerCase().endsWith(extension) && !(extension === ".png" && IMAGE.test(base)) ? `${base}${extension}` : base;
 }
 
-/** Arguments for display, quoted like a shell line. */
-export function shellLine(args: string[]) {
+/** Arguments for display, quoted like a shell line; `limit` is the longest argument shown whole. */
+export function shellLine(args: string[], limit = 300) {
   return ["agent-browser", ...args].map((arg) => {
-    const shown = arg.length > 300 ? `${arg.slice(0, 300)}…(${arg.length} chars)` : arg;
+    const shown = arg.length > limit ? `${arg.slice(0, limit)}…(${arg.length} chars)` : arg;
     if (/^[\w@%+=:,./#-]+$/u.test(shown)) return shown;
     return JSON.stringify(shown).replace(/[\p{Cc}\p{Cf}]/gu, (ch) => `\\u${ch.codePointAt(0)!.toString(16).padStart(4, "0")}`);
   }).join(" ");

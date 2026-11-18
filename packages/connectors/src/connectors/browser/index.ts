@@ -7,7 +7,7 @@ import type { Json } from "../../canonical.js";
 import { ConnectorError, type ConnectionConfig, type Connector, type OperationCatalog, type ToolContext, type ToolDefinition } from "../../connector.js";
 import { connectGuard, type BrowserGuard, type GuardFactory } from "./cdp.js";
 import { commandOperation, parseCommand, shellLine, type Command } from "./command.js";
-import { CloudflareBrowserRun, agentBrowserBinary, cdpEndpoint, runAgentBrowser, type AgentBrowserRunner, type BrowserRun, type BrowserRunAccount, type CliResult } from "./runtime.js";
+import { CloudflareBrowserRun, agentBrowserBinary, cdpEndpoint, runAgentBrowser, siteOf, type AgentBrowserRunner, type BrowserRun, type BrowserRunAccount, type CliResult } from "./runtime.js";
 
 export { CloudflareBrowserRun, agentBrowserBinary, runAgentBrowser, type AgentBrowserRunner, type BrowserRun, type CliResult } from "./runtime.js";
 export { parseCommand } from "./command.js";
@@ -19,13 +19,50 @@ const MAX_HANDOFF_MS = 1_800_000;
 const MAX_STORAGE_CHARS = 5_000_000;
 const MAX_OUTPUT_CHARS = 200_000;
 const COMMAND_TIMEOUT_MS = 90_000;
+/** A permission given for one task lapses after this long without a command from that task. */
+const TASK_GRANT_MS = 86_400_000;
+const MAX_SITES = 500;
+const MAX_TASK_GRANTS = 1000;
+/** A command the owner is asked about is shown whole, so a longer one is refused instead of being cut. */
+const MAX_SHOWN_COMMAND = 1000;
 const settings = z.object({ accountId: z.string().regex(/^[a-f0-9]{32}$/), tokenFile: z.string().min(1) }).strict();
 const cookie = z.looseObject({ name: z.string(), value: z.string(), domain: z.string() });
-/** Sealed per connection: the remote session and the browser storage (cookies, local storage) as agent-browser saves it. */
+const siteKey = z.string().min(1).max(300).regex(/^[a-z0-9.\-:[\]]+$/);
+/** Names the conversation whose site permissions apply. Set by the product that admits the call, never by the Agent. */
+const task = z.string().regex(/^[A-Za-z0-9_.:-]{1,128}$/);
+/**
+ * Sealed per connection: the remote session, the browser storage (cookies, local storage) as agent-browser saves it,
+ * and the owner's site permissions: whether a new site opens directly or asks first, the sites always allowed, and
+ * the sites allowed for single tasks.
+ */
 const state = z.object({ version: z.literal(1), sessionId: z.string().optional(), cookies: z.array(cookie).max(3000).default([]),
   origins: z.array(z.unknown()).max(500).default([]),
+  webAccess: z.enum(["direct", "ask"]).default("direct"), sites: z.array(siteKey).max(MAX_SITES).default([]),
+  grants: z.array(z.object({ task, site: siteKey, expiresAt: z.string() }).strict()).max(MAX_TASK_GRANTS).default([]),
   handoff: z.object({ handoffId: z.string(), targetId: z.string().optional(), expiresAt: z.string() }).optional() }).strict();
 type State = z.infer<typeof state>;
+const blank = (): State => ({ version: 1, cookies: [], origins: [], webAccess: "direct", sites: [], grants: [] });
+const accessInput = z.object({ webAccess: z.enum(["direct", "ask"]).optional(),
+  allow: z.object({ site: z.string().min(1).max(2000), task: task.optional() }).strict().optional(),
+  remove: z.object({ site: z.string().min(1).max(2000) }).strict().optional() }).strict()
+  .refine((value) => value.webAccess !== undefined || value.allow !== undefined || value.remove !== undefined);
+/** The Agent's note in the live-view banner keeps no link of its own (a scheme, `//host`, `www.` or the live-view host) and stays on one line. */
+const LINK_REMOVED = "[链接已移除]";
+const handoffNote = (text: string) => text
+  .replace(/(?:[a-z][a-z0-9+.-]*:\/\/|\/\/|www\.|live\.browser\.run)[^\s<>"'）)\]]*/gi, LINK_REMOVED).replace(/\s+/g, " ").trim();
+/** A file name for the owner: no control, bidirectional or zero-width characters, one line, quoted. */
+const shownName = (name: string) => JSON.stringify(name.replace(/[\p{Cc}\p{Cf}\u2028\u2029]/gu, "").replace(/\s+/g, " ").trim());
+/**
+ * The sites a call may reach while the owner has new sites ask first: those always allowed and those allowed for the
+ * call's task. Undefined while sites open directly.
+ */
+const permits = (saved: State, task: string | undefined, now: number) => {
+  if (saved.webAccess !== "ask") return undefined;
+  const sites = new Set([...saved.sites, ...saved.grants.filter((grant) => grant.task === task && Date.parse(grant.expiresAt) > now).map((grant) => grant.site)]);
+  return (url: string) => { try { return sites.has(siteOf(url)); } catch { return false; } };
+};
+/** Commands that leave the current page or act on no page; the site they arrive at is checked instead. */
+const LEAVES = new Set(["back", "forward", "tab"]);
 const args = z.array(z.string().max(100_000)).min(1).max(100);
 const site = z.string().url().refine((value) => { const u = new URL(value); return u.protocol === "https:" && u.pathname === "/" && !u.search && !u.hash && !u.username; },
   "site must be an https origin such as https://example.com");
@@ -33,7 +70,7 @@ const file = z.object({ name: z.string().min(1).max(120).regex(/^[^/\\\u0000-\u0
   // Accept parameters such as "; charset=utf-8" but hand the browser only the bare type.
   mediaType: z.string().max(200).regex(/^[a-zA-Z]+\/[a-zA-Z0-9.+-]+(?:\s*;.*)?$/).transform((v) => v.split(";")[0]!.trim().toLowerCase()),
   contentBase64: z.string().min(1).max(MAX_UPLOAD_BASE64).regex(/^[A-Za-z0-9+/]+={0,2}$/) }).strict();
-const writeInput = z.object({ args, site, files: z.array(file).min(1).max(10) }).strict();
+const writeInput = z.object({ args, site, files: z.array(file).min(1).max(10), task: task.optional() }).strict();
 type WriteInput = z.infer<typeof writeInput>;
 
 /** Owner-adjustable operations. Following the product rule, everything but upload is a read and allowed by default. */
@@ -61,13 +98,18 @@ export interface BrowserOptions {
 }
 
 interface Attached { sessionId: string; home: string; token: string; usedAt: number; verify: boolean; guard?: BrowserGuard; idle?: NodeJS.Timeout }
-interface Run { account: BrowserRunAccount; session: Attached; saved: State; context: ToolContext }
+interface Run { account: BrowserRunAccount; session: Attached; saved: State; context: ToolContext; permit?: (url: string) => boolean }
 
 /**
  * A remote browser on Cloudflare Browser Run, outside the Agent's sandbox, driven by the official agent-browser CLI
  * running in this service. The Cloudflare token and site cookies stay here: the token reaches the CLI only through its
  * CDP header environment, and cookies are sealed as the connection's credential. Following the agreed product rule,
  * navigation, clicks and typing run directly; sending a workspace file to a site is a write needing approval.
+ *
+ * The owner can have new sites ask first (`access`). Then a command runs only when the site it opens, or the page it
+ * acts on, is always allowed or allowed for the call's task; otherwise it fails with
+ * `browser_site_permission_required` for the product to ask the owner. Navigations a page starts itself (clicks,
+ * form posts, redirects, history, new tabs) are held to the same sites by the CDP guard.
  */
 export function browserConnector(options: BrowserOptions = {}): Connector {
   const keepAliveMs = options.keepAliveMs ?? 600_000;
@@ -121,9 +163,21 @@ export function browserConnector(options: BrowserOptions = {}): Connector {
   };
   const load = async (context: ToolContext): Promise<State> => {
     const parsed = state.safeParse((await context.credentials.get()) ?? { version: 1 });
-    return parsed.success ? parsed.data : { version: 1, cookies: [], origins: [] };
+    return parsed.success ? parsed.data : blank();
   };
   const save = (context: ToolContext, value: State) => context.credentials.put(value as unknown as Json);
+  /** One queue per connection: ordered commands against one daemon, consistent persistence of the sealed state. */
+  const queued = <T>(id: string, work: () => Promise<T>): Promise<T> => {
+    const result = (queues.get(id) ?? Promise.resolve()).then(work);
+    queues.set(id, result.catch(() => undefined));
+    return result;
+  };
+  /** A guard starts with the always-allowed sites only; each command then sets the sites of its own task. */
+  const guarded = async (current: BrowserRunAccount, sessionId: string, saved: State, signal: AbortSignal) => {
+    const guard = await guards(current, sessionId, signal);
+    guard.restrict(permits(saved, undefined, Date.now()));
+    return guard;
+  };
 
   /** Reuses the connection's daemon, or reconnects to the saved remote browser, or starts one with the saved storage. */
   const attach = async (context: ToolContext, saved: State, current: BrowserRunAccount): Promise<Attached> => {
@@ -131,7 +185,7 @@ export function browserConnector(options: BrowserOptions = {}): Connector {
     const live = sessions.get(id);
     if (live && live.sessionId === saved.sessionId && live.token === token && !live.verify && Date.now() - live.usedAt < keepAliveMs - 60_000) {
       // No command runs unguarded: a dropped CDP connection is restored first.
-      if (!live.guard || live.guard.closed) live.guard = await guards(current, live.sessionId, context.signal);
+      if (!live.guard || live.guard.closed) live.guard = await guarded(current, live.sessionId, saved, context.signal);
       return live;
     }
     if (live) { sessions.delete(id); await stop(live, context.signal); }
@@ -152,22 +206,33 @@ export function browserConnector(options: BrowserOptions = {}): Connector {
     // The daemon serves a local screencast by default; this service never uses it.
     const started = await cli(run, ["stream", "disable"]);
     if (started.code !== 0) { await stop(session, context.signal); throw new ConnectorError("browser_run_unavailable", { output: text(started).slice(0, 2000) }); }
-    try { session.guard = await guards(current, session.sessionId, context.signal); }
+    try { session.guard = await guarded(current, session.sessionId, saved, context.signal); }
     catch (error) { await stop(session, context.signal); throw error; }
     sessions.set(id, session);
     if (session.sessionId !== saved.sessionId) await save(context, { ...(await load(context)), sessionId: session.sessionId });
     return session;
   };
 
-  /** One queue per connection: ordered commands against one daemon, consistent storage persistence. */
-  const locked = <T>(context: ToolContext, work: (run: Run) => Promise<T>, inspect = false): Promise<T> => {
+  /**
+   * Runs work against the connection's browser. `sites` names the task whose site permissions hold from this call
+   * on; without it the permissions of the call before stay in force (handoff calls, which act on no page).
+   */
+  const locked = <T>(context: ToolContext, work: (run: Run) => Promise<T>, inspect = false, sites?: { task?: string | undefined }): Promise<T> => {
     const id = context.connection.id;
-    const result = (queues.get(id) ?? Promise.resolve()).then(async () => {
+    return queued(id, async () => {
       context.signal.throwIfAborted();
       const current = account(context.connection);
-      const saved = await load(context);
+      let saved = await load(context);
       const session = await attach(context, saved, current);
-      const run: Run = { account: current, session, saved, context };
+      const now = Date.now(), permit = sites && permits(saved, sites.task, now);
+      if (sites) session.guard?.restrict(permit);
+      // A task's permissions last while it keeps working; lapsed ones are dropped.
+      if (permit && saved.grants.some((grant) => Date.parse(grant.expiresAt) <= now || (grant.task === sites?.task && Date.parse(grant.expiresAt) < now + TASK_GRANT_MS - 3_600_000))) {
+        saved = { ...saved, grants: saved.grants.filter((grant) => Date.parse(grant.expiresAt) > now)
+          .map((grant) => grant.task === sites?.task ? { ...grant, expiresAt: new Date(now + TASK_GRANT_MS).toISOString() } : grant) };
+        await save(context, { ...(await load(context)), grants: saved.grants });
+      }
+      const run: Run = { account: current, session, saved, context, ...(permit ? { permit } : {}) };
       try {
         return await work(run);
       } finally {
@@ -184,8 +249,6 @@ export function browserConnector(options: BrowserOptions = {}): Connector {
         if (!inspect && sessions.get(id) === session) await persist(run).catch(() => { session.verify = true; });
       }
     });
-    queues.set(id, result.catch(() => undefined));
-    return result;
   };
   const persist = async (run: Run) => {
     const file = join(run.session.home, `state-${randomUUID()}.json`);
@@ -214,14 +277,49 @@ export function browserConnector(options: BrowserOptions = {}): Connector {
         await stop(run.session, run.context.signal);
         return { exitCode: 0, output: "Disconnected from the browser and saved its sign-ins. The next command reconnects." };
       }
+      await admit(run, command);
       if (command.kind === "download") return await download(run, command, call);
       if (command.kind === "upload") return await upload(run, command, call, input!);
       const result = await cli(run, argv);
-      const output = text(result, call);
+      const blocked = blockedNote(run), output = [text(result, call), ...(blocked ? [blocked.note] : [])].filter(Boolean).join("\n");
       if (result.code !== 0) { run.session.verify = true; throw new ConnectorError("agent_browser_failed", { exitCode: result.code, output }); }
       const files = collect(call, command.outputs.map((o) => o.name));
-      return { exitCode: 0, output, ...(files.length ? { files } : {}) };
+      return { exitCode: 0, output, ...(files.length ? { files } : {}), ...(blocked ? { blockedSites: blocked.sites } : {}) };
+    } catch (error) {
+      // A download or upload that failed because its navigation was refused says so.
+      const blocked = blockedNote(run);
+      if (!blocked || !(error instanceof ConnectorError)) throw error;
+      const detail = error.detail && typeof error.detail === "object" && !Array.isArray(error.detail) ? error.detail : {};
+      throw new ConnectorError(error.code, { ...detail, blocked: blocked.note, blockedSites: blocked.sites });
     } finally { rmSync(call, { recursive: true, force: true }); }
+  };
+  /**
+   * While new sites ask first: the site a command opens, or else the page it acts on, must be permitted for its task.
+   * The refusal names the site and the whole command for the owner's card.
+   */
+  const admit = async (run: Run, command: Command) => {
+    if (!run.permit) return;
+    let url = command.target;
+    if (!url && !LEAVES.has(command.name.split(" ")[0]!)) { const current = await currentUrl(run); if (/^https?:/i.test(current)) url = current; }
+    if (!url || run.permit(url)) return;
+    const parsed = URL.parse(url), line = shellLine(command.args, Infinity);
+    let site: string;
+    try { site = siteOf(url); } catch { site = parsed?.host ?? ""; }
+    if (line.length > MAX_SHOWN_COMMAND) throw new ConnectorError("browser_site_command_too_long", { site, limit: MAX_SHOWN_COMMAND,
+      instruction: "The owner must be shown the whole command before allowing this site. Use a shorter command, for example open the site's front page first." });
+    throw new ConnectorError("browser_site_permission_required", { site, command: line,
+      instruction: "The owner has not allowed this site. They are asked where that is possible; do not look for another way to reach it." });
+  };
+  /** What the guard refused during this command, for the Agent to ask for the site explicitly. */
+  const blockedNote = (run: Run) => {
+    const urls = run.session.guard?.takeBlocked() ?? [];
+    if (!urls.length) return undefined;
+    const sites = [...new Set(urls.map((url) => { try { return siteOf(url); } catch { return URL.parse(url)?.host ?? "unknown"; } }))];
+    const note = [...new Set(urls.map((url) => {
+      const parsed = URL.parse(url), shown = url.length <= 500 ? url : `${parsed?.origin ?? ""}/`;
+      return `Navigation to ${parsed?.host ?? "another site"} was blocked: it needs the owner's permission. Run \`${shellLine(["open", shown], Infinity)}\` to request it.`;
+    }))].join("\n");
+    return { sites, note };
   };
   const currentUrl = async (run: Run) => {
     const result = await cli(run, ["get", "url"]);
@@ -260,8 +358,8 @@ export function browserConnector(options: BrowserOptions = {}): Connector {
     return { exitCode: 0, output: `✓ Uploaded ${input.files.map((f) => f.name).join(", ")} to ${current.origin}`, url: current.href };
   };
 
-  const read: ToolDefinition<{ args: string[] }> = {
-    name: "agent_browser_read", risk: "read", input: z.object({ args }).strict(),
+  const read: ToolDefinition<{ args: string[]; task?: string }> = {
+    name: "agent_browser_read", risk: "read", input: z.object({ args, task: task.optional() }).strict(),
     operations: ["browser.navigate", "browser.read", "browser.interact", "browser.download"],
     operation: (_context, value) => commandOperation(parseCommand(value.args)),
     description: "Run an official agent-browser command (vercel-labs/agent-browser) in the owner's remote browser. Pass argument strings without " +
@@ -279,21 +377,23 @@ export function browserConnector(options: BrowserOptions = {}): Connector {
         const result = await runner(command.args, { cwd: join(home, "work"), env: environment(home), timeout: 30_000, signal: context.signal });
         return { exitCode: result.code, output: text(result) };
       }
-      return locked(context, (run) => execute(run, command), command.inspect);
+      return locked(context, (run) => execute(run, command), command.inspect, { task: value.task });
     },
   };
   const write: ToolDefinition<WriteInput> = {
     name: "agent_browser_write", risk: "write", input: writeInput, targets: ["site"], operations: ["browser.upload"],
     description: "Send workspace files to a site with agent-browser's upload command, e.g. args [\"upload\",\"@e3\",\"cv.pdf\"]. The owner approves " +
       "the exact files and site first. site must equal the current page's origin; each file named in args is supplied in files.",
-    summarize: (value) => `上传 ${value.files.map((f) => `${f.name}（${Math.ceil(f.contentBase64.length * 0.75 / 1024)} KB）`).join("、")}到 ${new URL(value.site).host}\n${shellLine(value.args)}`,
+    // The site comes first and every file name last on its own line, quoted, so a crafted name cannot pose as the destination.
+    summarize: (value) => [`上传到 ${new URL(value.site).host}`, shellLine(value.args),
+      ...value.files.map((f) => `文件（${Math.ceil(f.contentBase64.length * 0.75 / 1024)} KB）：${shownName(f.name)}`)].join("\n"),
     async execute(context, value) {
       const command = parseCommand(value.args);
       if (command.kind !== "upload") throw new ConnectorError("agent_browser_write_supports_upload_only");
       const names = value.files.map((f) => f.name);
       if (names.length !== command.files!.length || command.files!.some((name, index) => name !== names[index]))
         throw new ConnectorError("agent_browser_upload_files_mismatch", { expected: command.files! });
-      return locked(context, (run) => execute(run, command, value));
+      return locked(context, (run) => execute(run, command, value), false, { task: value.task });
     },
   };
 
@@ -311,10 +411,11 @@ export function browserConnector(options: BrowserOptions = {}): Connector {
         const page = URL.parse(await currentUrl(run)), pageHost = page && /^https?:$/.test(page.protocol) ? page.host : undefined;
         const liveViewUrl = await api.liveView(run.account, run.session.sessionId, targetId, Math.min(value.timeoutSeconds * 1000 + 60_000, 3_600_000), context.signal);
         // Cloudflare's structured handoff: the banner with the instructions and Done/Failed in the live view.
-        const handoffId = await guard.handoff(targetId, value.instructions, value.timeoutSeconds * 1000);
+        const note = handoffNote(value.instructions) || LINK_REMOVED;
+        const handoffId = await guard.handoff(targetId, note, value.timeoutSeconds * 1000);
         const handoff = { handoffId, targetId, expiresAt: new Date(Date.now() + value.timeoutSeconds * 1000).toISOString() };
         await save(context, { ...(await load(context)), handoff });
-        return { handoffId, liveViewUrl, expiresAt: handoff.expiresAt, instructions: value.instructions, ...(pageHost ? { pageHost } : {}) };
+        return { handoffId, liveViewUrl, expiresAt: handoff.expiresAt, instructions: note, ...(pageHost ? { pageHost } : {}) };
       }) },
     { name: "handoff_status", risk: "read", operations: ["browser.interact"],
       description: "Check a handoff: done becomes true when the owner presses Done or Failed (success says which, when known), the time runs out or the tab is gone.",
@@ -365,13 +466,41 @@ export function browserConnector(options: BrowserOptions = {}): Connector {
       return { status: "connected", sites } as Json;
     },
     async connect({ connection }) { account(connection); return { status: "connected" }; },
-    async disconnect({ connection, credentials, signal }) {
-      const session = sessions.get(connection.id); sessions.delete(connection.id);
-      if (session) await stop(session, signal);
-      await credentials.put({ version: 1, cookies: [], origins: [] });
+    // Sign-ins and task permissions end with the connection; the owner's setting and always-allowed sites are kept.
+    disconnect: (context) => queued(context.connection.id, async () => {
+      const id = context.connection.id, session = sessions.get(id); sessions.delete(id);
+      if (session) await stop(session, context.signal);
+      const { webAccess, sites } = await load(context);
+      await save(context, { ...blank(), webAccess, sites });
       return { status: "disconnected" };
-    },
+    }),
+  }, access: {
+    async get(context) { return accessView(await load(context)); },
+    set: (context, input) => queued(context.connection.id, async () => {
+      const parsed = accessInput.safeParse(input);
+      if (!parsed.success) throw new ConnectorError("browser_access_input_invalid");
+      const key = (value: string) => { try { return siteOf(/^https?:\/\//i.test(value) ? value : `https://${value}`); } catch { throw new ConnectorError("browser_site_invalid"); } };
+      const saved = await load(context), { webAccess, allow, remove } = parsed.data, now = Date.now();
+      let sites = saved.sites, grants = saved.grants.filter((grant) => Date.parse(grant.expiresAt) > now);
+      if (allow?.task) {
+        const site = key(allow.site);
+        grants = [...grants.filter((grant) => grant.task !== allow.task || grant.site !== site),
+          { task: allow.task, site, expiresAt: new Date(now + TASK_GRANT_MS).toISOString() }].slice(-MAX_TASK_GRANTS);
+      } else if (allow) {
+        sites = [...new Set([...sites, key(allow.site)])];
+        if (sites.length > MAX_SITES) throw new ConnectorError("browser_sites_limit_reached");
+      }
+      // A removed site stops being reachable by the tasks it was allowed for as well.
+      if (remove) { const site = key(remove.site); sites = sites.filter((item) => item !== site); grants = grants.filter((grant) => grant.site !== site); }
+      const next: State = { ...saved, webAccess: webAccess ?? saved.webAccess, sites, grants };
+      await save(context, next);
+      return accessView(next);
+    }),
   } };
+}
+
+function accessView(saved: State): Json {
+  return { webAccess: saved.webAccess, sites: [...saved.sites].sort() };
 }
 
 /** stdout and stderr for the caller, with this host's per-call directory removed from file paths. */
