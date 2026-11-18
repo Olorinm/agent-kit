@@ -1609,6 +1609,9 @@ Verification, using `jose` (no hand-written JWT code):
      `sub` that differs gives 403 `owner_subject_mismatch`.
    - Otherwise a `common_name` (an Access service token's client id) is looked up in `serviceTokens`. No
      entry gives 403 `service_token_not_configured`.
+     A service token is an operator unless its entry is `{owner, access: "owner"}`: it reads as the owner
+     (safe methods without a protocol upgrade) and may send a web chat message, open a DM chat, mark read
+     and request a socket ticket. Any other request gives 403 `owner_sign_in_required`.
    - With neither: 401 `edge_identity_invalid`.
 4. Cache the principal by `digest(token)` until `min(exp, now + 60 s)`.
 5. On first sight per cache entry:
