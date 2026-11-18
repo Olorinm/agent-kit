@@ -227,7 +227,15 @@ only while paused. Neither endpoint is available without the operator credential
 `backup/src/index.ts` is the separate server-backup ingress and monitor. Each server
 has an upload-only credential scoped to its source and current dated prefix. It cannot
 list, read, overwrite or delete R2 objects. Uploads have per-source daily byte/object
-limits; a manifest is committed only after every part is present. Recovery uses a
+limits, which only stored objects count against; a manifest is committed only after every part is present, the
+first part starts with an age header for exactly one recipient that is not a passphrase, and, when the
+`BACKUP_RECIPIENTS` variable (a JSON array of age public keys) is set, the manifest's `recipient` is one of them
+(`recipient_refused`, `not_an_age_archive`). These checks catch a wrong or missing recipient in a server's backup
+configuration. They do not hold against whoever has an upload credential: an age header does not reveal its
+recipient's public key and the manifest's `recipient` is the uploader's own statement, so such a holder can commit an
+archive nobody can decrypt and keep the status fresh. A second secret for the uploader would sit on the same machine
+as the credential and add nothing. Only a restore with the recovery identity shows that a backup is usable; do one
+on a schedule. The ingress has its own hostname (`routes`); `workers_dev` and `preview_urls` stay off. Recovery uses a
 separate operator credential that returns ciphertext only. Retention policy belongs
 to the private R2 bucket: daily objects are locked for 30 days and expire after 31;
 weekly objects are locked for 84 days and expire after 85. Cloudflare administrators
