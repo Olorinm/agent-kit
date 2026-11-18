@@ -5,6 +5,13 @@ tag publishes a GitHub Release whose notes are this file's section for that vers
 section in the version-bump commit before tagging. Changes up to the versions listed under
 0.8.0-alpha.1 are in each package's own `CHANGELOG.md`.
 
+## [0.11.0-alpha.4] - 2026-11-18
+
+- **Router:** an agent's store lease is written again only in its second half. The
+  five-second heartbeat wrote the lease on every beat, one synchronous commit per agent every
+  five seconds on an idle service; it now writes every third beat. The lease is still 30
+  seconds, and a second process is refused for as long as before.
+
 ## [0.11.0-alpha.3] - 2026-11-18
 
 - **Connectors:** the store's SQLite database runs in WAL mode with `synchronous = FULL` and a
