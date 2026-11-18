@@ -402,6 +402,7 @@ test("site permissions: by default sites open directly; with ask a site runs onl
   assert.deepEqual([asked.status, asked.error, asked.detail.site, asked.detail.command],
     ["failed", "browser_site_permission_required", "shop.example.net", 'agent-browser open "https://shop.example.net/cart?id=7"']);
   assert.ok(!s.calls.slice(before).some((c) => c.args[0] === "open"), "the command did not run");
+  assert.equal(s.calls.length, before, "a site that must be asked for is refused before the browser is reached");
   // The page the browser already shows belongs to no task yet either.
   const page = await abFor(s.service, "task-1", "snapshot", "-i");
   assert.deepEqual([page.error, page.detail.site, page.detail.command], ["browser_site_permission_required", "example.com", "agent-browser snapshot -i"]);

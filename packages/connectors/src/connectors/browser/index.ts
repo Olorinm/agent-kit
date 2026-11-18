@@ -301,13 +301,15 @@ export function browserConnector(options: BrowserOptions = {}): Connector {
     if (!run.permit) return;
     let url = command.target;
     if (!url && !LEAVES.has(command.name.split(" ")[0]!)) { const current = await currentUrl(run); if (/^https?:/i.test(current)) url = current; }
-    if (!url || run.permit(url)) return;
+    if (url && !run.permit(url)) throw siteRefusal(url, command);
+  };
+  const siteRefusal = (url: string, command: Command) => {
     const parsed = URL.parse(url), line = shellLine(command.args, Infinity);
     let site: string;
     try { site = siteOf(url); } catch { site = parsed?.host ?? ""; }
-    if (line.length > MAX_SHOWN_COMMAND) throw new ConnectorError("browser_site_command_too_long", { site, limit: MAX_SHOWN_COMMAND,
+    if (line.length > MAX_SHOWN_COMMAND) return new ConnectorError("browser_site_command_too_long", { site, limit: MAX_SHOWN_COMMAND,
       instruction: "The owner must be shown the whole command before allowing this site. Use a shorter command, for example open the site's front page first." });
-    throw new ConnectorError("browser_site_permission_required", { site, command: line,
+    return new ConnectorError("browser_site_permission_required", { site, command: line,
       instruction: "The owner has not allowed this site. They are asked where that is possible; do not look for another way to reach it." });
   };
   /** What the guard refused during this command, for the Agent to ask for the site explicitly. */
@@ -361,7 +363,12 @@ export function browserConnector(options: BrowserOptions = {}): Connector {
   const read: ToolDefinition<{ args: string[]; task?: string }> = {
     name: "agent_browser_read", risk: "read", input: z.object({ args, task: task.optional() }).strict(),
     operations: ["browser.navigate", "browser.read", "browser.interact", "browser.download"],
-    operation: (_context, value) => commandOperation(parseCommand(value.args)),
+    // A site that needs the owner's permission is asked for before any approval of the operation itself.
+    async operation(context, value) {
+      const command = parseCommand(value.args), permit = command.target ? permits(await load(context), value.task, Date.now()) : undefined;
+      if (permit && !permit(command.target!)) throw siteRefusal(command.target!, command);
+      return commandOperation(command);
+    },
     description: "Run an official agent-browser command (vercel-labs/agent-browser) in the owner's remote browser. Pass argument strings without " +
       "the executable or shell syntax, e.g. [\"open\",\"https://example.com\"], [\"snapshot\",\"-i\"], [\"click\",\"@e2\"], [\"fill\",\"@e3\",\"text\"]. " +
       "Navigation, reading, clicks and typing run directly. screenshot, pdf and download return files. Commands that read or change cookies, " +
