@@ -4,3 +4,13 @@ export function uploadPath(path, source, now=Date.now()) {
   return path.slice('/v1/upload/'.length);
 }
 export function sizeAllowed(size) {return Number.isSafeInteger(size)&&size>0&&size<=32*1024*1024;}
+/** The sources that upload here: the names of the configured upload credentials. */
+export function uploadSources(tokens) {
+  const parsed=tokens?JSON.parse(tokens):{};
+  return Object.keys(parsed).filter(source=>typeof parsed[source]==='string'&&parsed[source]);
+}
+/** The hourly check: the product answers, and every source committed a backup within 36 hours. No source is a failure. */
+export function securityCheck(healthy, sources, now=Date.now()) {
+  const backups=sources.map(s=>({source:s.source,fresh:!!s.lastSuccess&&now-s.lastSuccess<36*3600000}));
+  return {ok:healthy&&backups.length>0&&backups.every(s=>s.fresh),healthy,backups};
+}
