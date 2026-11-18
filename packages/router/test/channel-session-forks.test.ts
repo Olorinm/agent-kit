@@ -30,7 +30,7 @@ function setup() {
   const worker = new HostWorker("agent", "worker", store, work, host, "codex", "", () => {}, (id, text) => core.saveResult(id, text), undefined, core);
   const sessions = new WorkSessions("agent", "owner", "codex", "worker", store, work, host, core);
   worker.prepareSession = (id, task) => sessions.prepareChannelSession(id, task);
-  core.register({ id: "chat", ownerAddresses: ["owner"] }, { kind: "fixture", retrySafe: true, groupPolicy: () => "open",
+  core.register({ id: "chat", ownerAddresses: ["owner"], peerAddresses: ["member"], groupIds: ["group"] }, { kind: "fixture", retrySafe: true,
     start: async () => {}, stop: async () => {}, send: async () => ({ externalId: "sent" }) });
   const receive = (id: string, text: string, topic?: string, extra: Partial<ChannelMessage> = {}) => core.receive("chat", {
     externalId: id, sender: "member", scope: "group", groupId: "group", threadId: topic ? `group:${topic}` : "group",

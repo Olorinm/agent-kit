@@ -37,14 +37,14 @@ class Weixin extends WeixinChannel {
 const route: ReplyRoute = { connectionId: "channel", target: "chat", messageId: "7", data: {} };
 
 describe("official channel contracts", () => {
-  it.each([{ groupIds: [] }, { groupIds: ["previously-enabled-group"] }])("accepts Feishu group mentions from any member with legacy groupIds=$groupIds", async ({ groupIds }) => {
+  it("admits Feishu group mentions from the owner anywhere and from listed senders in listed groups only", async () => {
     const store = new DurableStore(":memory:", "agent"), work = new CliWork(store, () => "allow");
     const core = new CommunicationCore("agent", store, work);
     const channel = new FeishuChannel({ appId: "fixture", appSecret: "fixture" });
     vi.spyOn(channel.channel.rawClient, "request").mockResolvedValue({ code: 0, bot: { open_id: "bot", app_name: "Test" } });
     vi.spyOn(channel.channel as unknown as { connectWebSocket(timeout: number): Promise<void> }, "connectWebSocket").mockResolvedValue();
     const send = vi.spyOn(channel.channel, "send").mockResolvedValue({ messageId: "reply" });
-    core.register({ id: "feishu", ownerAddresses: ["owner"], peerAddresses: [], groupIds }, channel);
+    core.register({ id: "feishu", ownerAddresses: ["owner"], peerAddresses: ["listed-member"], groupIds: ["listed-group"] }, channel);
     try {
       await core.start();
       const receive = async (id: string, sender: string, chat: string, chatType = "group", mention?: string) => {
@@ -55,22 +55,26 @@ describe("official channel contracts", () => {
             ...(mention ? { mentions: [{ key: "@_user_1", id: { open_id: mention }, name: "Test" }] } : {}) },
         } }, { needCheck: false });
       };
-      await receive("no-mention", "new-member", "new-group");
-      await receive("other-mention", "new-member", "new-group", "group", "someone-else");
+      await receive("no-mention", "listed-member", "listed-group");
+      await receive("other-mention", "listed-member", "listed-group", "group", "someone-else");
       expect(core.status().inbox).toHaveLength(0);
-      await receive("member-mention", "new-member", "new-group", "group", "bot");
-      await receive("owner-mention", "owner", "new-group", "group", "bot");
-      await receive("another-group", "new-member", "another-group", "group", "bot");
+      await receive("member-mention", "listed-member", "listed-group", "group", "bot");
+      await receive("owner-mention", "owner", "listed-group", "group", "bot");
+      await receive("stranger-mention", "stranger", "listed-group", "group", "bot");
+      await receive("member-elsewhere", "listed-member", "other-group", "group", "bot");
+      await receive("owner-elsewhere", "owner", "other-group", "group", "bot");
       await receive("private-owner", "owner", "private-chat", "p2p");
-      await receive("private-member", "new-member", "private-member-chat", "p2p");
-      const [member, owner, otherGroup, privateOwner, privateMember] = core.status().inbox;
-      expect([member, owner, otherGroup, privateOwner].every((row) => row?.state === "received")).toBe(true);
-      expect(privateMember?.state).toBe("ignored");
+      await receive("private-stranger", "stranger", "private-stranger-chat", "p2p");
+      const [member, owner, stranger, memberElsewhere, ownerElsewhere, privateOwner, privateStranger] = core.status().inbox;
+      expect([member, owner, ownerElsewhere, privateOwner].every((row) => row?.state === "received")).toBe(true);
+      // A refused message is claimed (never redelivered as new) and nothing else: no session, transcript, turn or reply.
+      for (const row of [stranger, memberElsewhere, privateStranger]) expect(row).toMatchObject({ state: "ignored", reason: "sender_not_allowed", taskId: null });
+      expect(store.db.prepare("select count(*) as n from ledger_sessions").get()).toEqual({ n: 3 });
       expect(member!.conversationId).toBe(owner!.conversationId);
-      expect(new Set([member!.conversationId, otherGroup!.conversationId, privateOwner!.conversationId]).size).toBe(3);
+      expect(new Set([member!.conversationId, ownerElsewhere!.conversationId, privateOwner!.conversationId]).size).toBe(3);
 
       // Document comments are separate shared threads, not IM groups.
-      expect(core.receive("feishu", { externalId: "comment", sender: "new-member", threadId: "comment:doc:one",
+      expect(core.receive("feishu", { externalId: "comment", sender: "listed-member", threadId: "comment:doc:one",
         scope: "group", groupId: "document:doc", text: "comment", reply: { target: "doc", messageId: "one", data: { commentId: "one", fileType: "docx" } } }).state).toBe("ignored");
       await core.dispatch();
       expect(work.list()).toHaveLength(4);
@@ -78,7 +82,8 @@ describe("official channel contracts", () => {
       expect(core.isOwnerTask(member!.conversationId, task.id)).toBe(false);
       work.update(task.claimId!, "reply", "group reply");
       await core.dispatch(); await core.flush();
-      expect(send).toHaveBeenCalledWith("new-group", { text: "group reply" }, { replyTo: "member-mention", replyInThread: false });
+      expect(send).toHaveBeenCalledTimes(1);
+      expect(send).toHaveBeenCalledWith("listed-group", { text: "group reply" }, { replyTo: "member-mention", replyInThread: false });
       expect(core.status().outbox.every(row => row.state === "accepted")).toBe(true);
     } finally { await core.stop(); store.close(); }
   });

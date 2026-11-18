@@ -58,6 +58,8 @@ it.each([undefined, "topic"])("recovers an uncached Feishu callback without trea
   expect(c.messages[0]!.event!.type).toBe("card-action");
   expect(c.messages[0]!.groupId).toBe("group"); expect(c.messages[0]!.threadId).toBe(threadId ? "group:topic" : "group");
   expect(c.messages[0]!.reply.data.inThread).toBe(String(Boolean(threadId)));
+  // The click addresses the bot, so the owner's answer is admitted in a group that is not listed.
+  expect(c.messages[0]!.mentions).toEqual({ self: true, all: false });
 });
 it("Feishu document comments stay in a shared thread and reply to that document", async () => {
   const c = context(), handlers = new Map<string, any>();
