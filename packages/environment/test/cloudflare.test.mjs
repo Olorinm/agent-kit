@@ -90,6 +90,9 @@ test("model services reach the gateway only when the caller selects them", async
     await p.resume(id, undefined, { modelServices: [] });
     await manager.resume(ref);
     await manager.resume(ref, 900, { modelServices: ["openai", "anthropic"] });
+    await p.create({ template: "node24", modelAccounts: { openai: ["account-1"] } });
+    await manager.resume(ref, 900, { modelAccounts: { openai: ["account-1"] } });
+    await p.resume(id, 900, { modelAccounts: {} });
     const create = body => ["POST", "/v1/environments", body], resume = body => ["POST", `/v1/environments/${id}/resume`, body];
     assert.deepEqual(sent, [
       create('{"template":"node24","timeoutSeconds":600}'),
@@ -103,6 +106,9 @@ test("model services reach the gateway only when the caller selects them", async
       resume('{"timeoutSeconds":600,"modelServices":[]}'),
       resume('{"timeoutSeconds":600}'),
       resume('{"timeoutSeconds":900,"modelServices":["openai","anthropic"]}'),
+      create('{"template":"node24","modelAccounts":{"openai":["account-1"]}}'),
+      resume('{"timeoutSeconds":900,"modelAccounts":{"openai":["account-1"]}}'),
+      resume('{"timeoutSeconds":900,"modelAccounts":{}}'),
     ]);
   });
 });

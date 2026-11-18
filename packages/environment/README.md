@@ -66,6 +66,11 @@ for await (const chunk of provider.exec(ref.id, ['node', '--version'], {
 
 - `pause()` confirms that the request was accepted. Poll `info()` until paused before resuming. Lifetime expiry saves a filesystem snapshot and stops compute; process memory is not resumed.
 - Resume reuses an existing ID; a missing environment is never silently replaced.
+- `modelAccounts` on `create()`, or as `resume(id, seconds, { modelAccounts })`, holds the environment to its own
+  account at a model service, for example `{ openai: ['<ChatGPT account id>'] }`: the gateway then refuses a request
+  that carries another account's credential, so the environment cannot hand data to someone else's account at the same
+  provider. Omit it to keep what is stored; `{}` removes it. Like the service list, it applies from the next start.
+  See the [gateway notes](cloudflare/README.md#managed-secrets-network-restrictions-and-independent-backups).
 - `modelServices` on `create()`, or as `resume(id, seconds, { modelServices })`, selects which reviewed model endpoints the environment may reach, for example `['openai', 'anthropic']`. Omit it for the gateway default (`openai`); a resume without it keeps the stored list. A running environment keeps its list until its next start. The rule sets live in the [gateway source](cloudflare/README.md#managed-secrets-network-restrictions-and-independent-backups), and the guest cannot change the selection.
 - Network failure is never interpreted as “missing” or successful command completion. A command without an observed exit marks execution uncertain; reconcile before pausing or retrying.
 - Serialize lifecycle changes and work per environment in your scheduler. Persist refs in your database, check ownership before passing them here, and retain an operation ID in metadata to reconcile creation after a lost response. Metadata filters help discovery; they are not an authorization boundary.
