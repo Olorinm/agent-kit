@@ -208,14 +208,17 @@ limits; a manifest is committed only after every part is present. Recovery uses 
 separate operator credential that returns ciphertext only. Retention policy belongs
 to the private R2 bucket: daily objects are locked for 30 days and expire after 31;
 weekly objects are locked for 84 days and expire after 85. Cloudflare administrators
-can change bucket rules, so retain an independently encrypted copy outside Cloudflare.
+can change bucket rules; an operator who needs protection from that keeps a copy of the
+ciphertext elsewhere, read through the recovery credential.
 
-`backup/scripts/server-backup.py` performs consistent SQLite backups and a PostgreSQL
-logical dump, encrypts the archive with the public recipient, uploads checksum-verified
-parts and records the committed manifest. Keep the recovery identity in an independent
-password manager/offline location. A successful upload is not a restore test: retrieve
-parts, verify their hashes, decrypt locally, run SQLite `quick_check`, and restore the
-PostgreSQL logical dump in a disposable database before relying on the backup.
+`backup/scripts/server-backup.py CONFIG.json` archives the product's state: it copies
+SQLite databases with the backup API so they are consistent while the product runs,
+encrypts the archive to the public recipient, uploads checksum-verified parts and then
+the manifest, and leaves nothing on the machine. Its header describes the configuration
+file. It needs Python 3 and `age`. Keep the recovery identity in an independent password
+manager/offline location. A successful upload is not a restore test: retrieve the parts,
+verify their hashes, decrypt locally and run SQLite `quick_check` before relying on the
+backup.
 
 The monitor runs hourly. It checks the product's liveness endpoint and that every
 source with an upload credential in `UPLOAD_TOKENS` committed a backup within 36 hours.
@@ -227,14 +230,6 @@ it and hides a later failure of another source. `GET /v1/status` reports the sam
 Configure a Cloudflare email alert on the three service Workers' failures and safe error
 logs, plus budget notifications. Notification delivery and retention settings must be
 verified in the account console: let the check fail once and confirm the message arrives.
-`backup/scripts/agent-backup-mirror.py` keeps two checksum-verified encrypted Agent
-exports outside Cloudflare. Its root-only `/etc/mau-agent-backup-mirror.json` contains
-the `gateway` and `backupUrl` HTTPS endpoints, an operator gateway credential and the ciphertext recovery API credential, **not**
-the age recovery private key. Run it daily after the Cloudflare export cron (the
-production timer is 04:15 Asia/Shanghai with up to 10 minutes jitter). It refuses
-exports older than 36 hours. Inspect the systemd service result separately: the
-Cloudflare log alert does not currently monitor this mirror's local service status.
-Do not make a mirror failure prevent the primary server backup from running.
 
 Native Codex OAuth remains owner-scoped in the Agent's private filesystem. This design
 moves business/Feishu tool credentials into the connector, not native model sign-in
