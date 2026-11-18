@@ -279,8 +279,12 @@ test("close saves the sign-ins and disconnects; a lapsed remote browser is repla
 
 test("handoff uses Cloudflare's structured handoff on the current tab, reports Done, and is revoked by replacing the tab", async (t) => {
   const s = setup(); t.after(s.cleanup);
+  const blank = await call(s.service, "handoff_start", { instructions: "Please log in", timeoutSeconds: 120 });
+  assert.ok(!("pageHost" in blank.result), "a page that is not a site has no host");
+  s.browser.url = "https://accounts.example.test:8443/login?next=%2F";
   const started = await call(s.service, "handoff_start", { instructions: "Please log in", timeoutSeconds: 120 });
   assert.equal(started.status, "completed");
+  assert.equal(started.result.pageHost, "accounts.example.test:8443", "the owner is told which site the tab shows");
   assert.equal(started.result.handoffId, "cf-handoff-1", "the id is Cloudflare's handoff id");
   assert.equal(started.result.instructions, "Please log in");
   assert.match(started.result.liveViewUrl, /^https:\/\/live\.browser\.run\/.*TARGET1/);

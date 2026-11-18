@@ -10,7 +10,7 @@ import type { GoogleProduct } from "./account.js";
 /**
  * The official Google Workspace CLI (`gws`, googleworkspace/cli, Apache-2.0) as a connector
  * backend. It builds its commands from Google's Discovery documents, so a raw method's
- * HTTP verb and OAuth scopes classify it: GET reads, anything else writes. Helper commands
+ * HTTP verb and OAuth scopes classify it: GET reads, anything else writes, `--dry-run` or not. Helper commands
  * (`+triage`, `+send`, …) are mapped to the method they call. The access token reaches the
  * process through GOOGLE_WORKSPACE_CLI_TOKEN only; it is never written or shown to the Agent.
  */
@@ -28,8 +28,11 @@ const helpers: Record<string, Record<string, string>> = {
   sheets: { "+read": "spreadsheets.values.get", "+append": "spreadsheets.values.append" },
   docs: { "+write": "documents.batchUpdate" },
 };
-// Local files, long-lived streams and response screening are not available through the connector.
-const refusedFlags = new Set(["--upload", "-a", "--attach", "-o", "--output", "--sanitize", "--upload-content-type"]);
+// Local files, long-lived streams and response screening are not available through the connector. gws removes
+// every `--api-version` and the argument after it before it parses the rest, so the command it runs would not be
+// the one classified here.
+const refusedFlags = new Set(["--upload", "-a", "--attach", "-o", "--output", "--sanitize", "--upload-content-type", "--api-version"]);
+const refusedShort = [...refusedFlags].filter((flag) => !flag.startsWith("--")).map((flag) => flag[1]!);
 const refusedHelpers = new Set(["+watch", "+upload"]);
 
 export const gwsInput = z.object({ args: z.array(z.string().max(100_000)).min(1).max(100) }).strict();
@@ -63,9 +66,11 @@ export async function classifyGws(args: string[], product: GoogleProduct, run: (
   for (const arg of args) {
     const flag = arg.split("=")[0]!;
     if (refusedFlags.has(flag)) throw new ConnectorError("gws_flag_not_allowed", { flag });
+    // A short flag takes its value attached (`-o/path`) and can follow other short flags (`-xo/path`).
+    const short = arg.startsWith("--") ? undefined : refusedShort.find((letter) => /^-[A-Za-z]+/.exec(arg)?.[0].includes(letter));
+    if (short) throw new ConnectorError("gws_flag_not_allowed", { flag: `-${short}` });
   }
   if (args.includes("--help") || args.includes("-h") || args.length === 1) return { kind: "guide" };
-  const dryRun = args.includes("--dry-run");
   let method: string;
   if (args[1]!.startsWith("+")) {
     if (refusedHelpers.has(args[1]!)) throw new ConnectorError("gws_command_not_allowed", { command: args[1]! });
@@ -82,8 +87,7 @@ export async function classifyGws(args: string[], product: GoogleProduct, run: (
   let parsed: { httpMethod?: string; scopes?: string[] };
   try { parsed = JSON.parse(schema.stdout); } catch { throw new ConnectorError("gws_method_unknown", { method: `${service}.${method}` }); }
   if (schema.code !== 0 || typeof parsed.httpMethod !== "string") throw new ConnectorError("gws_method_unknown", { method: `${service}.${method}` });
-  // A dry run only prints the request it would send.
-  return { kind: dryRun || parsed.httpMethod === "GET" ? "read" : "write", method: `${service}.${method}`, scopes: parsed.scopes ?? [] };
+  return { kind: parsed.httpMethod === "GET" ? "read" : "write", method: `${service}.${method}`, scopes: parsed.scopes ?? [] };
 }
 
 export function shellLine(args: string[]) {

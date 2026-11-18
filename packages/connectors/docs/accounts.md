@@ -192,8 +192,8 @@ These choices have not been compared with the hosted server, which requires Deve
 When the official `gws` release binary is configured (`gwsBinary` option or `AGENT_CONNECTORS_GWS_BINARY`), a Google
 connection also offers `gws_read` and `gws_write`. They take the CLI's argument list for the connection's product
 (`gmail …`, `schema gmail.…`). Each command is first classified without credentials: a raw method by its Discovery
-`httpMethod` (GET reads), a helper (`+triage`, `+send`, …) by the method it calls, `--dry-run`, `--help` and `schema`
-as reads. A method none of whose Discovery scopes was granted is refused with `google_scope_not_granted` before any
+`httpMethod` (GET reads), a helper (`+triage`, `+send`, …) by the method it calls, `--help` and `schema`
+as reads. `--dry-run` does not change the class: a dry run of a write is a write. `--api-version` is refused. A method none of whose Discovery scopes was granted is refused with `google_scope_not_granted` before any
 approval. Reads run immediately; `gws_read` refuses writes with `gws_command_requires_write_tool`, and `gws_write`
 waits for the owner, whose card shows the exact command. The access token reaches the process only as
 `GOOGLE_WORKSPACE_CLI_TOKEN`, with an empty configuration directory per call. Local files (`--upload`, `-a`, `-o`),

@@ -269,7 +269,7 @@ export class CommunicationCore {
     // An owner addressing this agent (or everyone) in a group starts work without a group allowlist.
     const addressed = source.scope === "group" && owner && Boolean(source.mentions?.self || source.mentions?.all);
     const allowed = source.scope === "direct" ? owner || Boolean(definition.peerAddresses?.includes(source.sender)) :
-      addressed || adapter.groupPolicy?.(source) === "open" ||
+      addressed ||
         Boolean(definition.groupIds?.includes(source.groupId ?? source.threadId)) && (owner || Boolean(definition.peerAddresses?.includes(source.sender)));
     const oversized = Buffer.byteLength(source.text) > 24_000;
     const conversationId = `c-${digest(key(this.agentId, source.scope === "direct" && owner ? "owner-main" :

@@ -60,8 +60,8 @@ Each connector declares an operation catalog per connection (`Connector.operatio
 `read`, `write` or `destructive` risk, upstream scopes and, where it exists, the narrowest scope to add. Connectors
 without a catalog get two operations, `read` and `write`, matching tool risk. Every tool names the operations it
 can perform; passthrough tools (gws, lark-cli, agent-browser) resolve the exact operation of each call before
-anything runs: the Discovery method for gws, the domain for lark-cli, the command for agent-browser. Help,
-schemas and dry runs are outside the policy.
+anything runs: the Discovery method for gws, the domain for lark-cli, the command for agent-browser. Help
+and schemas are outside the policy.
 
 The owner's settings are stored per connection in the service database (`policies`), only where they differ
 from the defaults (reads `allow`, everything else `ask`), and survive disconnect and reconnect; reset removes
@@ -281,7 +281,10 @@ from the approved `site`. Treat a browser connection as trusted with everything 
 store sign-ins for banking, payment or accounts where an unattended click is unacceptable.
 
 `handoff_start` returns a Live View URL of the current tab that grants control of the browser until it expires. It
-is meant for the owner only, so a composer must deliver it to the owner directly, not to the model. The owner ends it
+is meant for the owner only, so a composer must deliver it to the owner directly, not to the model. The result also
+carries `pageHost`, the host of the page the tab shows, and the Agent's `instructions` as written: a composer shows
+the host so the owner knows which site asks for the sign-in, treats the instructions as untrusted text, and never
+takes the link from them. The owner ends it
 with Done or Failed; `handoff_cancel` revokes it by closing that tab.
 
 agent-browser's npm package carries every platform's native binary (about 116 MB). A deployment image can

@@ -16,7 +16,7 @@ Mau runs the command for you with the owner's authorization; you never handle Go
 
 - `gws` in your shell forwards the command to Mau. Do not run `gws auth …`, look for tokens, or set
   `GOOGLE_*` variables — authentication is managed by Mau and those commands are refused.
-- **Reads run immediately**: GET methods, `+triage`, `+read`, `--dry-run`, `gws gmail --help`,
+- **Reads run immediately**: GET methods, `+triage`, `+read`, `gws gmail --help`,
   `gws schema gmail.<resource>.<method>`.
 - **Writes wait for the owner** unless they allowed them: sending, drafting, replying, forwarding,
   modifying labels, trashing. The owner sees the exact command on an approval card. The command blocks until they
@@ -71,7 +71,8 @@ gws schema gmail.users.messages.list
 ```
 
 Use the schema to build `--params` (URL/query parameters) and `--json` (request body). Global flags:
-`--format json|table|yaml|csv`, `--dry-run`, `--page-all` with `--page-limit N`.
+`--format json|table|yaml|csv`, `--page-all` with `--page-limit N`, `--dry-run` (a dry run of a write
+still waits for the owner). `--api-version` is refused.
 
 ## Rules
 

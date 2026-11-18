@@ -155,8 +155,11 @@ The owner can create a pairing code through the web API and send `/link <code>` 
 agent in a private chat on a new channel to link that account. Email is excluded unless the connection has
 `pairing: true` and the mail service marks the sender as verified.
 
-Feishu: once the bot is in a group, any member can talk to it by mentioning it; no group or sender has to be listed.
-`groupIds` and `peerAddresses` do not restrict Feishu group chats. A group or topic never shares the private main
+Feishu: in a group the bot answers only when it is mentioned. The owner can mention it in any group it has joined.
+Anyone else is admitted only when the group's chat id (`oc_…`) is in `groupIds` and the sender's open id (`ou_…`, as
+this app sees it) is in `peerAddresses`; a topic belongs to its group. A refused message gets no reply and no session:
+it is stored as `ignored` with reason `sender_not_allowed`, and the status below shows its `sender` and `threadId`
+(the chat id, followed by `:<topic id>` inside a topic). A group or topic never shares the private main
 session. An ordinary quoted reply (only `root_id` / `parent_id`) stays in the group's session. A message with a
 `thread_id` enters a topic, which is routed by that id. Before its first run the topic forks the group's native context
 through the Host and then continues on its own; the fork does not grant the tools of the private session. A topic

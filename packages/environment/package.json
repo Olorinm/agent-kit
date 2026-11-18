@@ -1,6 +1,6 @@
 {
   "name": "@olorinm/agent-environment",
-  "version": "0.11.0-alpha.4",
+  "version": "0.11.0-alpha.5",
   "description": "Cloud execution environments for agents, with a Cloudflare provider",
   "type": "module",
   "license": "MIT",

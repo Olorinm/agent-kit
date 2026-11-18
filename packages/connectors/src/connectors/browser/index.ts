@@ -307,12 +307,14 @@ export function browserConnector(options: BrowserOptions = {}): Connector {
         const guard = run.session.guard;
         if (!guard || guard.closed) throw new ConnectorError("browser_run_unavailable", { reason: "cdp_closed" });
         const targetId = await activeTarget(run);
+        // The site the owner is asked to act on, for the composer to show next to the link.
+        const page = URL.parse(await currentUrl(run)), pageHost = page && /^https?:$/.test(page.protocol) ? page.host : undefined;
         const liveViewUrl = await api.liveView(run.account, run.session.sessionId, targetId, Math.min(value.timeoutSeconds * 1000 + 60_000, 3_600_000), context.signal);
         // Cloudflare's structured handoff: the banner with the instructions and Done/Failed in the live view.
         const handoffId = await guard.handoff(targetId, value.instructions, value.timeoutSeconds * 1000);
         const handoff = { handoffId, targetId, expiresAt: new Date(Date.now() + value.timeoutSeconds * 1000).toISOString() };
         await save(context, { ...(await load(context)), handoff });
-        return { handoffId, liveViewUrl, expiresAt: handoff.expiresAt, instructions: value.instructions };
+        return { handoffId, liveViewUrl, expiresAt: handoff.expiresAt, instructions: value.instructions, ...(pageHost ? { pageHost } : {}) };
       }) },
     { name: "handoff_status", risk: "read", operations: ["browser.interact"],
       description: "Check a handoff: done becomes true when the owner presses Done or Failed (success says which, when known), the time runs out or the tab is gone.",

@@ -25,10 +25,6 @@ export class FeishuChannel implements ChannelAdapter {
       outbound: { textChunkLimit: 4000, retry: { maxAttempts: 1 } },
     });
   }
-  groupPolicy(message: ChannelMessage): "open" | "allowlist" {
-    // The SDK already requires @bot in IM groups. Document comments keep their own access list.
-    return message.reply.data.commentId ? "allowlist" : "open";
-  }
   async start(context: ChannelContext): Promise<void> {
     this.context = context;
     if (!context.checkpoint("activation")) context.checkpoint("activation", Date.now());
@@ -73,7 +69,7 @@ export class FeishuChannel implements ChannelAdapter {
       threadId: message.threadId ? `${message.chatId}:${message.threadId}` : message.chatId,
       ...(message.threadId && message.chatType === "group" ? { forkFromThreadId: message.chatId } : {}),
       scope: message.chatType === "p2p" ? "direct" : "group", text: message.content,
-      ...(message.chatType === "group" ? { groupId: message.chatId } : {}),
+      ...(message.chatType === "group" ? { groupId: message.chatId, mentions: { self: message.mentionedBot, all: message.mentionAll } } : {}),
       reply: { target: message.chatId, messageId: message.messageId, data: { inThread: String(Boolean(message.threadId)) } },
       attachments: message.resources.map((resource) => ({ id: resource.fileKey, name: resource.fileName ?? resource.type,
         kind: resource.type, mediaType: resource.type === "image" ? "image/*" : resource.type === "audio" ? "audio/ogg" : resource.type === "video" ? "video/mp4" : "application/octet-stream" })),
@@ -101,7 +97,9 @@ export class FeishuChannel implements ChannelAdapter {
   private async cardAction(event: CardActionEvent) {
     const value = event.action.value as { agentRouter?: string } | undefined;
     const source = await this.sourceFor(event.messageId, event.operator.openId, event.chatId);
+    // A click on the bot's own card addresses the bot, whatever the message the card answered said.
     this.context.receive({ ...source, externalId: `card:${digest(event)}`, sender: event.operator.openId, text: "", attachments: [],
+      ...(source.scope === "group" ? { mentions: { self: true, all: false } } : {}),
       ...(value?.agentRouter ? { action: { token: value.agentRouter } } : { event: { type: "card-action", data: { action: event.action } } }) });
   }
   async readAttachment(message: ChannelMessage, attachment: AttachmentReference) {
