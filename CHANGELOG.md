@@ -5,6 +5,18 @@ tag publishes a GitHub Release whose notes are this file's section for that vers
 section in the version-bump commit before tagging. Changes up to the versions listed under
 0.8.0-alpha.1 are in each package's own `CHANGELOG.md`.
 
+## [0.11.0-alpha.5] - 2026-11-19
+
+- **Router:** Feishu group chats follow the group allowlist. The owner can mention the bot in
+  any group; anyone else is admitted only when the group is in `groupIds` and the sender is in
+  `peerAddresses`. A refused message is stored as `ignored` and gets no reply or session. The
+  adapter hook for an open group policy is removed.
+- **Connectors:** `gws_read` / `gws_write` classify a command by its method's HTTP verb only;
+  `--dry-run` no longer makes a write a read. `--api-version` is refused, as are attached and
+  combined short forms of the refused file flags (`-o/path`, `-a/path`).
+- **Connectors:** the browser connection's `handoff_start` result includes `pageHost`, the
+  host of the page handed over.
+
 ## [0.11.0-alpha.4] - 2026-11-18
 
 - **Router:** an agent's store lease is written again only in its second half. The
