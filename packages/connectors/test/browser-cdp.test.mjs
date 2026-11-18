@@ -20,6 +20,12 @@ function fakeSocket(answers = {}) {
   const settle = () => new Promise((resolve) => setTimeout(resolve, 10));
   return { socket, sent, event, settle, methods: () => sent.map((m) => m.method) };
 }
+/** A response body served as a CDP stream in the given chunks. */
+const stream = (...chunks) => {
+  let next = 0;
+  return { "Fetch.takeResponseBodyAsStream": { stream: "body-1" },
+    "IO.read": () => ({ base64Encoded: true, data: chunks[next].toString("base64"), eof: ++next >= chunks.length }) };
+};
 const paused = (url, extra = {}) => ({ requestId: `r-${url}`, request: { url, method: "GET" }, resourceType: "Document", ...extra });
 
 test("every document request is checked: private, loopback, metadata and non-http targets are failed; others continue", async () => {
@@ -40,7 +46,7 @@ test("every document request is checked: private, loopback, metadata and non-htt
 });
 
 test("a download is captured from the document response (links, cross-origin, form posts) and the page stays", async () => {
-  const f = fakeSocket({ "Target.attachToTarget": { sessionId: "S1" }, "Fetch.getResponseBody": { body: Buffer.from("csv,data").toString("base64"), base64Encoded: true } });
+  const f = fakeSocket({ "Target.attachToTarget": { sessionId: "S1" }, ...stream(Buffer.from("csv,"), Buffer.from("data")) });
   const guard = await guardOver(f.socket);
   const file = await guard.captureDownload("T1", async () => {
     // An ordinary page during the click continues untouched; the attachment is the download.
@@ -54,6 +60,7 @@ test("a download is captured from the document response (links, cross-origin, fo
   assert.deepEqual(methods.slice(1, 5), ["Target.attachToTarget", "Runtime.evaluate", "Fetch.enable", "Browser.setDownloadBehavior"]);
   assert.deepEqual(f.sent.find((m) => m.method === "Fetch.fulfillRequest").params, { requestId: "r-https://files.example.net/export", responseCode: 204, body: "" });
   assert.equal(f.sent.find((m) => m.method === "Fetch.continueRequest").params.requestId, "r-https://example.com/page");
+  assert.deepEqual(f.methods().filter((m) => /^(IO|Fetch\.(take|get))/.test(m)), ["Fetch.takeResponseBodyAsStream", "IO.read", "IO.read", "IO.close"], "the body is read as a stream and the stream closed");
   // Afterwards responses are no longer intercepted and downloads return to the browser default.
   assert.deepEqual(f.sent.filter((m) => m.method === "Browser.setDownloadBehavior").map((m) => m.params.behavior), ["allow", "default"]);
   assert.equal(f.sent.filter((m) => m.method === "Fetch.enable").at(-1).params.patterns.length, 1);
@@ -102,4 +109,62 @@ test("structured handoff: banner on the tab, Done reported from Cloudflare's com
   active = false;
   f.event("Cloudflare.handoffComplete", { handoffId: "h-9", success: true }, "S1");
   assert.deepEqual(await guard.handoffState("T1", "h-9"), { active: false, success: true });
+});
+
+test("a download without a declared length is read in bounded chunks and abandoned at the limit", async () => {
+  let reads = 0;
+  const f = fakeSocket({ "Target.attachToTarget": { sessionId: "S1" }, "Fetch.takeResponseBodyAsStream": { stream: "body-1" },
+    "IO.read": () => { reads++; return { base64Encoded: true, data: Buffer.alloc(600, 1).toString("base64"), eof: false }; } });
+  const guard = await guardOver(f.socket);
+  const endless = guard.captureDownload("T1", async () => {
+    f.event("Fetch.requestPaused", paused("https://example.com/stream", { responseStatusCode: 200, responseHeaders: [{ name: "content-type", value: "application/octet-stream" }] }));
+  }, { maxBytes: 1000, timeoutMs: 1000 });
+  await assert.rejects(endless, { code: "browser_download_too_large" });
+  await f.settle();
+  assert.equal(reads, 2, "reading stops with the chunk that passes the limit");
+  assert.deepEqual(f.sent.find((m) => m.method === "IO.read").params, { handle: "body-1", size: 1_048_576 });
+  assert.ok(f.methods().includes("IO.close") && !f.methods().includes("Fetch.getResponseBody"));
+  assert.equal(f.sent.find((m) => m.method === "Fetch.fulfillRequest").params.responseCode, 204);
+  // A chunk larger than was asked for is not decoded.
+  const g = fakeSocket({ "Target.attachToTarget": { sessionId: "S1" }, "Fetch.takeResponseBodyAsStream": { stream: "body-2" },
+    "IO.read": { base64Encoded: true, data: "A".repeat(1_500_000), eof: true } });
+  const second = await guardOver(g.socket);
+  await assert.rejects(second.captureDownload("T1", async () => {
+    g.event("Fetch.requestPaused", paused("https://example.com/huge", { responseStatusCode: 200, responseHeaders: [{ name: "content-type", value: "application/zip" }] }));
+  }, { maxBytes: 10_000_000, timeoutMs: 1000 }), { code: "browser_download_failed" });
+});
+
+test("page-supplied download data is measured before it is decoded", async () => {
+  const f = fakeSocket({ "Target.attachToTarget": { sessionId: "S1" },
+    "Runtime.evaluate": (params) => params.awaitPromise ? { result: { value: { type: "text/plain", base64: "A".repeat(2000) } } } : { result: { value: true } } });
+  const guard = await guardOver(f.socket);
+  await assert.rejects(guard.captureDownload("T1", async () => {
+    f.event("Browser.downloadWillBegin", { frameId: "T1", guid: "g1", url: "blob:https://example.com/1", suggestedFilename: "big.bin" });
+  }, { maxBytes: 1000, timeoutMs: 1000 }), { code: "browser_download_too_large" });
+  for (const url of [`data:text/plain;base64,${"A".repeat(2000)}`, `data:text/plain,${"%41".repeat(1100)}`])
+    await assert.rejects(guard.captureDownload("T1", async () => {
+      f.event("Browser.downloadWillBegin", { frameId: "T1", guid: "g2", url, suggestedFilename: "big.txt" });
+    }, { maxBytes: 1000, timeoutMs: 1000 }), { code: "browser_download_too_large" });
+});
+
+test("site permissions: top-level navigations to sites they do not cover are failed and reported; frames and permitted sites continue", async () => {
+  const f = fakeSocket({ "Target.getTargets": { targetInfos: [{ targetId: "T1", type: "page" }, { targetId: "W1", type: "service_worker" }] } });
+  const guard = await guardOver(f.socket);
+  guard.restrict((url) => new URL(url).hostname === "example.com");
+  f.event("Fetch.requestPaused", paused("https://example.com/next", { frameId: "T1" }));
+  f.event("Fetch.requestPaused", paused("https://evil.example.org/collect?d=secret", { frameId: "T1" }));
+  f.event("Fetch.requestPaused", paused("https://evil.example.org/hop", { frameId: "T1", redirectedRequestId: "r0" }));
+  f.event("Fetch.requestPaused", paused("https://ads.example.org/frame", { frameId: "FRAME9" }));
+  f.event("Fetch.requestPaused", paused("https://popup.example.org/", {}));
+  f.event("Fetch.requestPaused", paused("http://10.0.0.5/", { frameId: "FRAME9" }));
+  await f.settle();
+  const decision = (url) => f.sent.find((m) => m.params?.requestId === `r-${url}`).method;
+  assert.deepEqual(["https://example.com/next", "https://evil.example.org/collect?d=secret", "https://evil.example.org/hop", "https://ads.example.org/frame", "https://popup.example.org/", "http://10.0.0.5/"].map(decision),
+    ["Fetch.continueRequest", "Fetch.failRequest", "Fetch.failRequest", "Fetch.continueRequest", "Fetch.failRequest", "Fetch.failRequest"]);
+  assert.deepEqual(guard.takeBlocked().sort(), ["https://evil.example.org/collect?d=secret", "https://evil.example.org/hop", "https://popup.example.org/"], "a request that cannot be placed in a frame counts as top-level");
+  assert.deepEqual(guard.takeBlocked(), []);
+  guard.restrict();
+  f.event("Fetch.requestPaused", paused("https://evil.example.org/again", { frameId: "T1" }));
+  await f.settle();
+  assert.equal(decision("https://evil.example.org/again"), "Fetch.continueRequest", "without permissions in force only the address checks apply");
 });

@@ -116,6 +116,14 @@ export interface Connector {
     /** Returns false for a state belonging to another connection. */
     callback?(context: ToolContext, state: string, code?: string): Promise<boolean>;
   };
+  /**
+   * Owner-managed access rules beyond the per-operation settings (the browser's site permissions). Trusted
+   * management only; `set` throws ConnectorError for input it refuses and returns the rules as `get` does.
+   */
+  access?: {
+    get(context: ToolContext): Promise<Json>;
+    set(context: ToolContext, input: unknown): Promise<Json>;
+  };
 }
 
 /** A known failure: the operation did not take effect. Other exceptions are treated as uncertain. */

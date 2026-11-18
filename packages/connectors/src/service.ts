@@ -205,6 +205,15 @@ export class ConnectorService {
     return this.policy(id, signal);
   }
 
+  /** A connector's own owner-managed access rules (trusted management only); with `input`, changes them. */
+  async access(id: string, signal: AbortSignal, input?: unknown): Promise<Json> {
+    const connection = this.#connections.get(id), access = this.#connectors.get(id)?.access;
+    if (!connection || !access) throw new ServiceError("connection_access_unavailable", 404);
+    const context = { connection, credentials: this.#credentials(id), signal };
+    try { return input === undefined ? await access.get(context) : await access.set(context, input); }
+    catch (error) { throw error instanceof ConnectorError ? new ServiceError(error.code, 400) : error; }
+  }
+
   #catalog(connection: ConnectionConfig): OperationCatalog {
     return this.#connectors.get(connection.id)!.operations?.(connection) ?? GENERIC_CATALOG;
   }
