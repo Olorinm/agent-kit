@@ -385,6 +385,11 @@ test("gws commands run with the access token only after credential-free classifi
   const done = await s.approve(pending);
   assert.equal(done.status, "completed"); assert.equal(gws.runs.at(-1).token, "private-access");
   assert.equal(gws.runs.at(-1).args[1], "+send");
+  // --dry-run does not make a write a read, and its operation is the method's.
+  gws.runs.length = 0;
+  assert.equal((await s.call("gws_read", { args: [...send, "--dry-run"] })).error, "gws_command_requires_write_tool");
+  assert.equal((await s.call("gws_write", { args: [...send, "--dry-run"] })).status, "approval_required");
+  assert.ok(!gws.runs.some((run) => run.token));
   // Large output is cut with guidance.
   const read = await s.call("gws_read", { args: ["gmail", "+read", "--id", "m-1"] });
   assert.match(read.result.output, /…\[truncated: 10000 more characters; narrow the request/);
@@ -401,12 +406,19 @@ test("gws refuses other services, local files, streams and unknown helpers, and 
     [["gmail", "+mystery"], "gws_command_not_allowed"],
     [["gmail", "+send", "--to", "a@example.test", "--subject", "s", "--body", "b", "-a", "/etc/passwd"], "gws_flag_not_allowed"],
     [["gmail", "users", "messages", "get", "--params", "{}", "--output=/tmp/x"], "gws_flag_not_allowed"],
+    // Attached and combined short forms of the file flags.
+    [["gmail", "users", "messages", "get", "--params", "{}", "-o/tmp/x"], "gws_flag_not_allowed"],
+    [["gmail", "+send", "--to", "a@example.test", "--subject", "s", "--body", "b", "-a/etc/passwd"], "gws_flag_not_allowed"],
+    [["gmail", "users", "messages", "get", "--params", "{}", "-xo/tmp/x"], "gws_flag_not_allowed"],
+    // gws drops each --api-version with its next argument, which would hide a flag from classification.
+    [["gmail", "+send", "--to", "a@example.test", "--subject", "s", "--body", "b", "--api-version", "--dry-run", "--api-version", "v1"], "gws_flag_not_allowed"],
+    [["gmail", "users", "messages", "list", "--api-version=v1"], "gws_flag_not_allowed"],
     [["gmail", "users", "messages", "nosuch"], "gws_method_unknown"],
     // Read-only consent: a send is refused before any approval card exists.
     [["gmail", "+send", "--to", "a@example.test", "--subject", "s", "--body", "b"], "google_scope_not_granted"],
   ]) assert.equal((await s.call("gws_read", { args })).error, error, args.join(" "));
   assert.ok(gws.runs.every((run) => run.token === undefined));
-  // A dry run only prints the request, so it is a read even for a sending helper.
+  // A dry run of a sending helper is a send: it needs the send scope as well.
   assert.equal((await s.call("gws_read", { args: ["gmail", "+send", "--to", "a@example.test", "--subject", "s", "--body", "b", "--dry-run"] })).error, "google_scope_not_granted");
   assert.equal((await s.call("gws_read", { args: ["gmail", "users", "messages", "list", "--params", "{\"maxResults\":3}"] })).status, "completed");
 });

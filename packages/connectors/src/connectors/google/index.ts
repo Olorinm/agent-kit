@@ -9,7 +9,7 @@ import { GENERIC_CATALOG as GENERIC } from "../../policy.js";
 
 const gwsDescription = {
   read: "Run an official Google Workspace CLI (gws) command on the owner's Google account that only reads: GET methods, helper reads such as +triage and +read, " +
-    "--dry-run, `<service> --help` and `schema <service.resource.method>`. Pass argument strings without the executable or shell syntax. " +
+    "`<service> --help` and `schema <service.resource.method>`. Pass argument strings without the executable or shell syntax. " +
     "Writes are refused here with gws_command_requires_write_tool; use gws_write.",
   write: "Run an official Google Workspace CLI (gws) command that changes the owner's Google data (send, draft, modify, insert, delete). " +
     "The owner approves the exact command first. Pass argument strings without the executable or shell syntax.",
@@ -67,10 +67,10 @@ export function googleConnector(options: GoogleOptions = {}): Connector {
       const gws = runner ? (["read", "write"] as const).map((mode) => ({
         name: `gws_${mode}`, description: gwsDescription[mode], risk: mode, input: gwsInput,
         operations: gmail ? mode === "read" ? GMAIL_READ_OPERATIONS : GMAIL_WRITE_OPERATIONS : [mode],
-        // Help, schema and dry runs have no effect; everything else is the operation of the method it calls.
+        // Help and schema have no effect; everything else is the operation of the method it calls.
         operation: async (execution: ToolContext, input: { args: string[] }) => {
           const plan = await classify(input.args, execution);
-          if (plan.kind === "guide" || (plan.kind === "read" && input.args.includes("--dry-run"))) return null;
+          if (plan.kind === "guide") return null;
           return gmail ? gmailMethodOperation(plan.method ?? "", plan.kind === "read") : plan.kind;
         },
         version: versioned(`gws_${mode}`, mode, z.toJSONSchema(gwsInput, { io: "input" })),
