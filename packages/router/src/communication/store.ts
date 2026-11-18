@@ -53,10 +53,15 @@ export class DurableStore {
     // Some errors (SQLITE_IOERR, SQLITE_FULL, ...) already rolled the transaction back; rethrow the cause, not the ROLLBACK error.
     catch (error) { if (this.db.isTransaction) this.db.exec("ROLLBACK"); throw error; }
   }
+  /**
+   * Take or keep the 30-second lease that keeps a second process off this store. A lease the owner already holds is
+   * written again only in its second half, so a heartbeat may ask every few seconds without writing each time.
+   */
   acquireLease(owner: string, now = Date.now()): void {
     this.transaction(() => {
       const lease = this.get<{ owner: string; expires: number }>("meta", "lease");
       if (lease && lease.owner !== owner && lease.expires > now) throw new Error("connector_store_already_in_use");
+      if (lease?.owner === owner && lease.expires - now > 15_000) return;
       this.set("meta", "lease", { owner, expires: now + 30_000 });
     });
   }
