@@ -2,17 +2,20 @@
 
 [English](README.md) | [简体中文](README.zh-CN.md)
 
-Create and manage cloud execution environments for any agent, through one TypeScript API and CLI.
+Create and manage execution environments for any agent, through one TypeScript API and CLI.
 
-The package ships one provider: **Cloudflare**, backed by an operator gateway over Cloudflare's
-native Durable Object Container API. The gateway source is in [cloudflare/](cloudflare/README.md),
-together with independent encrypted recovery backups.
+The package ships two providers. **Cloudflare** is backed by an operator gateway over Cloudflare's
+native Durable Object Container API; the gateway source is in [cloudflare/](cloudflare/README.md),
+together with independent encrypted recovery backups. **Docker** runs environments as containers on
+your own machine, for trying things out without a cloud account; see [Docker (local)](#docker-local).
 
 ```text
 Your product
         │ choose provider + template; persist the environment ref
 Agent Environment
-        └── Cloudflare gateway (cloudflare/)
+        ├── Cloudflare gateway (cloudflare/)
+        │           └── container with your tools and agent runtime
+        └── local Docker daemon
                     └── container with your tools and agent runtime
 ```
 
@@ -29,7 +32,7 @@ This is a library and operator CLI. Product login, ownership checks, quotas, dur
 
 ## Try it
 
-Requires Node.js 24+ and a deployed [Cloudflare gateway](cloudflare/README.md).
+Requires Node.js 24+ and a deployed [Cloudflare gateway](cloudflare/README.md), or a local Docker daemon for the [Docker provider](#docker-local).
 
 ```sh
 npm ci
@@ -62,6 +65,50 @@ for await (const chunk of provider.exec(ref.id, ['node', '--version'], {
 })) process.stdout.write(chunk.text);
 ```
 
+## Docker (local)
+
+Kind `docker` runs each environment as a container on the local Docker daemon, through the `docker` command. It lets
+you run a product that uses this package on your own machine, with no Cloudflare account and no key file:
+
+```json
+{ "providers": [{ "id": "local", "kind": "docker" }] }
+```
+
+```sh
+node dist/cli.js create --config providers.json --provider local --template node24
+```
+
+Optional fields: `dockerPath` (default `docker`), `maxEnvironments` (default 3, stopped environments included) and
+`ports` (default `[37420]`).
+
+**It is for trying things out on a machine you own, not for production:**
+
+- **No egress restrictions.** `modelServices` and `modelAccounts` are accepted and ignored. A local environment
+  reaches the whole internet and whatever your machine's network reaches.
+- **No isolation beyond Docker's.** Commands run as root inside the container, without CPU or memory limits. Anyone
+  who can use the Docker daemon can enter an environment. Values passed as `env` are `docker` arguments: other local
+  users can see them in the process list, and `docker inspect` shows those given to `create`.
+- **No lifetime.** `capabilities.automaticPause` is `false`: `timeoutSeconds`, `onTimeout` and `setTimeout()` are
+  checked and not enforced. An environment runs until it is paused or destroyed.
+- No backups and no snapshot recovery.
+
+Everything else follows the Cloudflare gateway, so a caller needs no changes:
+
+- Template `node24` is built on first use from `node:24-trixie-slim` and tagged `agent-environment-node24:<hash>`:
+  Debian trixie with Node 24, commands and file transfers as root, and `user` (uid 1001, `/home/user`) for the agent
+  runtime. The container waits for `/opt/agent-environment/start.sh` and runs it, so
+  [the gateway's start script](cloudflare/examples/start-host.sh) works unchanged.
+- `pause()` stops the container and returns when it has stopped. Files are kept, processes are not. `resume()` starts
+  it again, which runs the start script again. A container that stopped for another reason (a daemon restart, a
+  reboot, a start script that exited) also reads as `paused` and can be resumed.
+- `httpEndpoint()` returns `http://127.0.0.1:<port>` with no headers. Only the ports in `ports` are published, on the
+  loopback interface. Docker picks the host port at every start: ask again after a resume.
+- A command that times out or is cancelled is killed in the container together with its descendants, and reported as
+  uncertain. While a command or file transfer is in flight, the same process refuses `pause`, `resume` and `destroy`
+  with `environment_busy`.
+
+`AGENT_ENVIRONMENT_DOCKER_TEST=1 npm test` adds a test of the whole lifecycle against the local daemon.
+
 ## Semantics that matter
 
 - `pause()` confirms that the request was accepted. Poll `info()` until paused before resuming. Lifetime expiry saves a filesystem snapshot and stops compute; process memory is not resumed.
@@ -81,7 +128,7 @@ A provider implements `EnvironmentProvider` from [src/types.ts](src/types.ts): l
 
 1. Add `src/<provider>.ts` exporting `create<Provider>Provider(options)`.
 2. Register its `kind` in the `factories` table in [src/config.ts](src/config.ts) so configuration files can select it.
-3. Export it from [src/index.ts](src/index.ts) and add tests against a local fixture server under `test/`.
+3. Export it from [src/index.ts](src/index.ts) and add tests against a local fixture under `test/`.
 
 Keep credentials in private key files referenced by the configuration, never in metadata or refs.
 
