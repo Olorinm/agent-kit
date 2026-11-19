@@ -1,4 +1,5 @@
 import { randomBytes } from "node:crypto";
+import { PAIRING, activeFailures, newPairingCode, nextFailure, normalizeCode, type PairingFailures } from "./pairing-codes.js";
 import type { ChannelMessage } from "../communication/types.js";
 import type { DurableStore } from "../communication/store.js";
 import { digest, key } from "../execution/protocol.js";
@@ -7,9 +8,7 @@ import type { OwnerHubs } from "./hub.js";
 import { identityId, personId, subjectOf, type Identity, type IdentityProvider, type PersonRegistry } from "./registry.js";
 import { OWNER_HUB_IDENTITY_V1 } from "./schema.js";
 
-/** ADR 0005 sections 9 and 18.4. */
-export const PAIRING = { codeLength: 8, ttlMs: 3_600_000, pendingPerPerson: 3, failures: 5, failureWindowMs: 3_600_000, lockoutMs: 3_600_000 };
-const ALPHABET = "0123456789ABCDEFGHJKMNPQRSTVWXYZ"; // Crockford base32
+export { PAIRING, normalizeCode };
 const COMMAND = /^\s*(?:\/link|绑定)\s+([0-9A-Za-z]{4})-?([0-9A-Za-z]{4})\s*$/;
 export const REPLIES = {
   linked: (name: string) => `已关联到 ${name}。之后在这里发给 Agent 的消息会进入你的主对话。`,
@@ -21,10 +20,6 @@ export interface IdentityView extends Identity { removable: boolean; fixed?: "id
 export interface PendingCode { id: string; createdAt: string; expiresAt: string }
 export type PairingStatus = "linked" | "invalid" | "locked" | "conflict" | "unverified";
 
-/** Input is case-insensitive; hyphens and spaces are ignored; I/L read as 1 and O as 0. */
-export function normalizeCode(input: string): string {
-  return input.toUpperCase().replace(/[\s-]/g, "").replace(/[IL]/g, "1").replace(/O/g, "0");
-}
 /** The code of a `/link <code>` (or `绑定 <code>`) message, or undefined when the whole text is not that command. */
 export function pairingCommand(text: string): string | undefined {
   const match = COMMAND.exec(text);
@@ -71,10 +66,9 @@ class HubPairing {
     return this.store.transaction(() => {
       this.prune(now);
       if (this.pending(person, now).length >= PAIRING.pendingPerPerson) throw new WorkError("pairing_codes_pending_limit", 429);
-      const bytes = randomBytes(PAIRING.codeLength), code = [...bytes].map((byte) => ALPHABET[byte & 31]).join("");
-      const id = `pc_${randomBytes(12).toString("hex")}`, expires = now + PAIRING.ttlMs;
-      this.db.prepare("INSERT INTO hub_pairing_codes(code_hash,person_id,created_at,expires_at,code_id) VALUES(?,?,?,?,?)").run(this.hash(code), person, now, expires, id);
-      return { id, code: `${code.slice(0, 4)}-${code.slice(4)}`, expiresAt: new Date(expires).toISOString() };
+      const { normalized, code, expires } = newPairingCode(now), id = `pc_${randomBytes(12).toString("hex")}`;
+      this.db.prepare("INSERT INTO hub_pairing_codes(code_hash,person_id,created_at,expires_at,code_id) VALUES(?,?,?,?,?)").run(this.hash(normalized), person, now, expires, id);
+      return { id, code, expiresAt: new Date(expires).toISOString() };
     });
   }
   cancel(person: string, id: string): boolean {
@@ -99,18 +93,16 @@ class HubPairing {
     this.db.prepare("UPDATE hub_pairing_codes SET consumed_at=?, consumed_identity=? WHERE code_hash=? AND consumed_at IS NULL").run(now, identity, this.hash(normalized));
   }
   /** Active failure state; an elapsed window or lockout starts over. */
-  failures(sender: string, now: number): { failures: number; windowStart: number; lockedUntil: number } {
+  failures(sender: string, now: number): PairingFailures {
     const row = this.db.prepare("SELECT * FROM hub_pairing_failures WHERE sender_key=?").get(sender);
-    const lockedUntil = Number(row?.locked_until ?? 0);
-    if (!row || (lockedUntil && lockedUntil <= now) || (!lockedUntil && Number(row.window_start) + PAIRING.failureWindowMs <= now)) return { failures: 0, windowStart: now, lockedUntil: 0 };
-    return { failures: Number(row.failures), windowStart: Number(row.window_start), lockedUntil };
+    return activeFailures(row && { failures: Number(row.failures), windowStart: Number(row.window_start), lockedUntil: Number(row.locked_until ?? 0) }, now);
   }
   fail(sender: string, now: number): boolean {
-    const state = this.failures(sender, now), failures = state.failures + 1, locked = failures >= PAIRING.failures ? now + PAIRING.lockoutMs : null;
+    const state = nextFailure(this.failures(sender, now), now);
     this.db.prepare(`INSERT INTO hub_pairing_failures(sender_key,failures,window_start,locked_until) VALUES(?,?,?,?)
       ON CONFLICT(sender_key) DO UPDATE SET failures=excluded.failures, window_start=excluded.window_start, locked_until=excluded.locked_until`)
-      .run(sender, failures, state.windowStart, locked);
-    return locked !== null;
+      .run(sender, state.failures, state.windowStart, state.lockedUntil || null);
+    return state.lockedUntil !== 0;
   }
   clear(sender: string) { this.db.prepare("DELETE FROM hub_pairing_failures WHERE sender_key=?").run(sender); }
 }
