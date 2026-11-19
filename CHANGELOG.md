@@ -5,6 +5,34 @@ tag publishes a GitHub Release whose notes are this file's section for that vers
 section in the version-bump commit before tagging. Changes up to the versions listed under
 0.8.0-alpha.1 are in each package's own `CHANGELOG.md`.
 
+## [Unreleased]
+
+- **Host:** `agent-host link --url <router> --code <pairing code>` pairs a machine with a Router and
+  keeps an outbound WebSocket to it; `agent-host serve` reconnects to a stored link by itself,
+  with backoff up to 30 seconds. Through the link a Router reaches one runtime and only health,
+  that runtime's description, runs with their events, cancel and steer, and calls. Workspace
+  files, native sessions, the native extension and the relay answer `403 link_route_not_allowed`,
+  and a linked submission that carries `instructions`, `tools`, `toolOutput`, `inputItems` or
+  `attachments` is refused. The device credential is stored in `link.json` in the state
+  directory. See `packages/host/docs/host-link.md`, which also describes running the service at
+  sign-in on Windows, macOS and Linux.
+- **Host:** `interactionTimeoutMs` in `host.json` sets how long a native approval or question
+  waits for an answer (default 120000, unchanged).
+- **Host:** `startAgentHostServer` accepts `link`; the server package exports `enrollHostLink`,
+  `readHostLink` and `routerBaseUrl`.
+- **Router:** host links. `POST /_agent-router/v1/host-links/pairing-codes`, `GET /host-links`
+  and `DELETE /host-links/:linkId` let an owner pair, list and revoke machines;
+  `POST /host-links/enroll` (pairing code) and the `/host-links/socket` upgrade (device
+  credential) are the machine's two entry points. `createRouter(...).hostLinks` is the same for
+  embedding code, with `subscribe` for `enrolled`, `online`, `offline` and `revoked`. Host
+  bindings `link:<linkId>` are resolved by Router. See `packages/router/docs/guides/host-links.md`.
+- **Router:** a Host that connects by itself (`HostPort.online`) is given no work while it is
+  away: tasks stay queued instead of becoming `unknown`. A submission that provably never left
+  Router (`host_offline`) returns to the queue. A restricted Host (`HostPort.restricted`) is
+  sent no instructions, tools, native input items, tool output or attachments.
+- **Router:** `HostBindingProvider.http` and `checkChannels` take a `HostTransport`
+  (`ServiceHttp` is one). `HostRuns` holds the run operations of `HttpAgentHost` for any transport.
+
 ## [0.11.0-alpha.8] - 2026-11-19
 
 - **Router:** `ServiceDependencies.authorizeOperator(principal, request)` lets the embedding

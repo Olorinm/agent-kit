@@ -164,6 +164,21 @@ export class CliWork implements ExecutionBackend {
       return result;
     });
   }
+  /**
+   * Return a claim whose work provably never reached an executor: the task waits to be claimed again.
+   * `released` runs in the same transaction, for the worker's own record of the claim.
+   */
+  release(claimId: string, worker: string, released?: () => void): void {
+    this.store.transaction(() => {
+      const receipt = this.store.get<Receipt>("cli_claims", claimId);
+      if (!receipt || receipt.worker !== worker) throw new WorkError("claim_not_found", 404);
+      const work = this.load(receipt.workId);
+      if (work.claim?.id !== claimId || terminal(work.task)) throw new WorkError("claim_closed");
+      delete work.claim; this.store.delete("cli_claims", claimId);
+      this.change(work, TaskState.TASK_STATE_SUBMITTED);
+      released?.();
+    });
+  }
   outputAttachments(taskId: string): Attachment[] {
     const task = this.load(taskId).task;
     return task.status?.state === TaskState.TASK_STATE_COMPLETED ? this.store.get<Attachment[]>("cli_reply_attachments", taskId) ?? [] : [];

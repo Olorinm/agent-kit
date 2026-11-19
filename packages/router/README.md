@@ -82,7 +82,7 @@ See [Embedding Agent Router](docs/architecture/embedding.md) for authentication,
 
 ## HTTP surface
 
-All routes except `GET /health/live` are under `/_agent-router/v1` and require an authenticated owner.
+All routes except `GET /health/live` are under `/_agent-router/v1` and require an authenticated owner, except the two a linked machine uses (`POST /host-links/enroll` and the `/host-links/socket` upgrade).
 
 | Routes | Purpose |
 | --- | --- |
@@ -91,6 +91,7 @@ All routes except `GET /health/live` are under `/_agent-router/v1` and require a
 | `GET /connection-options`; `/agents/:id/configuration`, `/connections`, `/connection-jobs`, `/check` | Channel connection setup and checks |
 | `DELETE /agents/:id/connections/:connection` | Disconnect a channel connection |
 | `GET`, `PUT /agents/:id/connections/:connection/access` | Read and replace a connection's allowed groups and peers |
+| `GET /host-links`, `POST /host-links/pairing-codes`, `DELETE /host-links/:link` | Machines whose Agent Host connects to Router by itself: pair, list and revoke |
 | `/agents/:id/communication` | Channel and Host status; `sessions`, `work-events`, `tasks` and `runs` for work sessions and run observation |
 | `/web/...` | Ledger web API: chats, events, messages, cards, groups, attachments, identities and socket tickets |
 
@@ -121,6 +122,7 @@ these routes exactly as written.
 | Connecting channels over HTTP | [Connections](docs/guides/connections.md) · [简体中文](docs/guides/connections.zh-CN.md) |
 | Channel configuration, groups, media and recovery | [Channels](docs/guides/personal-channels.md) |
 | Work sessions and product-authored work | [Native sessions](docs/guides/native-sessions.md) |
+| An Agent Host that connects to Router from a machine without a public address | [Host links](docs/guides/host-links.md) |
 | Tools inside the execution environment | [Worker tools](docs/guides/worker-tools.md) · [简体中文](docs/guides/worker-tools.zh-CN.md) |
 | Writing a channel adapter | [Adding a channel](docs/guides/adding-a-channel.md) |
 | Embedding API | [Embedding Agent Router](docs/architecture/embedding.md) |

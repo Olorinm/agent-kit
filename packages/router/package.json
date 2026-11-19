@@ -66,6 +66,7 @@
     "src",
     "scripts/update-weixin-transport.py",
     "scripts/verify-native-sessions.mjs",
+    "scripts/verify-host-link.mjs",
     "scripts/fixtures/native-sessions-server.mjs",
     "THIRD_PARTY_NOTICES.md"
   ],

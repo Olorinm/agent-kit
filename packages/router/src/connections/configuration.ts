@@ -10,15 +10,16 @@ import {
 } from "../service/channels.js";
 import type { ManagedAgent, ManagedService } from "../service/managed.js";
 import type { AgentRuntime } from "../agents/runtime.js";
-import type { HostPort } from "../execution/host.js";
-import type { ServiceHttp } from "../http.js";
+import type { HostPort, HostTransport } from "../execution/host.js";
+import { HostLinks } from "../execution/host-links.js";
 import { WorkError } from "../execution/work.js";
 export interface HostBindingProvider {
   assertReady(agentId: string, binding: string): void;
   /** Called, possibly repeatedly, while deliverable work waits on a binding that is not ready. Must not block or throw. */
   wake?(agentId: string, binding: string): void;
   host(agentId: string, binding: string): HostPort;
-  http(agentId: string, binding: string): ServiceHttp;
+  /** The Host's v1 paths for a read-only check; `ServiceHttp` is one. */
+  http(agentId: string, binding: string): HostTransport;
 }
 
 export const connectionOptionsSchema = z
@@ -75,6 +76,12 @@ export class ConnectionConfiguration {
   attach(service: ManagedService) {
     this.service = service;
   }
+  /** Who resolves a binding: Router's own host links for `link:<linkId>`, the product's provider for the rest. */
+  provider(binding: string): HostBindingProvider {
+    const hosts = HostLinks.isBinding(binding) ? this.service.hostLinks : this.hosts;
+    if (!hosts) throw new WorkError("host_binding_provider_required", 503);
+    return hosts;
+  }
   agentDirectory(id: string): string {
     z.uuid().parse(id);
     return join(this.directory, "agents", id);
@@ -92,7 +99,7 @@ export class ConnectionConfiguration {
     config?: AgentChannelConfig,
   ) {
     if (!config) return undefined;
-    if (config.host?.binding && !this.hosts) throw new WorkError("host_binding_provider_required", 503);
+    const binding = config.host?.binding, hosts = binding ? this.provider(binding) : undefined;
     return createChannelRuntime(
       agent,
       runtime,
@@ -104,17 +111,14 @@ export class ConnectionConfiguration {
           id: issued.instance.id,
           validate: () => {
             this.service.instance(issued.token, agent.id);
-            if (config.host?.binding)
-              this.hosts!.assertReady(agent.id, config.host.binding);
+            if (binding) hosts!.assertReady(agent.id, binding);
           },
-          ...(config.host?.binding && this.hosts!.wake
-            ? { wake: () => this.hosts!.wake!(agent.id, config.host!.binding!) }
+          ...(binding && hosts!.wake
+            ? { wake: () => hosts!.wake!(agent.id, binding) }
             : {}),
         };
       },
-      config.host?.binding
-        ? this.hosts!.host(agent.id, config.host.binding)
-        : undefined,
+      binding ? hosts!.host(agent.id, binding) : undefined,
       { persons: this.service.persons,
         identity: this.service.identity, attachments: this.service.attachments, ...this.service.roomOptions(agent),
         watching: (sessionKey) => this.service.hubs.hub(agent.owner).watching(agent.id, sessionKey) },

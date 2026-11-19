@@ -246,7 +246,7 @@ export function createConnections(
       },
       undefined,
       config.host?.binding
-        ? configuration.hosts?.http(agent.id, config.host.binding)
+        ? configuration.provider(config.host.binding).http(agent.id, config.host.binding)
         : undefined,
     );
     for (const check of checks)

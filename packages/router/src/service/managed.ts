@@ -8,6 +8,7 @@ import { AgentRuntime } from "../agents/runtime.js";
 import { DurableStore } from "../communication/store.js";
 import { digest } from "../execution/protocol.js";
 import { WorkError } from "../execution/work.js";
+import { HostLinks, HOST_LINK_ENROLL_PATH, hostLinkCodeRequest, hostLinkEnrollRequest } from "../execution/host-links.js";
 import { AgentLedger } from "../ledger/ledger.js";
 import { OwnerHubs } from "../ledger/hub.js";
 import { PersonRegistry, personId } from "../ledger/registry.js";
@@ -113,6 +114,8 @@ export class ManagedService {
   readonly persons: PersonRegistry;
   readonly hubs: OwnerHubs;
   readonly identity: Identities;
+  /** Machines whose Agent Host connects to Router by itself; state lives in the registry store. */
+  readonly hostLinks: HostLinks;
   readonly web: ReturnType<typeof createWebLedger>;
   readonly edgeIdentity: CloudflareAccessAuthenticator | undefined;
   private readonly owners: CompositeAuthenticator;
@@ -139,6 +142,10 @@ export class ManagedService {
       personName: (id) => this.persons.person(id)?.displayName,
     });
     this.identity = new Identities(this.persons, this.hubs);
+    this.hostLinks = new HostLinks(this.store, (owner, agentId) => {
+      const agent = this.store.get<ManagedAgent>("agents", agentId);
+      return agent?.owner === owner && agent.status !== "deleting";
+    });
     this.fanout = new RoomFanout(this.hubs, {
       owners: () => [...new Set(this.agents().filter((agent) => agent.status === "active").map((agent) => agent.owner))],
       channel: async (agentId) => this.agent(agentId).status === "active" ? (await this.runtime(agentId)).extension?.room : undefined,
@@ -195,9 +202,9 @@ export class ManagedService {
    * configured and the assertion is present, otherwise the bearer token. `authenticate(token)` stays for token-only callers.
    */
   authenticateRequest(request: OwnerRequest): Promise<OwnerPrincipal> { return this.owners.authenticate(request); }
-  /** A bearer token of the embedding product (`ServiceDependencies.authenticate`). Instance tokens are never owner credentials. */
+  /** A bearer token of the embedding product (`ServiceDependencies.authenticate`). Instance tokens and host link device credentials are never owner credentials. */
   async authenticate(token: string): Promise<string> {
-    if (!token || token.startsWith("ari_") || !this.dependencies.authenticate) throw new WorkError("account_login_required", 401);
+    if (!token || token.startsWith("ari_") || token.startsWith("ahl_") || !this.dependencies.authenticate) throw new WorkError("account_login_required", 401);
     const user = accountId.parse(await this.dependencies.authenticate(token));
     if (!user.endsWith(`:${this.config.serverName}`) || user.startsWith("@_ar_")) throw new WorkError("local_owner_account_required", 403);
     return user;
@@ -323,6 +330,7 @@ export class ManagedService {
   }
   private purge(agent: ManagedAgent) {
     this.forgetLedger(agent);
+    this.hostLinks.remove(agent.id);
     this.store.transaction(() => {
       for (const { id, value } of this.store.entries<{ agentId: string }>("instances")) if (value.agentId === agent.id) this.store.delete("instances", id);
       for (const { id, value } of this.store.entries<{ agentId: string }>("connection_setup_jobs")) if (value.agentId === agent.id) this.store.delete("connection_setup_jobs", id);
@@ -362,7 +370,7 @@ export class ManagedService {
     for (const pending of this.runtimes.values()) {
       try { const runtime = await pending; await runtime.extension?.stop(); runtime.stop(); runtime.store.close(); } catch { /* Failed initialization already closed its store. */ }
     }
-    this.runtimes.clear(); this.ledgers.clear(); this.attachments.stop(); this.web.close(); this.hubs.close(); this.store.close();
+    this.runtimes.clear(); this.ledgers.clear(); this.attachments.stop(); this.web.close(); this.hostLinks.close(); this.hubs.close(); this.store.close();
   }
 }
 
@@ -383,6 +391,13 @@ export function createManagedApp(service: ManagedService, setup?: express.Router
     keyGenerator: (req) => ipKeyGenerator(req.ip ?? req.socket.remoteAddress ?? "unknown"),
     message: { error: "rate_limit_exceeded" } }));
   app.use(`${root}/web`, service.web.router);
+  // The one HTTP route a machine calls before it has a credential: the pairing code is its authentication.
+  app.post(HOST_LINK_ENROLL_PATH, rateLimit({ windowMs: 60_000, limit: 20, standardHeaders: "draft-8", legacyHeaders: false,
+    keyGenerator: (req) => ipKeyGenerator(req.ip ?? req.socket.remoteAddress ?? "unknown"),
+    message: { error: "rate_limit_exceeded" } }), (req, res) => {
+    const body = hostLinkEnrollRequest.parse(req.body);
+    res.status(201).set("Cache-Control", "no-store").json(service.hostLinks.enroll(body, req.ip ?? req.socket.remoteAddress ?? "unknown"));
+  });
   app.use(root, async (req, res, next) => {
     const principal = await service.authenticateRequest(req);
     res.locals.principal = principal; res.locals.owner = principal.ownerId; next();
@@ -400,6 +415,12 @@ export function createManagedApp(service: ManagedService, setup?: express.Router
   app.use(`${root}/agents/:agentId`, (req, res, next) => { service.owned(String(req.params.agentId), res.locals.owner); next(); });
   app.get(`${root}/agents/:agentId`, (req, res) => res.json(service.publicAgent(service.agent(req.params.agentId))));
   app.delete(`${root}/agents/:agentId`, async (req, res) => { await service.delete(res.locals.owner, req.params.agentId); res.status(204).end(); });
+  app.get(`${root}/host-links`, (_req, res) => res.set("Cache-Control", "no-store").json({ data: service.hostLinks.list(res.locals.owner) }));
+  app.post(`${root}/host-links/pairing-codes`, (req, res) => {
+    const { agentId } = hostLinkCodeRequest.parse(req.body);
+    res.status(201).set("Cache-Control", "no-store").json({ agentId, ...service.hostLinks.createCode(res.locals.owner, agentId) });
+  });
+  app.delete(`${root}/host-links/:linkId`, (req, res) => { service.hostLinks.revoke(res.locals.owner, req.params.linkId); res.status(204).end(); });
   if (setup) app.use(setup);
   const extension = async (id: string) => {
     const runtime = await service.runtime(id);

@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { ChannelHttpError, ServiceHttp } from "../http.js";
+import { ChannelHttpError } from "../http.js";
 import type { HostTool } from "./tools.js";
 import type { MediaContent } from "../communication/types.js";
 
@@ -29,9 +29,20 @@ export interface NativeSessionInput {
   itemsView?: "notLoaded" | "summary" | "full" | undefined; beforeEntryId?: string | undefined; archived?: boolean | undefined;
   searchTerm?: string | undefined; sourceKinds?: string[] | undefined; instructions?: string | undefined; tools?: HostTool[] | undefined;
 }
+/** How Router reaches a Host's v1 operations: plain HTTP (`ServiceHttp`) or a connection the Host opened. */
+export interface HostTransport {
+  readonly baseUrl: string;
+  request(path: string, options?: { body?: unknown }): Promise<any>;
+}
+/** Code of the `ChannelHttpError` (503) a Host raises only for a request that provably never left Router. */
+export const HOST_OFFLINE = "host_offline";
 export interface HostPort {
   identity?: string;
   supportsRunLookup?: boolean;
+  /** Messages only: a run is sent without instructions, tools, native input items, tool output or attachments. */
+  restricted?: boolean;
+  /** Set on a Host that connects to Router by itself; false while it is not connected. Work waits in the queue meanwhile. */
+  online?(): boolean;
   connect(): Promise<void>;
   start(input: HostStartInput): Promise<HostRun>;
   findRun?(runtimeId: string, requestKey: string): Promise<HostRun | null>;
@@ -55,11 +66,11 @@ export interface HostPort {
   writeFile?(sessionId: string, path: string, content: string): Promise<void>;
 }
 
-/** Uses Agent Host's public HTTP v1 contract; no native runtime packages in the Router process. */
-export class HttpAgentHost implements HostPort {
+/** The run operations of Agent Host's public v1 contract, over any transport. */
+export class HostRuns implements HostPort {
   readonly identity: string;
   supportsRunLookup = false;
-  constructor(readonly http: ServiceHttp) { this.identity = http.baseUrl.replace(/\/$/, ""); }
+  constructor(readonly http: HostTransport) { this.identity = http.baseUrl.replace(/\/$/, ""); }
   async connect(): Promise<void> {
     const health = await this.http.request("/v1/health");
     if (health.protocolVersion !== 1) throw new Error("unsupported_host_protocol");
@@ -76,23 +87,7 @@ export class HttpAgentHost implements HostPort {
     const value = await this.http.request(`/v1/runs/by-request?${new URLSearchParams({ runtimeId, requestKey })}`);
     return value.run === null ? null : run.parse(value.run);
   }
-  async discoverRuntime(runtimeId: string) { return this.http.request("/v1/runtimes/discover", { body: { runtimeId } }); }
   async inspectRuntime(runtimeId: string) { return this.http.request("/v1/runtimes/inspect", { body: { runtimeId } }); }
-  async nativeSessions(input: NativeSessionInput) { return this.http.request("/v1/native-sessions", { body: input }); }
-  async nativeRequest(runtimeId: string, method: string, params?: Record<string, unknown>) {
-    const response = await this.http.request("/v1/runtimes/native", { body: { runtimeId, method, ...(params === undefined ? {} : { params }) } });
-    return response.result;
-  }
-  async nativeNotification(runtimeId: string, method: string, params?: Record<string, unknown>) {
-    await this.http.request("/v1/runtimes/native", { body: { runtimeId, method, notification: true, ...(params === undefined ? {} : { params }) } });
-  }
-  async nativeEvents(runtimeId: string, after = 0, limit = 200, epoch?: string) {
-    return this.http.request(`/v1/runtimes/${encodeURIComponent(runtimeId)}/native-events?${new URLSearchParams({ after: String(after), limit: String(limit), ...(epoch ? { epoch } : {}) })}`);
-  }
-  async nativeRequests(runtimeId: string) { return this.http.request(`/v1/runtimes/${encodeURIComponent(runtimeId)}/native-requests`); }
-  async resolveNativeRequest(runtimeId: string, requestId: string, response: { result?: unknown; error?: unknown }) {
-    await this.http.request(`/v1/runtimes/${encodeURIComponent(runtimeId)}/native-requests/${encodeURIComponent(requestId)}/result`, { body: response });
-  }
   async get(id: string): Promise<HostRun> { return run.parse(await this.http.request(`/v1/runs/${encodeURIComponent(id)}`)); }
   async cancel(id: string): Promise<void> { await this.http.request(`/v1/runs/${encodeURIComponent(id)}/cancel`, { body: {} }); }
   async calls(id: string): Promise<HostCall[]> {
@@ -117,6 +112,26 @@ export class HttpAgentHost implements HostPort {
     return page;
   }
   async steer(id: string, input: string) { await this.http.request(`/v1/runs/${encodeURIComponent(id)}/steer`, { body: { input } }); }
+}
+
+/** Uses Agent Host's public HTTP v1 contract; no native runtime packages in the Router process. */
+export class HttpAgentHost extends HostRuns {
+  async discoverRuntime(runtimeId: string) { return this.http.request("/v1/runtimes/discover", { body: { runtimeId } }); }
+  async nativeSessions(input: NativeSessionInput) { return this.http.request("/v1/native-sessions", { body: input }); }
+  async nativeRequest(runtimeId: string, method: string, params?: Record<string, unknown>) {
+    const response = await this.http.request("/v1/runtimes/native", { body: { runtimeId, method, ...(params === undefined ? {} : { params }) } });
+    return response.result;
+  }
+  async nativeNotification(runtimeId: string, method: string, params?: Record<string, unknown>) {
+    await this.http.request("/v1/runtimes/native", { body: { runtimeId, method, notification: true, ...(params === undefined ? {} : { params }) } });
+  }
+  async nativeEvents(runtimeId: string, after = 0, limit = 200, epoch?: string) {
+    return this.http.request(`/v1/runtimes/${encodeURIComponent(runtimeId)}/native-events?${new URLSearchParams({ after: String(after), limit: String(limit), ...(epoch ? { epoch } : {}) })}`);
+  }
+  async nativeRequests(runtimeId: string) { return this.http.request(`/v1/runtimes/${encodeURIComponent(runtimeId)}/native-requests`); }
+  async resolveNativeRequest(runtimeId: string, requestId: string, response: { result?: unknown; error?: unknown }) {
+    await this.http.request(`/v1/runtimes/${encodeURIComponent(runtimeId)}/native-requests/${encodeURIComponent(requestId)}/result`, { body: response });
+  }
   async readFile(sessionId: string, path: string) { return this.http.request(`/v1/sessions/${encodeURIComponent(sessionId)}/files?encoding=base64&path=${encodeURIComponent(path)}`); }
   async writeFile(sessionId: string, path: string, content: string) { await this.http.request(`/v1/sessions/${encodeURIComponent(sessionId)}/files`, { body: { path, content, encoding: "base64" } }); }
 }
