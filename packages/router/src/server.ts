@@ -39,9 +39,9 @@ export { HttpAgentHost, type HostPort, type HostStartInput, type HostAdmission, 
 export { ServiceHttp, ChannelHttpError } from "./http.js";
 export type { HostTool, HostToolResult, HostTools } from "./execution/tools.js";
 export { checkChannels } from "./service/check.js";
-export { edgeIdentityConfigSchema, loadEdgeIdentityConfig, type EdgeIdentityConfig, type OwnerPrincipal, type OwnerRequest } from "./auth/edge-identity.js";
+export { edgeIdentityConfigSchema, loadEdgeIdentityConfig, type EdgeIdentityConfig, type OperatorAuthorizer, type OwnerPrincipal, type OwnerRequest } from "./auth/edge-identity.js";
 export { loadServiceConfig } from "./service/config.js";
-export { routerApiReference, type RouterApiRoute } from "./api-reference.js";
+export { routerApiReference, routerRouteScope, type RouterApiRoute, type RouterRouteScope } from "./api-reference.js";
 
 export { RunObservation, type CommunicationTask, type RunReference, type TaskFilter } from "./execution/observation.js";
 export { WorkSessions, type WorkSessionSubmission, type WorkEventResult, type WorkSessionWaitOptions, type WorkDependencyWait,

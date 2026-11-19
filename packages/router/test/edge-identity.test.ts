@@ -5,8 +5,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { SignJWT, exportJWK, generateKeyPair, type JWK } from "jose";
 import { WebSocket as NodeSocket } from "ws";
-import { CloudflareAccessAuthenticator, edgeIdentityConfigSchema, loadEdgeIdentityConfig, type EdgeIdentityConfig } from "../src/auth/edge-identity.js";
-import { ManagedService, createManagedApp, type ManagedAgent, type ServiceConfig } from "../src/service/managed.js";
+import { CloudflareAccessAuthenticator, edgeIdentityConfigSchema, loadEdgeIdentityConfig, type EdgeIdentityConfig, type OwnerPrincipal, type OwnerRequest } from "../src/auth/edge-identity.js";
+import { ManagedService, createManagedApp, type ManagedAgent, type ServiceConfig, type ServiceDependencies } from "../src/service/managed.js";
+import { routerRouteScope } from "../src/api-reference.js";
 import { personId } from "../src/ledger/registry.js";
 
 const team = "https://example-team.cloudflareaccess.com", aud = "a".repeat(64), root = "/_agent-router/v1";
@@ -151,6 +152,60 @@ describe("CloudflareAccessAuthenticator", () => {
       expect(await rejected(request(method, path, extra))).toMatchObject({ error: "owner_sign_in_required", status: 403 });
   });
 
+  it("asks authorizeOperator only about an operator's request the default refuses, and allows it only on true", async () => {
+    const signer = await key("k1"), jwks = await jwksServer([signer]);
+    const calls: Array<{ principal: OwnerPrincipal; request: OwnerRequest }> = [];
+    let answer: () => unknown = () => true;
+    const auth = new CloudflareAccessAuthenticator(config({ serviceTokens: { "plain.access": owner, "full.access": { owner, access: "owner" } } }), { certsUrl: jwks.url,
+      authorizeOperator: (principal, request) => { calls.push({ principal, request }); return answer() as boolean; } });
+    const operator = await sign(signer, { email: undefined, sub: "", common_name: "plain.access" });
+    const full = await sign(signer, { email: undefined, sub: "", common_name: "full.access" }), human = await sign(signer);
+    const request = (token: string, method: string | undefined, originalUrl?: string, extra: Record<string, string> = {}): OwnerRequest =>
+      ({ headers: { "cf-access-jwt-assertion": token, ...extra }, method, originalUrl });
+    // Never asked: the owner, an owner-access token, reads, the operator's four writes and a request without a method.
+    for (const [token, method, path] of [[human, "POST", `${root}/agents`], [human, "DELETE", `${root}/agents/a`], [full, "POST", `${root}/agents`], [operator, "GET", `${root}/agents`],
+      [operator, "HEAD", "/_other/v1/anything"], [operator, "OPTIONS", `${root}/agents`], [operator, undefined, undefined], [operator, "POST", `${root}/web/socket-tickets`],
+      [operator, "POST", `${root}/web/chats/dm`], [operator, "POST", `${root}/web/chats/c/messages?x=1`], [operator, "POST", `${root}/web/chats/c/read`]] as const)
+      expect(await auth.authenticate(request(token, method, path))).not.toHaveProperty("granted");
+    // An unsafe request without a path is refused without asking.
+    expect(await rejected(auth.authenticate(request(operator, "POST")))).toEqual({ error: "owner_sign_in_required", status: 403, details: undefined });
+    expect(calls).toEqual([]);
+    // Asked with the verified principal and the request itself; true allows this request and marks the principal.
+    const post = request(operator, "POST", `${root}/agents?x=1`, { "x-grant": "g" });
+    const granted = await auth.authenticate(post);
+    expect(granted).toMatchObject({ ownerId: owner, personId: personId(owner), via: "edge-service", operator: true, granted: true });
+    expect(calls).toHaveLength(1);
+    expect(calls[0]!.request).toBe(post);
+    expect(calls[0]!.principal).toEqual({ ownerId: owner, personId: personId(owner), via: "edge-service", operator: true, expiresAt: granted.expiresAt });
+    // The grant is not cached with the assertion: neither the hook's copy nor the returned principal is the cached one.
+    (calls[0]!.principal as { granted?: true; operator?: true }).granted = true;
+    delete (calls[0]!.principal as { operator?: true }).operator;
+    expect(await auth.verify(operator)).toEqual({ ownerId: owner, personId: personId(owner), via: "edge-service", operator: true, expiresAt: granted.expiresAt });
+    expect(await auth.authenticate(request(operator, "GET", `${root}/agents`))).not.toHaveProperty("granted");
+    // Same assertion, next request: decided again.
+    const refused = { error: "owner_sign_in_required", status: 403, details: undefined };
+    answer = () => false;
+    expect(await rejected(auth.authenticate(request(operator, "POST", `${root}/agents?x=1`, { "x-grant": "g" })))).toEqual(refused);
+    expect(calls).toHaveLength(2);
+    // Anything but true refuses, and so does a hook that throws or rejects; its error is not passed on.
+    for (const value of [undefined, null, 1, "true", {}, Promise.resolve("yes"), Promise.resolve(false)]) {
+      answer = () => value;
+      expect(await rejected(auth.authenticate(request(operator, "DELETE", `${root}/agents/a`)))).toEqual(refused);
+    }
+    answer = () => { throw Object.assign(new Error("grant_store_down"), { status: 500 }); };
+    expect(await rejected(auth.authenticate(request(operator, "DELETE", `${root}/agents/a`)))).toEqual(refused);
+    answer = () => Promise.reject(Object.assign(new Error("grant_expired"), { status: 401 }));
+    expect(await rejected(auth.authenticate(request(operator, "DELETE", `${root}/agents/a`)))).toEqual(refused);
+    answer = () => Promise.resolve(true);
+    await expect(auth.authenticate(request(operator, "DELETE", `${root}/agents/a`))).resolves.toMatchObject({ operator: true, granted: true });
+    // A protocol upgrade is not a read: it is asked about, on any path.
+    const before = calls.length;
+    await expect(auth.authenticate(request(operator, "GET", "/_product/v1/terminal", { upgrade: "websocket" }))).resolves.toMatchObject({ granted: true });
+    expect(calls).toHaveLength(before + 1);
+    answer = () => false;
+    expect(await rejected(auth.authenticate(request(operator, "GET", "/_product/v1/terminal", { upgrade: "websocket" })))).toEqual(refused);
+  });
+
   it("accepts the request's own host as Origin over HTTPS, and over HTTP only on loopback", () => {
     const auth = new CloudflareAccessAuthenticator(config({ origins: ["https://console.example.test"] }));
     const allows = (origin: string, host: string) => auth.allowsOrigin({ headers: { origin, host } });
@@ -164,14 +219,14 @@ describe("CloudflareAccessAuthenticator", () => {
   });
 });
 
-async function service(edge: Partial<EdgeIdentityConfig> | undefined, overrides: Partial<ServiceConfig> = {}) {
+async function service(edge: Partial<EdgeIdentityConfig> | undefined, overrides: Partial<ServiceConfig> = {}, dependencies: Partial<ServiceDependencies> = {}) {
   const signer = await key("k1"), jwks = await jwksServer([signer]);
   const stateDir = mkdtempSync(join(tmpdir(), "edge-service-"));
   cleanup.push(() => rmSync(stateDir, { recursive: true, force: true }));
   const managed = new ManagedService({ serverName: "example.test", publicUrl: "https://example.test/_agent-router/v1",
     stateDir, ...(edge ? { edgeIdentity: config(edge) } : {}), ...overrides }, {
     authenticate: async (token) => { if (token === "owner") return owner; if (token === "second") return second; throw new Error("bad_credentials"); },
-    edgeIdentityCerts: jwks.url });
+    edgeIdentityCerts: jwks.url, ...dependencies });
   cleanup.push(() => managed.close());
   const server = createManagedApp(managed).listen(0, "127.0.0.1");
   server.on("upgrade", (req, socket, head) => { if (!managed.web?.upgrade(req, socket, head)) socket.destroy(); });
@@ -232,6 +287,44 @@ describe("owner API with edge identity", () => {
     expect((await t.api(`${root}/web/identities/pairing-codes`, human, "POST", {})).data.error).not.toBe("owner_sign_in_required");
     expect((await t.api(`${root}/agents`, human, "POST", { name: "by-owner" })).status).toBe(201);
     expect((await fetch(`${self}${root}/agents/${agent.id}`, { method: "DELETE", headers: human })).status).toBe(204);
+  });
+
+  it("lets authorizeOperator allow an operator's request, one request at a time and behind the same cross-site guard", async () => {
+    const seen: Array<{ principal: OwnerPrincipal; method: string | undefined; originalUrl: string | undefined; grant: unknown }> = [];
+    const t = await service({}, {}, { authorizeOperator: (principal, request) => {
+      seen.push({ principal, method: request.method, originalUrl: request.originalUrl, grant: request.headers["x-grant"] });
+      if (request.headers["x-grant"] === "broken") throw new Error("grant_store_down");
+      return request.headers["x-grant"] === "manage" && routerRouteScope(request.method!, request.originalUrl!.split("?")[0]!) === "manage";
+    } });
+    const self = `http://127.0.0.1:${t.port}`, assertion = { "cf-access-jwt-assertion": await t.sign({ email: undefined, sub: "", common_name: "1a2b3c4d5e6f.access" }) };
+    const operator = { ...assertion, Origin: self }, granted = { ...operator, "X-Grant": "manage" };
+    const refused = { status: 403, data: { error: "owner_sign_in_required" } };
+    // Reads and the operator's own writes never reach the hook; the owner's requests never do either.
+    expect((await t.api(`${root}/agents`, granted)).status).toBe(200);
+    expect((await t.api(`${root}/web/socket-tickets`, granted, "POST", {})).status).toBe(200);
+    expect((await t.api(`${root}/agents`, { "cf-access-jwt-assertion": await t.sign(), Origin: self, "X-Grant": "manage" }, "POST", { name: "by-owner" })).status).toBe(201);
+    expect(seen).toEqual([]);
+    // The hook gets the request's own headers, method and full path.
+    expect((await t.api(`${root}/agents?x=1`, granted, "POST", { name: "helper" })).status).toBe(201);
+    expect(seen).toEqual([{ principal: expect.objectContaining({ ownerId: owner, via: "edge-service", operator: true }), method: "POST", originalUrl: `${root}/agents?x=1`, grant: "manage" }]);
+    expect(seen[0]!.principal).not.toHaveProperty("granted");
+    // The same assertion without the grant, with a failing hook, or on a route the grant does not cover: refused as before.
+    expect(await t.api(`${root}/agents`, operator, "POST", { name: "other" })).toEqual(refused);
+    expect(await t.api(`${root}/agents`, { ...operator, "X-Grant": "broken" }, "POST", { name: "other" })).toEqual(refused);
+    expect(await t.api(`${root}/web/identities/pairing-codes`, granted, "POST", {})).toEqual(refused);
+    // Express also serves a route under another case or with a trailing slash; `routerRouteScope` knows neither, so the hook refuses.
+    expect(await t.api(`${root}/Agents`, granted, "POST", { name: "other" })).toEqual(refused);
+    expect(await t.api(`${root}/agents/`, granted, "POST", { name: "other" })).toEqual(refused);
+    expect((await t.api(`${root}/Agents/`, { "cf-access-jwt-assertion": await t.sign(), Origin: self }, "POST", { name: "by-owner" })).status).toBe(201);
+    // A granted request is guarded like the owner's: allowed Origin and a body type a form cannot send.
+    expect(await t.api(`${root}/agents`, { ...assertion, "X-Grant": "manage" }, "POST", { name: "other" })).toEqual({ status: 403, data: { error: "origin_not_allowed" } });
+    expect(await t.api(`${root}/agents`, { ...granted, Origin: "https://evil.example.test" }, "POST", { name: "other" })).toEqual({ status: 403, data: { error: "origin_not_allowed" } });
+    expect(await t.api(`${root}/agents`, { ...granted, Origin: "null" }, "POST", { name: "other" })).toEqual({ status: 403, data: { error: "origin_not_allowed" } });
+    expect(await t.api(`${root}/agents`, { ...granted, "Content-Type": "text/plain" }, "POST", undefined, '{"name":"other"}')).toEqual({ status: 415, data: { error: "content_type_not_allowed" } });
+    // A bearer of another owner is still a conflict; a matching one replaces the Origin check, as for the owner.
+    expect(await t.api(`${root}/agents`, { ...granted, Authorization: "Bearer second" }, "POST", { name: "other" })).toEqual({ status: 401, data: { error: "principal_conflict" } });
+    expect((await t.api(`${root}/agents`, { ...assertion, "X-Grant": "manage", Authorization: "Bearer owner" }, "POST", { name: "with-bearer" })).status).toBe(201);
+    expect(t.managed.agents(owner).map((item) => item.name).sort()).toEqual(["by-owner", "helper", "with-bearer"]);
   });
 
   it("never falls back to the bearer, never trusts the plain email header and detects conflicts", async () => {

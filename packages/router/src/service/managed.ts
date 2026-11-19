@@ -66,6 +66,12 @@ export interface ServiceDependencies {
    * identity signs owners in.
    */
   authenticate?: (token: string) => Promise<string>;
+  /**
+   * Decides a request by an operator (a service token without owner access) that the default refuses. Called only
+   * for such a request, after the Access assertion verified. Return true to allow it. The product owns the tokens,
+   * their scopes and their lifetime; Router passes the verified principal and the request.
+   */
+  authorizeOperator?(principal: OwnerPrincipal, request: OwnerRequest): Promise<boolean> | boolean;
   /** Replaces `<teamDomain>/cdn-cgi/access/certs` (tests). */
   edgeIdentityCerts?: URL;
   configure?: (agent: ManagedAgent, runtime: AgentRuntime) => Promise<ServiceExtension | undefined>;
@@ -139,7 +145,8 @@ export class ManagedService {
     });
     if (config.edgeIdentity) assertEdgeOwners(config.edgeIdentity, config.serverName);
     this.edgeIdentity = config.edgeIdentity ? new CloudflareAccessAuthenticator(config.edgeIdentity, { persons: this.persons, origins: [new URL(config.publicUrl).origin],
-      ...(dependencies.edgeIdentityCerts ? { certsUrl: dependencies.edgeIdentityCerts } : {}) }) : undefined;
+      ...(dependencies.edgeIdentityCerts ? { certsUrl: dependencies.edgeIdentityCerts } : {}),
+      ...(dependencies.authorizeOperator ? { authorizeOperator: (principal, request) => dependencies.authorizeOperator!(principal, request) } : {}) }) : undefined;
     this.owners = new CompositeAuthenticator(async (token) => {
       const ownerId = await this.authenticate(token);
       return { personId: personId(ownerId), ownerId, via: "bearer" };
