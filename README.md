@@ -2,6 +2,8 @@
 
 # Agent Kit
 
+**English** | [简体中文](README.zh-CN.md)
+
 **Four building blocks for products built on native coding agents.**
 
 Reach an agent from any chat channel, run any agent harness behind one interface,
