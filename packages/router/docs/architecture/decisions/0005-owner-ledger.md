@@ -2111,7 +2111,9 @@ with ones recorded on the commit before this section was implemented. `display` 
 ### 20.10 Not covered
 
 - Routes into groups and hub rooms.
-- A run's own questions for work submitted without `reply`: they are still not presented.
+- Channel delivery of a run's own questions for work submitted without `reply`. They are a card
+  in the turn's session (web chat API and run API only) and are returned as `pendingCards` of the work event; see the
+  native sessions guide.
 - Presenting one agent's run-bound card in another agent's conversation. A product uses an owner request and resolves
   its own call with the result.
 - Editing or recalling the card message on an external channel when a request closes.

@@ -337,7 +337,8 @@ describe("interactions of a turn that answers the owner", () => {
     expect(h.chat.sent[0]).toMatchObject({ route: { connectionId: "chat", target: OWNER_ON_CHAT }, text: expect.stringContaining("make deploy") });
     const [card] = h.ledger.openCards({ sessionKey: OWNER_CHAT });
     expect(card).toMatchObject({ kind: "approval", status: "pending", callId: "a1", turnId: submitted.taskId, source: "host" });
-    expect(h.chat.sent[0]!.text).toBe("make deploy\nmake deploy\n请点击按钮选择；文字回复不会被当作批准。");
+    // The owner did not start this turn: the message says so before what is asked.
+    expect(h.chat.sent[0]!.text).toBe("［这一轮由其他 Agent 的委托发起，不是你发起的］\nmake deploy\nmake deploy\n请点击按钮选择；文字回复不会被当作批准。");
     // A typed "同意" is a message for the agent, not a decision.
     for (const [id, text] of [["m2", "同意"], ["m3", "yes"], ["m4", "1"]] as const) { h.chat.say(id, text, OWNER_ON_CHAT); await h.round(); }
     expect(h.host.resolved).toEqual([]);
@@ -370,14 +371,75 @@ describe("interactions of a turn that answers the owner", () => {
     expect(h.ledger.cardRecord(card!.cardId)).toMatchObject({ status: "rejected", surface: "web" });
     expect(h.chat.sent.map((item) => item.text)).toContain("已在网页回答。");
   });
-  it("are still not presented for work without a reply route", async () => {
-    const h = await setup();
+  it("are a card in the turn's session for work without a reply route, and no channel is told", async () => {
+    const h = await setup({ buttons: true, notify: {} });
     await ownerTurnOnChat(h);
-    await h.sessions.submit({ eventId: "silent", sessionId: OWNER_CHAT, input: "A schedule.", admission: admission("schedule") });
+    h.push.pushed = [];
+    const sender = { kind: "agent" as const, id: "partner-b", name: "Partner B" };
+    const submitted = await h.sessions.submit({ eventId: "silent", sessionId: OWNER_CHAT, input: "Deploy what I built.", admission: admission("delegation"), sender });
     await h.round();
+    expect(h.sessions.get("silent")).not.toHaveProperty("pendingCards");
     h.host.ask(2, approval);
+    await h.round(); await h.round();
+    expect([h.chat.sent, h.push.pushed]).toEqual([[], []]);
+    const cards = h.ledger.openCards({ sessionKey: OWNER_CHAT });
+    expect(cards).toHaveLength(1);
+    expect(cards[0]).toMatchObject({ kind: "approval", status: "pending", callId: "a1", runId: "run-2", turnId: submitted.taskId, source: "host" });
+    const origin = { kind: "delegation", reference: "reference-1", sender }, text = "［这一轮由 Agent「Partner B」的消息发起，不是你发起的］\nmake deploy\nmake deploy";
+    expect(await h.control.view(cards[0]!.cardId)).toMatchObject({ status: "pending", text, origin, choices: [{ choiceId: "0", label: "同意" }, { choiceId: "1", label: "拒绝" }] });
+    // The product sees that the turn waits for the owner, and where.
+    expect(h.sessions.get("silent")).toMatchObject({ status: "working", pendingCards: [{ cardId: cards[0]!.cardId, chatId: `dm:${AGENT}`, kind: "approval", text, origin,
+      choices: [{ choiceId: "0", label: "同意" }, { choiceId: "1", label: "拒绝" }], deadlineAt: expect.any(String) }] });
+    expect(h.ledger.pendingCards(OWNER_CHAT)).toBe(1);
+    // Nothing typed in a channel decides it, by the owner or by anyone else.
+    for (const [id, words, from] of [["m2", "同意", OWNER_ON_CHAT], ["m3", "1", OWNER_ON_CHAT], ["m4", "同意", "stranger"]] as const) { h.chat.say(id, words, from); await h.round(); }
+    expect(h.host.resolved).toEqual([]);
+    expect(h.ledger.cardRecord(cards[0]!.cardId)!.status).toBe("pending");
+    await expect(h.control.answer(cards[0]!.cardId, { key: "web:text", by: OWNER_PERSON, surface: "web", text: "同意" })).rejects.toMatchObject({ message: "invalid_answer", status: 422 });
+    expect((await h.control.answer(cards[0]!.cardId, { key: "web:1", by: OWNER_PERSON, surface: "web", choiceId: "0" })).status).toBe("accepted");
+    expect(h.host.resolved).toEqual([{ runId: "run-2", callId: "a1", result: { decision: "accept" } }]);
+    expect(h.ledger.cardRecord(cards[0]!.cardId)).toMatchObject({ status: "approved", surface: "web", answeredBy: OWNER_PERSON });
+    expect(h.sessions.get("silent")).not.toHaveProperty("pendingCards");
+    // The answer is not announced in a channel the card never went to.
+    expect(h.chat.sent.map((item) => item.text)).not.toContain("已在网页回答。");
+    h.host.finish(2, "Deployed."); await h.round();
+    expect(h.sessions.get("silent")).toMatchObject({ status: "completed", answer: "Deployed." });
+    expect(h.sessions.get("silent")).not.toHaveProperty("pendingCards");
+  });
+  it("close as expired when the Host timed the call out, and as canceled when the run ends first", async () => {
+    const h = await setup();
+    await h.sessions.submit({ eventId: "late", input: "A schedule.", admission: admission("schedule") });
     await h.round();
-    expect(h.chat.sent).toEqual([]);
-    expect(h.ledger.openCards({ sessionKey: OWNER_CHAT })).toEqual([]);
+    h.host.ask(1, { ...approval, deadlineAt: new Date(Date.now() + 40).toISOString() });
+    await h.round();
+    const { sessionId, pendingCards } = h.sessions.get("late");
+    // A work session of its own is an observed chat.
+    expect(pendingCards).toMatchObject([{ chatId: `obs:${AGENT}:${sessionId}`, text: "［这一轮由定时任务发起，不是你发起的］\nmake deploy\nmake deploy", origin: { kind: "schedule", reference: "reference-1" } }]);
+    await new Promise((resolve) => setTimeout(resolve, 60));
+    h.host.pending[0]!.status = "timed_out"; await h.round();
+    expect(h.ledger.cardRecord(pendingCards![0]!.cardId)).toMatchObject({ status: "expired", surface: "host" });
+    expect((await h.control.answer(pendingCards![0]!.cardId, { key: "web:late", by: OWNER_PERSON, surface: "web", choiceId: "0" })).status).toBe("stale");
+    expect(h.host.resolved).toEqual([]);
+    h.host.ask(1, { ...approval, id: "a2" }); await h.round();
+    const [second] = h.sessions.get("late").pendingCards!;
+    h.host.finish(1, "Stopped waiting."); await h.round();
+    expect(h.ledger.cardRecord(second!.cardId)!.status).toBe("canceled");
+    expect(h.sessions.get("late")).toMatchObject({ status: "completed" });
+    expect(h.sessions.get("late")).not.toHaveProperty("pendingCards");
+  });
+  it("carry no origin when the owner started the turn, as a message or as owner work", async () => {
+    const h = await setup({ buttons: true });
+    h.chat.say("m1", "deploy it", OWNER_ON_CHAT); await h.round();
+    h.host.ask(1, approval); await h.round();
+    expect(h.chat.sent[0]!.text).toBe("make deploy\nmake deploy\n请点击按钮选择；文字回复不会被当作批准。");
+    const [card] = h.ledger.openCards({ sessionKey: OWNER_CHAT });
+    expect(await h.control.view(card!.cardId)).not.toHaveProperty("origin");
+    h.host.pending[0]!.status = "completed"; h.host.finish(1, "Done."); await h.round();
+    await h.sessions.submit({ eventId: "mine", sessionId: OWNER_CHAT, input: "Deploy again.", admission: admission("owner") });
+    await h.round();
+    h.host.ask(2, { ...approval, id: "a2" }); await h.round();
+    const [own] = h.sessions.get("mine").pendingCards!;
+    expect(own).toMatchObject({ text: "make deploy\nmake deploy", chatId: `dm:${AGENT}` });
+    expect(own).not.toHaveProperty("origin");
   });
 });

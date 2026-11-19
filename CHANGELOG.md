@@ -30,6 +30,14 @@ section in the version-bump commit before tagging. Changes up to the versions li
   away: tasks stay queued instead of becoming `unknown`. A submission that provably never left
   Router (`host_offline`) returns to the queue. A restricted Host (`HostPort.restricted`) is
   sent no instructions, tools, native input items, tool output or attachments.
+- **Router:** an approval or question asked by a work turn that has no `reply` route is now a card
+  in the turn's session instead of being dropped: the web chat API lists it, counts it and takes
+  the owner's answer, and it closes like any card of a run. No channel message or push is sent for
+  it. `WorkEventResult.pendingCards` (`cardId`, `chatId`, `kind`, `text`, `choices`,
+  `deadlineAt`, `origin`) reports the cards a work event's turn is waiting on.
+- **Router:** a card of a turn that delegated or scheduled work started carries `origin`
+  (`kind`, `reference`, `sender`), and its text begins with a line that says the owner did not
+  start the turn. This also applies to such turns submitted with `reply`.
 - **Router:** `HostBindingProvider.http` and `checkChannels` take a `HostTransport`
   (`ServiceHttp` is one). `HostRuns` holds the run operations of `HttpAgentHost` for any transport.
 

@@ -214,8 +214,38 @@ still on the transcript.
 `reply` is accepted only for the owner conversation (`reply_requires_owner_conversation`) and
 not for compaction (`compaction_reply_unsupported`). The turn queues behind a running turn of
 the conversation like every other turn. It does not get the channel tool: that needs a
-received message. Work submitted without `reply` behaves as before, including that its
-questions are not presented.
+received message.
+
+### Approvals and questions of a work turn
+
+An approval or question that a work turn's run asks is a card in the turn's session, like one a
+channel turn asks, with the same answer path and the same closing: `expired` when the Host timed
+the call out, `canceled` when the run ended first. With `reply` the question is also sent along
+the route. Without `reply` there is only the card: no channel message and no push. The owner
+answers it through the web chat API (`POST /web/chats/:chatId/cards/:cardId/answer`, for the
+owner conversation `dm:<agentId>`) or through the run API; an approval takes a choice, never text.
+A card in a work session of its own (`obs:<agentId>:<sessionId>`) is listed there and answered
+through the run API, because observed chats are read-only.
+
+While such cards wait, `get`, `lookup`, `wait` and `GET .../work-events/:eventId` return them:
+
+```ts
+pendingCards?: Array<{
+  cardId: string; chatId: string;            // the web chat that shows the card
+  kind: "approval" | "question" | "sensitive" | "connector_approval";
+  text: string; choices: Array<{ choiceId: string; label: string }>;
+  deadlineAt: string | null;
+  origin?: { kind: "delegation" | "schedule"; reference: string; sender?: { kind: "agent"; id: string; name: string } };
+}>
+```
+
+The field is absent when nothing waits. `wait` returns as soon as it changes. Router tells no other
+conversation: a product that wants the party who sent the work to know relays it itself.
+
+`origin` is on the card (`CardView.origin`) and in `pendingCards` when the owner did not start
+the turn: the admission `kind` and `reference` and the `sender` of the submission. The card's
+text then begins with a line that says so, naming the sender when the submission has one, on
+every surface. Pass `sender` with delegated work so the owner sees whose message asks.
 
 `extension.communication.input(turnId)` returns the route of such a turn as an input with
 `routed` set, and `isOwnerInput` is true for it because the route is the owner's. It is not

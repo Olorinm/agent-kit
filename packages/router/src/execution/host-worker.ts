@@ -11,7 +11,7 @@ import { HOST_OFFLINE, runtimeWorkingDirectory } from "./host.js";
 import type { HostTools, HostToolResult } from "./tools.js";
 import type { WorkDependencyWait } from "./sessions.js";
 import { AgentLedger, type TurnState } from "../ledger/ledger.js";
-import { cardBody, cardKind, STEER_COMMAND, STOP_COMMAND, type LedgerControl } from "../ledger/control.js";
+import { cardBody, cardKind, cardOriginLine, STEER_COMMAND, STOP_COMMAND, type CardOrigin, type LedgerControl } from "../ledger/control.js";
 import { textDelivery, toolDelivery, type WorkInput, type WorkSender } from "./delivery.js";
 
 interface ToolReceipt { hash: string; phase: "executing" | "completed" | "uncertain"; result?: HostToolResult; }
@@ -429,34 +429,50 @@ export class HostWorker {
     }
     this.store.set("communication_run_events", binding.runId, { cursor, text });
   }
+  /** Who started the turn, when it was work the owner did not submit: the admission and sender of its submission. */
+  private origin(taskId: string): CardOrigin | undefined {
+    const authored = this.store.get<WorkInput>("work_session_inputs", taskId), admission = authored?.admission;
+    if (!admission || admission.kind === "owner") return undefined;
+    return { kind: admission.kind, reference: admission.reference, ...(authored.sender ? { sender: authored.sender } : {}) };
+  }
+  /**
+   * An interaction of a run becomes a card in the turn's session. A turn with a channel input (a received message, or
+   * work with an owner route) also gets the question as a message on that route. A turn without one has the card
+   * only: it is shown and answered where cards are (the web API, the run API), never in a channel.
+   */
   private present(binding: RunBinding, call: HostCall) {
-    const core = this.communication!, input = core.input(binding.taskId); if (!input) return;
-    if (this.store.get("communication_questions", call.id)) return;
-    const view = interaction(call);
+    const core = this.communication!, input = core.input(binding.taskId), cardId = HostWorker.card(call);
+    if (input ? this.store.get("communication_questions", call.id) : AgentLedger.open(this.store).card(cardId)) return;
+    const view = interaction(call), origin = this.origin(binding.taskId);
+    // Whoever decides sees whose turn this is before what it asks for.
+    const question = origin ? `${cardOriginLine(origin)}\n${view.text}` : view.text;
     const buttons = view.choices.map((choice, index) => {
       const token = digest(key(call.id, String(index))).slice(0, 32);
-      this.store.set("communication_actions", token, { callId: call.id, result: choice.result });
+      if (input) this.store.set("communication_actions", token, { callId: call.id, result: choice.result });
       return { label: choice.label, token };
     });
-    const nativeButtons = core.capabilities(binding.taskId)?.buttons;
-    // An approval is decided by a button; a channel without buttons shows the request and points to the web console.
-    const choices = buttons.length && !nativeButtons && !view.approval ? "\n" + buttons.map((button, index) => `${index + 1}. ${button.label}`).join("\n") : "";
-    const instructions = view.sensitive ? "" : view.approval ? `\n${nativeButtons ? APPROVAL_BY_BUTTON : APPROVAL_ELSEWHERE}` : buttons.length ? nativeButtons ? "\n可点击选项，或直接回复选项名称/编号。" : "\n请回复选项名称或编号。" : "\n请直接回复答案；多个问题请用 JSON 按问题填写。";
-    const text = view.text + choices + instructions;
-    const noticeId = core.notice(input, text, `question:${call.id}`, { text, ...(nativeButtons ? { buttons } : {}) });
-    this.store.set("communication_questions", call.id, { call, taskId: binding.taskId, conversationId: binding.contextId, source: input.source, connectionId: input.connectionId, noticeId, closed: false });
+    let noticeId: string | undefined;
+    if (input) {
+      const nativeButtons = core.capabilities(binding.taskId)?.buttons;
+      // An approval is decided by a button; a channel without buttons shows the request and points to the web console.
+      const choices = buttons.length && !nativeButtons && !view.approval ? "\n" + buttons.map((button, index) => `${index + 1}. ${button.label}`).join("\n") : "";
+      const instructions = view.sensitive ? "" : view.approval ? `\n${nativeButtons ? APPROVAL_BY_BUTTON : APPROVAL_ELSEWHERE}` : buttons.length ? nativeButtons ? "\n可点击选项，或直接回复选项名称/编号。" : "\n请回复选项名称或编号。" : "\n请直接回复答案；多个问题请用 JSON 按问题填写。";
+      const text = question + choices + instructions;
+      noticeId = core.notice(input, text, `question:${call.id}`, { text, ...(nativeButtons ? { buttons } : {}) });
+      this.store.set("communication_questions", call.id, { call, taskId: binding.taskId, conversationId: binding.contextId, source: input.source, connectionId: input.connectionId, noticeId, closed: false });
+    }
     this.ledger((ledger) => {
-      const cardId = HostWorker.card(call), sessionKey = ledger.sessionForContext(binding.contextId);
+      const sessionKey = ledger.sessionForContext(binding.contextId) ?? (input ? undefined : ledger.turn(binding.taskId)?.sessionKey);
       if (!sessionKey || ledger.card(cardId)) return;
       const kind = cardKind(call, Boolean(view.sensitive)), deadline = Date.parse(call.deadlineAt);
-      const card = cardBody({ cardId, agentId: this.agentId, turnId: binding.taskId, claimId: binding.claimId, call, text: view.text,
-        choices: view.choices.map((choice) => choice.label), kind });
+      const card = cardBody({ cardId, agentId: this.agentId, turnId: binding.taskId, claimId: binding.claimId, call, text: question,
+        choices: view.choices.map((choice) => choice.label), kind, ...(origin ? { origin } : {}) });
       const event = ledger.append(sessionKey, { kind: "card", role: "assistant", senderType: "agent", senderId: this.agentId, turnId: binding.taskId,
         idempotencyKey: `card:${cardId}`, body: { card } }).event;
       ledger.addCard({ cardId, callId: call.id, runId: call.runId, claimId: binding.claimId, turnId: binding.taskId, sessionKey, eventId: event.eventId,
         kind, deadlineAt: Number.isFinite(deadline) ? deadline : null });
       buttons.forEach((button, index) => ledger.addCardToken(button.token, cardId, String(index), view.choices[index]!.result));
-      ledger.attachDelivery(noticeId, event.eventId);
+      if (noticeId) ledger.attachDelivery(noticeId, event.eventId);
     });
   }
   /** Execution contexts of later windows (`<key>.w<n>`) belong to the same session (ADR 16.3). */

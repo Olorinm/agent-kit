@@ -36,6 +36,7 @@ export function createRouter(config: ServiceConfig, options: {
 export { ManagedService, type ManagedAgent, type ServiceConfig, type ServiceDependencies, type ServiceExtension } from "./service/managed.js";
 export type { AgentRuntime } from "./agents/runtime.js";
 export { ConnectionConfiguration, type HostBindingProvider } from "./connections/configuration.js";
+export type { CardOrigin, CardView } from "./ledger/control.js";
 export { WorkError as RouterError } from "./execution/work.js";
 export { HostLinks, HOST_LINK_SOCKET_PATH, HOST_LINK_ENROLL_PATH, type HostLink, type HostLinkEvent } from "./execution/host-links.js";
 export { HttpAgentHost, HostRuns, HOST_OFFLINE, type HostTransport, type HostPort, type HostStartInput, type HostAdmission, type NativeSessionInput, type HostRun, type HostCall } from "./execution/host.js";
@@ -48,4 +49,4 @@ export { routerApiReference, routerRouteScope, type RouterApiRoute, type RouterR
 
 export { RunObservation, type CommunicationTask, type RunReference, type TaskFilter } from "./execution/observation.js";
 export { WorkSessions, type WorkSessionSubmission, type WorkEventResult, type WorkSessionWaitOptions, type WorkDependencyWait,
-  type WorkReplyReceipt, type WorkSender, type WorkDisplay, type OwnerRequestInput, type OwnerRequestResult, type Settlement } from "./execution/sessions.js";
+  type WorkReplyReceipt, type WorkPendingCard, type WorkSender, type WorkDisplay, type OwnerRequestInput, type OwnerRequestResult, type Settlement } from "./execution/sessions.js";

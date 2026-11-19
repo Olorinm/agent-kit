@@ -10,6 +10,7 @@ import { digest, key } from "../execution/protocol.js";
 import { WorkError, type CliWork } from "../execution/work.js";
 import { RETRY_CALL_PREFIX, type AgentLedger, type CardKind, type CardRecord, type CardStatus, type CardSurface, type LedgerEvent } from "./ledger.js";
 import { closedRequestReply, expireRequests, requestInput, type WorkDisplay } from "./requests.js";
+import type { WorkSender } from "../execution/delivery.js";
 import { WEB_CONNECTION } from "./surfaces.js";
 
 /** ADR 0005 16.1: the private browser link of a handoff card is never stored in the transcript. */
@@ -27,15 +28,24 @@ export function cardKind(call: Pick<HostCall, "id" | "name">, sensitive: boolean
   if (call.id.startsWith("mau-approval:")) return "connector_approval";
   return approvalMethod(call.name) && !call.id.startsWith("mau-handoff:") ? "approval" : "question";
 }
+/**
+ * Who started the turn a card belongs to, when that was not the owner: the admission of the work submission
+ * (`WorkSessions.submit`) and its `sender`, both authored by the embedding product. Absent on a card of a turn the
+ * owner started.
+ */
+export interface CardOrigin { kind: "delegation" | "schedule"; reference: string; sender?: WorkSender }
+/** The first line of such a card's text, so every surface that shows the text says whose turn asks. */
+export const cardOriginLine = (origin: CardOrigin) => origin.kind === "schedule" ? "［这一轮由定时任务发起，不是你发起的］"
+  : origin.sender ? `［这一轮由 Agent「${origin.sender.name.replace(/\s+/g, " ")}」的消息发起，不是你发起的］` : "［这一轮由其他 Agent 的委托发起，不是你发起的］";
 /** The card body stored in the `card` event. Handoff cards keep no private link (decision 15.2.14). */
 export function cardBody(input: { cardId: string; agentId: string; turnId: string; claimId: string; call: HostCall; text: string;
-  choices: string[]; kind: CardKind }) {
+  choices: string[]; kind: CardKind; origin?: CardOrigin }) {
   const handoff = input.call.id.startsWith("mau-handoff:"), deadline = Date.parse(input.call.deadlineAt);
   return { cardId: input.cardId, agentId: input.agentId, turnId: input.turnId, claimId: input.claimId, callId: input.call.id, kind: input.kind,
     source: input.call.id.startsWith("mau-approval:") ? "mau-approval" : handoff ? "mau-handoff" : "host",
     text: handoff ? redactLinks(input.text) : input.text, choices: input.choices.map((label, index) => ({ choiceId: String(index), label })),
     freeText: input.kind === "question", native: { method: input.call.name, params: handoff ? redactDeep(input.call.input) : input.call.input ?? null },
-    deadlineAt: Number.isFinite(deadline) ? new Date(deadline).toISOString() : null };
+    deadlineAt: Number.isFinite(deadline) ? new Date(deadline).toISOString() : null, ...(input.origin ? { origin: input.origin } : {}) };
 }
 const same = (a: unknown, b: unknown) => JSON.stringify(a ?? null) === JSON.stringify(b ?? null);
 
@@ -45,6 +55,8 @@ export interface CardView {
   deadlineAt: string | null; status: CardStatus;
   /** What the product attached to an owner request (`WorkSessions.request` `display`). Router does not interpret it. */
   display?: WorkDisplay;
+  /** Set when the card's turn was started by delegated or scheduled work, not by the owner. */
+  origin?: CardOrigin;
 }
 export interface AnswerInput {
   key: string; by: string | null; surface: CardSurface;
