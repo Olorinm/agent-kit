@@ -15,12 +15,17 @@ export interface OwnerPrincipal {
   expiresAt?: number;
   /** A service token without owner access: it reads as the owner and writes only what `restrictOperator` admits. */
   operator?: true;
+  /** Set on an operator for the one request that `authorizeOperator` allowed beyond the operator's default. */
+  granted?: true;
 }
 /**
  * `method` is set for HTTP requests; a request without it (socket re-checks) is treated as safe. `originalUrl` is the
  * full request path as received (Express `originalUrl`); an operator's unsafe request without it is refused.
+ * `headers` are the request's own headers: `authorizeOperator` reads the product's token from them.
  */
 export interface OwnerRequest { headers: IncomingHttpHeaders; method?: string | undefined; originalUrl?: string | undefined }
+/** Decides an operator's request that the default refuses; only `true` allows it. See `ServiceDependencies.authorizeOperator`. */
+export type OperatorAuthorizer = (principal: OwnerPrincipal, request: OwnerRequest) => Promise<boolean> | boolean;
 export interface OwnerAuthenticator {
   authenticate(request: OwnerRequest): Promise<OwnerPrincipal>;
   /** Cross-site check for a browser WebSocket upgrade made with an edge principal's ticket. */
@@ -76,11 +81,14 @@ const OPERATOR_WRITES = /^\/_agent-router\/v1\/web\/(?:socket-tickets|chats\/dm|
  * a read) and make the requests of `OPERATOR_WRITES`; everything else needs the owner.
  */
 export function restrictOperator(principal: OwnerPrincipal, request: OwnerRequest) {
-  if (!principal.operator || request.method === undefined) return;
+  if (!operatorDefault(principal, request)) throw new WorkError("owner_sign_in_required", 403);
+}
+/** True for every request of a principal that is not an operator, and for an operator's request that needs no grant. */
+function operatorDefault(principal: OwnerPrincipal, request: OwnerRequest): boolean {
+  if (!principal.operator || request.method === undefined) return true;
   const method = request.method.toUpperCase();
-  if (SAFE_METHODS.has(method) ? request.headers.upgrade === undefined
-    : method === "POST" && OPERATOR_WRITES.test((request.originalUrl ?? "").split("?")[0]!)) return;
-  throw new WorkError("owner_sign_in_required", 403);
+  return SAFE_METHODS.has(method) ? request.headers.upgrade === undefined
+    : method === "POST" && OPERATOR_WRITES.test((request.originalUrl ?? "").split("?")[0]!);
 }
 const LOOPBACK = new Set(["localhost", "127.0.0.1", "[::1]"]);
 const unavailable = (error: unknown) => !(error instanceof errors.JOSEError) || error instanceof errors.JWKSTimeout ||
@@ -99,6 +107,8 @@ export class CloudflareAccessAuthenticator implements OwnerAuthenticator {
   constructor(config: EdgeIdentityConfig, private readonly options: { persons?: PersonRegistry; now?: () => number;
     /** Allowed browser origins when the config names none (the service's public origin). */
     origins?: string[];
+    /** Asked about an operator's request that `restrictOperator` refuses; without it every such request is refused. */
+    authorizeOperator?: OperatorAuthorizer;
     /** Test override for `<teamDomain>/cdn-cgi/access/certs`. */
     certsUrl?: URL } = {}) {
     this.config = edgeIdentityConfigSchema.parse(config);
@@ -145,9 +155,22 @@ export class CloudflareAccessAuthenticator implements OwnerAuthenticator {
   async authenticate(request: OwnerRequest): Promise<OwnerPrincipal> {
     const token = CloudflareAccessAuthenticator.assertion(request);
     if (!token) throw new WorkError("edge_identity_invalid", 401);
-    const principal = await this.verify(token);
-    restrictOperator(principal, request);
-    return principal;
+    return this.admit(await this.verify(token), request);
+  }
+  /**
+   * `restrictOperator` with the product's say: a request the default refuses passes when `authorizeOperator` returns
+   * exactly `true`. The answer holds for this request only: the principal returned is a copy marked `granted`, and the
+   * cached one is never changed. A hook that throws refuses, and its error is not passed on.
+   */
+  async admit(principal: OwnerPrincipal, request: OwnerRequest): Promise<OwnerPrincipal> {
+    if (operatorDefault(principal, request)) return principal;
+    const authorize = this.options.authorizeOperator;
+    let allowed: unknown = false;
+    if (authorize && typeof request.originalUrl === "string") {
+      try { allowed = await authorize({ ...principal }, request); } catch { allowed = false; }
+    }
+    if (allowed !== true) throw new WorkError("owner_sign_in_required", 403);
+    return { ...principal, granted: true };
   }
   async verify(token: string): Promise<OwnerPrincipal> {
     const hash = digest(["edge-assertion", token]), now = this.now(), cached = this.cache.get(hash);
@@ -215,8 +238,7 @@ export class CompositeAuthenticator implements OwnerAuthenticator {
       const assertion = CloudflareAccessAuthenticator.assertion(request);
       const deny = this.edge.config.bearer === "deny";
       if (assertion) {
-        const principal = await this.edge.verify(assertion);
-        restrictOperator(principal, request);
+        const principal = await this.edge.admit(await this.edge.verify(assertion), request);
         if (token && !deny) {
           const other = await this.bearer(token).catch(() => undefined);
           if (other?.ownerId !== principal.ownerId) throw new WorkError("principal_conflict", 401);

@@ -94,7 +94,19 @@ await router.start();
 | `/agents/:id/communication` | 渠道和 Host 状态；其下的 `sessions`、`work-events`、`tasks`、`runs` 用于工作会话和运行观察 |
 | `/web/...` | 账本 Web API：聊天、事件、消息、卡片、群组、附件、身份和 socket ticket |
 
-完整的路由清单以数据形式导出：`routerApiReference`（`src/api-reference.ts`）每条路由一项，包含方法、路径、一句话说明、请求体的 JSON Schema（路由有校验时），以及默认服务令牌可调用时的 `operator: true`。有测试把它与 Express 应用上实际注册的路由逐一比对，因此不会落后于代码。
+完整的路由清单以数据形式导出：`routerApiReference`（`src/api-reference.ts`）每条路由一项，包含方法、路径、一句话说明、请求体的 JSON Schema（路由有校验时）、默认服务令牌可调用时的 `operator: true`，以及 `scope`。有测试把它与 Express 应用上实际注册的路由逐一比对，因此不会落后于代码。
+
+`scope` 给请求分类，供需要让服务令牌超出默认权限的产品使用（见[让服务令牌做更多事](docs/guides/managed-agents.md#letting-a-service-token-do-more)）：
+
+| Scope | 请求 |
+| --- | --- |
+| `read` | 所有 `GET` 和事件 socket；申请 socket ticket、移动已读标记 |
+| `chat` | 打开私聊、发送和撤回消息、上传附件、引导或取消一轮对话、开启新的上下文窗口 |
+| `approve` | 回答卡片（审批、提问、确认）或待处理的 Host 调用 |
+| `manage` | 创建和删除 Agent；连接及其允许名单、接入任务和检查；群组；`communication` 下的会话、工作事件、任务和运行 |
+| `owner` | 只有登录的所有者本人：清空聊天历史、配对码、解除身份关联 |
+
+`routerRouteScope(method, path)` 返回一个具体请求路径的 scope；路径与上述路由的写法不完全一致时返回 `undefined`。
 
 ## 文档
 

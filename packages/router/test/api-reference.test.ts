@@ -6,7 +6,7 @@ import type { Duplex } from "node:stream";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createRouter, routerApiReference } from "../src/server.js";
-import { SOCKET_PATH } from "../src/api-reference.js";
+import { SOCKET_PATH, routerRouteScope } from "../src/api-reference.js";
 
 const cleanup: Array<() => void | Promise<void>> = [];
 afterEach(async () => { for (const close of cleanup.splice(0).reverse()) await close(); vi.restoreAllMocks(); });
@@ -84,5 +84,50 @@ describe("routerApiReference", () => {
     expect(writes.sort()).toEqual(["POST /_agent-router/v1/web/chats/:chatId/messages", "POST /_agent-router/v1/web/chats/:chatId/read",
       "POST /_agent-router/v1/web/chats/dm", "POST /_agent-router/v1/web/socket-tickets"]);
     for (const route of routerApiReference) if (route.method === "GET") expect(route.operator, route.path).toBe(true);
+  });
+
+  it("gives every route a scope: reads are read, and what an operator may write without a grant is read or chat", () => {
+    for (const route of routerApiReference) {
+      expect(["read", "chat", "approve", "manage", "owner"], route.path).toContain(route.scope);
+      if (route.method === "GET") expect(route.scope, route.path).toBe("read");
+    }
+    const scopes = Object.fromEntries(routerApiReference.filter((route) => route.operator && route.method !== "GET").map((route) => [`${route.method} ${route.path}`, route.scope]));
+    // The two writes of substance are `chat`; an operator makes them without a grant all the same.
+    expect(scopes).toEqual({ "POST /_agent-router/v1/web/socket-tickets": "read", "POST /_agent-router/v1/web/chats/:chatId/read": "read",
+      "POST /_agent-router/v1/web/chats/dm": "chat", "POST /_agent-router/v1/web/chats/:chatId/messages": "chat" });
+    // Only the signed-in owner: purging history and everything that links an identity.
+    expect(routerApiReference.filter((route) => route.scope === "owner").map((route) => `${route.method} ${route.path}`).sort()).toEqual([
+      "DELETE /_agent-router/v1/web/identities/:identityId", "DELETE /_agent-router/v1/web/identities/pairing-codes/:codeId",
+      "POST /_agent-router/v1/web/chats/:chatId/purge", "POST /_agent-router/v1/web/identities/pairing-codes"]);
+    expect(routerApiReference.filter((route) => route.scope === "approve").map((route) => `${route.method} ${route.path}`).sort()).toEqual([
+      "POST /_agent-router/v1/agents/:agentId/communication/calls/:callId/result", "POST /_agent-router/v1/agents/:agentId/communication/runs/:claimId/calls/:callId/result",
+      "POST /_agent-router/v1/web/chats/:chatId/cards/:cardId/answer"]);
+  });
+
+  it("finds the scope of a concrete request path, exactly", () => {
+    const root = "/_agent-router/v1";
+    // Every entry resolves to its own scope when each `:param` is filled in.
+    for (const route of routerApiReference) expect(routerRouteScope(route.method, route.path.replace(/:[A-Za-z]+/g, "x1")), `${route.method} ${route.path}`).toBe(route.scope);
+    expect(routerRouteScope("GET", "/health/live")).toBe("read");
+    expect(routerRouteScope("POST", `${root}/agents`)).toBe("manage");
+    expect(routerRouteScope("DELETE", `${root}/agents/agt_1`)).toBe("manage");
+    expect(routerRouteScope("POST", `${root}/web/chats/dm`)).toBe("chat");
+    expect(routerRouteScope("POST", `${root}/web/chats/dm%3Aagent/messages`)).toBe("chat");
+    expect(routerRouteScope("POST", `${root}/web/chats/c/cards/k/answer`)).toBe("approve");
+    expect(routerRouteScope("POST", `${root}/web/chats/c/purge`)).toBe("owner");
+    // A literal segment wins nothing over a parameter of another method or depth: these are distinct routes.
+    expect(routerRouteScope("GET", `${root}/web/identities/pairing-codes`)).toBe("read");
+    expect(routerRouteScope("POST", `${root}/web/identities/pairing-codes`)).toBe("owner");
+    expect(routerRouteScope("DELETE", `${root}/web/identities/pairing-codes`)).toBe("owner");
+    // An encoded slash stays inside its segment and never stands for a separator.
+    expect(routerRouteScope("POST", `${root}/web/chats/a%2Fb/messages`)).toBe("chat");
+    for (const [method, path] of [
+      ["POST", `${root}/web/chats/c/messages/extra`], ["POST", `${root}/web/chats/c/messages/`], ["POST", `${root}/web/chats/dm/`], ["POST", `${root}/web/chats//messages`],
+      ["POST", `${root}/web/chats/a/b/messages`], ["POST", `${root}/web/chats%2Fdm`], ["POST", `${root}/web/chats/c%2Fmessages`], ["POST", `${root}/web/chats/c/messages?x=1`],
+      ["POST", `${root}/web/chats/c/messages#x`], ["POST", `${root}/web/chats/c/Messages`], ["POST", `${root}/WEB/chats/c/messages`], ["POST", `/prefix${root}/web/chats/dm`],
+      ["POST", `${root}/web/chats/dm\n`], ["POST", `${root}/web/chats/c/purge\n`], ["POST", "/_other/v1/web/chats/dm"], ["POST", `${root}/web/chats`], ["POST", `${root}`], ["POST", ""], ["POST", "/"],
+      ["PUT", `${root}/web/chats/c/messages`], ["DELETE", `${root}/web/chats/dm`], ["post", `${root}/web/chats/dm`], ["HEAD", `${root}/agents`], ["GET", `${root}/web/socket-tickets`],
+      ["POST", `${root}/agents/a/connections/c/access`], ["POST", "/health/live"], ["GET", "/health/liveX"], ["GET", "/healthXlive"],
+    ] as const) expect(routerRouteScope(method, path), `${method} ${path}`).toBeUndefined();
   });
 });

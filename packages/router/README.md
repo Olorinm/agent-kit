@@ -95,9 +95,23 @@ All routes except `GET /health/live` are under `/_agent-router/v1` and require a
 | `/web/...` | Ledger web API: chats, events, messages, cards, groups, attachments, identities and socket tickets |
 
 The complete list is exported as data: `routerApiReference` (`src/api-reference.ts`) has one entry per route with its
-method, path, a one-sentence summary, the JSON Schema of the request body where the route validates one, and
-`operator: true` where a default service token may make the request. A test compares it with the routes registered on
-the Express app, so it cannot fall behind the code.
+method, path, a one-sentence summary, the JSON Schema of the request body where the route validates one,
+`operator: true` where a default service token may make the request, and a `scope`. A test compares it with the routes
+registered on the Express app, so it cannot fall behind the code.
+
+`scope` classes the request for a product that lets a service token do more than the default (see
+[Letting a service token do more](docs/guides/managed-agents.md#letting-a-service-token-do-more)):
+
+| Scope | Requests |
+| --- | --- |
+| `read` | Every `GET` and the event socket; requesting a socket ticket and moving a read marker |
+| `chat` | Opening a DM, sending and redacting a message, uploading an attachment, steering or cancelling a turn, starting a new context window |
+| `approve` | Answering a card (approval, question, confirmation) or a pending Host call |
+| `manage` | Creating and deleting agents; connections, their allowlists, setup jobs and checks; groups; the `communication` routes for sessions, work events, tasks and runs |
+| `owner` | Only the signed-in owner: purging a chat's history, pairing codes and unlinking an identity |
+
+`routerRouteScope(method, path)` returns the scope of a concrete request path, or `undefined` when it is not one of
+these routes exactly as written.
 
 ## Documentation
 

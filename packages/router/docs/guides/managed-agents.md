@@ -68,6 +68,62 @@ With an authenticator, a bearer token is checked as follows:
 `GET /_agent-router/v1/account` returns the authenticated owner: `owner`, `personId`, `via` (`edge`, `edge-service` or
 `bearer`) and, for an edge login, `email`.
 
+### Letting a service token do more
+
+A product that embeds Router can allow single requests of an operator service token beyond the default. It passes
+`dependencies.authorizeOperator`:
+
+```ts
+authorizeOperator?(principal: OwnerPrincipal, request: OwnerRequest): Promise<boolean> | boolean;
+```
+
+Router calls it only for a request that would otherwise get `403 owner_sign_in_required`: the Access assertion has
+verified, the principal is an operator, and the request is neither a read nor one of the operator's four writes. This
+includes a protocol upgrade (`GET` with an `Upgrade` header) and the product's own routes that authenticate through
+`authenticateRequest`. The owner's sign-in, a token with `"access": "owner"`, and a request the default already allows
+never reach it.
+
+- `request` is the request itself: `method`, `originalUrl` (the full path with the query string) and the request's
+  own `headers`. The product reads its token from a header of its choice, checks that the token belongs to
+  `principal.ownerId`, has not expired or been revoked, and covers this request. Router stores no such tokens and
+  knows nothing of their scopes or lifetime.
+- Only the value `true` allows the request. Any other value, a thrown error or a rejected promise gives
+  `403 owner_sign_in_required`; the hook's error is not passed on.
+- The decision holds for that one request. It is not cached with the assertion, so the next request is asked about
+  again. The principal of an allowed request is still an operator and carries `granted: true`.
+- The hook runs before the cross-site guard and may run for a request that the guard then refuses, so it must only
+  decide and must not use up a token. An allowed request is guarded like the owner's: without a matching bearer token
+  it needs an allowed `Origin` and a body type a form cannot send.
+
+To decide by kind of request, every entry of `routerApiReference` has a `scope`:
+
+| Scope | Requests |
+| --- | --- |
+| `read` | Every `GET` and the event socket; requesting a socket ticket and moving a read marker |
+| `chat` | Taking part in conversations as the owner: opening a DM, sending and redacting a message, uploading an attachment, steering or cancelling a turn, starting a new context window |
+| `approve` | Deciding on behalf of the owner: answering a card (approval, question, confirmation) or a pending Host call |
+| `manage` | Creating and deleting agents; connections, their allowlists, setup jobs and checks; groups; the `communication` routes for sessions, work events, tasks and runs |
+| `owner` | Only the signed-in owner: purging a chat's history, pairing codes and unlinking an identity |
+
+An operator sends a message and opens a DM (`chat`) without any grant, as before. Router assigns the scopes and
+enforces none of them: a hook that returns `true` for an `owner` request allows it, so a product should never issue a
+grant for that scope.
+
+`routerRouteScope(method, path)` returns the scope of a concrete request. `path` is the request path without the query
+string, compared exactly as received: the method in upper case, case-sensitive, nothing decoded, no trailing slash,
+each `:param` one non-empty segment. It returns `undefined` for anything else, and the hook must refuse such a request
+on the Router routes: Express also serves a route under another letter case or with a trailing slash, and
+`routerRouteScope` deliberately does not recognise those forms.
+
+```ts
+authorizeOperator: async (principal, request) => {
+  const scope = routerRouteScope(request.method ?? "", (request.originalUrl ?? "").split("?")[0]);
+  if (scope === undefined || scope === "read" || scope === "owner") return false;
+  const grant = await grants.find(request.headers["x-example-grant"]);
+  return grant !== undefined && grant.owner === principal.ownerId && grant.expiresAt > Date.now() && grant.scopes.includes(scope);
+}
+```
+
 ## Agents
 
 All routes are under `/_agent-router/v1` and act on the authenticated owner's agents.

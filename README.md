@@ -35,7 +35,7 @@ The fastest way to see something work is Host with an agent you already have ins
 
 ```sh
 mkdir my-agent && cd my-agent && npm init -y
-npm install https://github.com/Olorinm/agent-kit/releases/download/v0.11.0-alpha.7/olorinm-agent-host-0.11.0-alpha.7.tgz
+npm install https://github.com/Olorinm/agent-kit/releases/download/v0.11.0-alpha.8/olorinm-agent-host-0.11.0-alpha.8.tgz
 
 npx agent-host init --kernel codex --cwd . --config host.json
 npx agent-host doctor --config host.json
@@ -85,9 +85,9 @@ CI runs one workflow per package (`.github/workflows/ci-<package>.yml`) when tha
 <summary>Cutting a release</summary>
 
 ```sh
-node scripts/set-version.mjs 0.11.0-alpha.7   # every package.json and lockfile
-# add a "## [0.11.0-alpha.7]" section to CHANGELOG.md, commit, wait for CI
-git tag v0.11.0-alpha.7 && git push origin v0.11.0-alpha.7
+node scripts/set-version.mjs 0.11.0-alpha.8   # every package.json and lockfile
+# add a "## [0.11.0-alpha.8]" section to CHANGELOG.md, commit, wait for CI
+git tag v0.11.0-alpha.8 && git push origin v0.11.0-alpha.8
 ```
 
 The [release workflow](.github/workflows/release.yml) builds every package at the tagged commit on Linux with a

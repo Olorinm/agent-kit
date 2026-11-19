@@ -20,10 +20,11 @@ await router.start();
 application with every route under `/_agent-router/v1`. `upgrade` handles the event socket of the web API and returns
 `false` for any other upgrade request.
 
-The package also exports `routerApiReference`, an array of `{ method, path, summary, body?, operator? }` with one entry
-for every route of `app` and for the event socket. `path` is the full Express path, `body` the JSON Schema of the
-request body, and `operator: true` marks a request a default service token may make. A product that adds its own
-routes can merge its entries with this array to publish one API list.
+The package also exports `routerApiReference`, an array of `{ method, path, summary, body?, operator?, scope }` with
+one entry for every route of `app` and for the event socket. `path` is the full Express path, `body` the JSON Schema of
+the request body, `operator: true` marks a request a default service token may make, and `scope` (`read`, `chat`,
+`approve`, `manage` or `owner`) classes the request; `routerRouteScope(method, path)` looks it up for a concrete
+request path. A product that adds its own routes can merge its entries with this array to publish one API list.
 
 ## Configuration
 
@@ -42,6 +43,9 @@ Owner requests are authenticated by the edge identity (`config.edgeIdentity`, a 
 product passes `dependencies.authenticate`, by bearer token. `authenticate(token)` resolves a token to an owner id in
 the service's namespace or throws. Without it only the edge identity signs owners in. Trusted application code can call
 `router.service.authenticateRequest(request)` for the same decision outside the Router routes.
+
+`dependencies.authorizeOperator(principal, request)` decides the requests of a service token that the operator default
+refuses; see [Letting a service token do more](../guides/managed-agents.md#letting-a-service-token-do-more).
 
 ## Agents and runtimes
 
