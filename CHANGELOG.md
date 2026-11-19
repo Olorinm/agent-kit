@@ -5,7 +5,7 @@ tag publishes a GitHub Release whose notes are this file's section for that vers
 section in the version-bump commit before tagging. Changes up to the versions listed under
 0.8.0-alpha.1 are in each package's own `CHANGELOG.md`.
 
-## [Unreleased]
+## [0.11.0-alpha.9] - 2026-11-19
 
 - **Host:** `agent-host link --url <router> --code <pairing code>` pairs a machine with a Router and
   keeps an outbound WebSocket to it; `agent-host serve` reconnects to a stored link by itself,
