@@ -25,7 +25,7 @@
 | --- | --- | --- |
 | 🔀 | [**Router**](packages/router/README.zh-CN.md) | Agent 的消息路由。管理所有者账号和聊天渠道连接（飞书、微信、Telegram、邮件、网页、推送），各渠道共用一份对话账本；把收到的消息投递给运行中的 Agent，再把回复送回消息来的地方。 |
 | 🧠 | [**Host**](packages/host/README.zh-CN.md) | 用同一个接口对接七种原生内核：Codex、Claude Agent、Pi、OpenCode、Kimi Code、Hermes 和 OpenClaw。会话、工具和审批都保持各内核自己的定义。可以嵌入你的后端，也可以作为 HTTP 服务运行。 |
-| 🔌 | [**Connectors**](packages/connectors) | 把 Google Workspace、GitHub、Notion、飞书和浏览器作为工具提供给 Agent。凭证和写操作的审批都留在 Agent 的环境之外。 |
+| 🔌 | [**Connectors**](packages/connectors/README.zh-CN.md) | 把 Google Workspace、GitHub、Notion、飞书和浏览器作为工具提供给 Agent。凭证和写操作的审批都留在 Agent 的环境之外。 |
 | 📦 | [**Environment**](packages/environment/README.zh-CN.md) | 用一套 TypeScript 接口和命令行创建、暂停、恢复、删除执行环境。线上用 Cloudflare 容器，本机用 Docker。 |
 
 想找一个用这些积木搭好的成品？看 [Mau](https://github.com/Olorinm/mau/blob/main/README.zh-CN.md)。
@@ -49,7 +49,7 @@ npx agent-host run --config host.json --session first "Explain the files in this
 | --- | --- |
 | 从我的后端或通过 HTTP 运行 Agent | [Host 快速开始](packages/host/docs/quickstart.md)（英文） |
 | 让人从聊天软件给 Agent 发消息 | [Router](packages/router/README.zh-CN.md) |
-| 安全地让 Agent 用上 Gmail、GitHub 或浏览器 | [Connectors](packages/connectors/README.md)（英文） |
+| 安全地让 Agent 用上 Gmail、GitHub 或浏览器 | [Connectors](packages/connectors/README.zh-CN.md) |
 | 在云上或本机的沙箱里运行 Agent | [Environment](packages/environment/README.zh-CN.md) |
 
 ## 安装
