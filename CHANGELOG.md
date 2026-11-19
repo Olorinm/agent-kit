@@ -5,6 +5,17 @@ tag publishes a GitHub Release whose notes are this file's section for that vers
 section in the version-bump commit before tagging. Changes up to the versions listed under
 0.8.0-alpha.1 are in each package's own `CHANGELOG.md`.
 
+## [0.11.0-alpha.8] - 2026-11-19
+
+- **Router:** `ServiceDependencies.authorizeOperator(principal, request)` lets the embedding
+  product allow a single request by a service token without owner access that the default
+  refuses. It is called only for such a request, after the Access assertion verified; only an
+  exact `true` allows it, and a hook that throws refuses. The allowed principal is marked
+  `granted`. The CSRF check applies to a granted request as to an owner's.
+- **Router:** every entry of `routerApiReference` has a `scope` (`read`, `chat`, `approve`,
+  `manage` or `owner`), and `routerRouteScope(method, path)` returns the scope of a request.
+  A path it does not know returns `undefined`; a product must treat that as a refusal.
+
 ## [0.11.0-alpha.7] - 2026-11-19
 
 - **Router:** `DELETE /_agent-router/v1/agents/:agentId/connections/:connectionId` disconnects
