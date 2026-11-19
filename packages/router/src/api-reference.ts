@@ -22,7 +22,22 @@ export interface RouterApiRoute {
   body?: unknown;
   /** A service token without owner access (the default `operator` level) may make this request. */
   operator?: true;
+  /** What a grant must cover for an operator to make this request beyond its default; see `RouterRouteScope`. */
+  scope: RouterRouteScope;
 }
+/**
+ * The classes of owner requests, for a product that issues scoped grants through `authorizeOperator`. Router assigns
+ * one to each of its routes and enforces none of them: the product decides which scopes a grant holds.
+ * - `read`: reads. Every `GET` and the event socket, and the two writes that change nothing of substance: requesting
+ *   a socket ticket and moving a read marker.
+ * - `chat`: taking part in conversations as the owner: opening a DM, sending and redacting a message, uploading an
+ *   attachment, steering or cancelling a turn, starting a new context window.
+ * - `approve`: deciding on behalf of the owner: answering a card (approval, question, confirmation) or a Host call.
+ * - `manage`: creating, deleting and changing agents, their connections and allowlists, connection jobs, checks,
+ *   groups, and the `communication` routes for sessions, work events, tasks and runs.
+ * - `owner`: only the signed-in owner, never a grant: purging a chat's history, pairing codes and identity links.
+ */
+export type RouterRouteScope = "read" | "chat" | "approve" | "manage" | "owner";
 
 const root = "/_agent-router/v1", agent = `${root}/agents/:agentId`, communication = `${agent}/communication`, web = `${root}/web`;
 /** The event socket is opened with a ticket, which an operator may request; `restrictOperator` covers HTTP requests. */
@@ -32,72 +47,84 @@ function operator(method: string, path: string): boolean {
   try { restrictOperator({ personId: "", ownerId: "", via: "edge-service", operator: true }, { headers: {}, method, originalUrl: path }); return true; }
   catch { return false; }
 }
-const route = (method: RouterApiRoute["method"], path: string, summary: string, body?: z.ZodType): RouterApiRoute => ({ method, path, summary,
-  ...(body ? { body: z.toJSONSchema(body, { io: "input", unrepresentable: "any" }) } : {}), ...(operator(method, path) ? { operator: true as const } : {}) });
+const route = (method: RouterApiRoute["method"], path: string, scope: RouterRouteScope, summary: string, body?: z.ZodType): RouterApiRoute => ({ method, path, summary,
+  ...(body ? { body: z.toJSONSchema(body, { io: "input", unrepresentable: "any" }) } : {}), ...(operator(method, path) ? { operator: true as const } : {}), scope });
 
 export const routerApiReference: RouterApiRoute[] = [
-  route("GET", "/health/live", "Liveness of the process; needs no authentication."),
-  route("GET", `${root}/account`, "The authenticated owner and how the request was authenticated."),
-  route("GET", `${root}/agents`, "List the owner's agents."),
-  route("POST", `${root}/agents`, "Create an agent, or return the existing agent of that name.", createAgentRequest),
-  route("GET", agent, "Read one agent."),
-  route("DELETE", agent, "Delete an agent with its store, connections and saved channel credentials."),
+  route("GET", "/health/live", "read", "Liveness of the process; needs no authentication."),
+  route("GET", `${root}/account`, "read", "The authenticated owner and how the request was authenticated."),
+  route("GET", `${root}/agents`, "read", "List the owner's agents."),
+  route("POST", `${root}/agents`, "manage", "Create an agent, or return the existing agent of that name.", createAgentRequest),
+  route("GET", agent, "read", "Read one agent."),
+  route("DELETE", agent, "manage", "Delete an agent with its store, connections and saved channel credentials."),
 
-  route("GET", `${root}/connection-options`, "List the mail services an owner can connect."),
-  route("GET", `${agent}/configuration`, "The agent, its Host runtime, its configured connections and the live channel status."),
-  route("POST", `${agent}/connections`, "Connect one platform (Feishu, Weixin, Telegram or email); most answer with a setup job.", connectRequest),
-  route("DELETE", `${agent}/connections/:connectionId`, "Disconnect a configured connection and delete the credentials Router saved for it; its history stays."),
-  route("GET", `${agent}/connections/:connectionId/access`, "The allowed groups, allowed peers and owner addresses of a configured connection."),
-  route("PUT", `${agent}/connections/:connectionId/access`, "Replace the allowed groups and allowed peers of a configured connection.", accessRequest),
-  route("GET", `${agent}/connection-jobs`, "List the agent's recent connection setup jobs."),
-  route("GET", `${agent}/connection-jobs/:id`, "Read one connection setup job, with its consent link while the owner has something to open or scan."),
-  route("POST", `${agent}/connection-jobs/:id/pairing`, "Supply the pairing code Weixin shows during a setup job.", pairingRequest),
-  route("POST", `${agent}/check`, "Run read-only checks of the Host and of every connection.", checkRequest),
+  route("GET", `${root}/connection-options`, "read", "List the mail services an owner can connect."),
+  route("GET", `${agent}/configuration`, "read", "The agent, its Host runtime, its configured connections and the live channel status."),
+  route("POST", `${agent}/connections`, "manage", "Connect one platform (Feishu, Weixin, Telegram or email); most answer with a setup job.", connectRequest),
+  route("DELETE", `${agent}/connections/:connectionId`, "manage", "Disconnect a configured connection and delete the credentials Router saved for it; its history stays."),
+  route("GET", `${agent}/connections/:connectionId/access`, "read", "The allowed groups, allowed peers and owner addresses of a configured connection."),
+  route("PUT", `${agent}/connections/:connectionId/access`, "manage", "Replace the allowed groups and allowed peers of a configured connection.", accessRequest),
+  route("GET", `${agent}/connection-jobs`, "read", "List the agent's recent connection setup jobs."),
+  route("GET", `${agent}/connection-jobs/:id`, "read", "Read one connection setup job, with its consent link while the owner has something to open or scan."),
+  route("POST", `${agent}/connection-jobs/:id/pairing`, "manage", "Supply the pairing code Weixin shows during a setup job.", pairingRequest),
+  route("POST", `${agent}/check`, "manage", "Run read-only checks of the Host and of every connection.", checkRequest),
 
-  route("GET", communication, "Channel and Host status of the agent: connections, inbox, outbox and pending calls."),
-  route("GET", `${communication}/sessions`, "List the agent's work sessions."),
-  route("GET", `${communication}/sessions/:sessionId`, "Read one work session."),
-  route("POST", `${communication}/sessions/:sessionId/native`, "Read, rename, archive, unarchive or delete the Host's native session behind a work session.", nativeSessionRequest),
-  route("POST", `${communication}/sessions/:sessionId/fork`, "Fork a work session into a new session id.", forkSessionRequest),
-  route("POST", `${communication}/sessions/:sessionId/steer`, "Add input to the running turn of a work session.", steerSessionRequest),
-  route("POST", `${communication}/work-events`, "Submit owner work to the agent; repeating an event id returns the same task.", workEventRequest),
-  route("GET", `${communication}/work-events/:eventId`, "Read the state and answer of a submitted work event."),
-  route("POST", `${communication}/work-events/:eventId/cancel`, "Cancel a submitted work event.", emptyRequest),
-  route("GET", `${communication}/tasks`, "List the agent's tasks, filtered by connection, target or conversation."),
-  route("POST", `${communication}/tasks/:taskId/cancel`, "Cancel a task.", emptyRequest),
-  route("GET", `${communication}/runs/:claimId`, "Read one Host run of a task."),
-  route("GET", `${communication}/runs/:claimId/events`, "Page through the events of a Host run."),
-  route("POST", `${communication}/runs/:claimId/calls/:callId/result`, "Answer a pending call (question or approval) of a Host run.", callResultRequest),
-  route("POST", `${communication}/runs/:claimId/reconcile`, "Bind a run whose outcome is unknown to the Host run that executed it.", reconcileRunRequest),
-  route("POST", `${communication}/runs/:claimId/close`, "Close a run whose outcome is unknown without running it again.", emptyRequest),
-  route("POST", `${communication}/calls/:callId/result`, "Answer a pending Host call by its call id.", callResultRequest),
+  route("GET", communication, "read", "Channel and Host status of the agent: connections, inbox, outbox and pending calls."),
+  route("GET", `${communication}/sessions`, "read", "List the agent's work sessions."),
+  route("GET", `${communication}/sessions/:sessionId`, "read", "Read one work session."),
+  route("POST", `${communication}/sessions/:sessionId/native`, "manage", "Read, rename, archive, unarchive or delete the Host's native session behind a work session.", nativeSessionRequest),
+  route("POST", `${communication}/sessions/:sessionId/fork`, "manage", "Fork a work session into a new session id.", forkSessionRequest),
+  route("POST", `${communication}/sessions/:sessionId/steer`, "manage", "Add input to the running turn of a work session.", steerSessionRequest),
+  route("POST", `${communication}/work-events`, "manage", "Submit owner work to the agent; repeating an event id returns the same task.", workEventRequest),
+  route("GET", `${communication}/work-events/:eventId`, "read", "Read the state and answer of a submitted work event."),
+  route("POST", `${communication}/work-events/:eventId/cancel`, "manage", "Cancel a submitted work event.", emptyRequest),
+  route("GET", `${communication}/tasks`, "read", "List the agent's tasks, filtered by connection, target or conversation."),
+  route("POST", `${communication}/tasks/:taskId/cancel`, "manage", "Cancel a task.", emptyRequest),
+  route("GET", `${communication}/runs/:claimId`, "read", "Read one Host run of a task."),
+  route("GET", `${communication}/runs/:claimId/events`, "read", "Page through the events of a Host run."),
+  route("POST", `${communication}/runs/:claimId/calls/:callId/result`, "approve", "Answer a pending call (question or approval) of a Host run.", callResultRequest),
+  route("POST", `${communication}/runs/:claimId/reconcile`, "manage", "Bind a run whose outcome is unknown to the Host run that executed it.", reconcileRunRequest),
+  route("POST", `${communication}/runs/:claimId/close`, "manage", "Close a run whose outcome is unknown without running it again.", emptyRequest),
+  route("POST", `${communication}/calls/:callId/result`, "approve", "Answer a pending Host call by its call id.", callResultRequest),
 
-  route("GET", `${web}/me`, "The signed-in person, linked identities and the limits of the web API."),
-  route("POST", `${web}/socket-tickets`, "Issue a single-use ticket (60 seconds) for the event socket.", emptyWebRequest),
-  route("GET", SOCKET_PATH, "WebSocket upgrade for the event socket, authenticated by `?ticket=`; not a plain HTTP request."),
-  route("GET", `${web}/chats`, "Page through the owner's chat index."),
-  route("POST", `${web}/chats/dm`, "Open the owner's direct chat with an agent, creating it when missing.", dmRequest),
-  route("GET", `${web}/chats/:chatId`, "Read one chat with its members."),
-  route("GET", `${web}/chats/:chatId/events`, "Page through the history of a chat."),
-  route("POST", `${web}/chats/:chatId/read`, "Move the owner's read marker of a chat.", readRequest),
-  route("POST", `${web}/chats/:chatId/messages`, "Send an owner message to a direct chat or a group.", sendRequest),
-  route("POST", `${web}/chats/:chatId/events/:eventId/redact`, "Redact one of the owner's messages.", redactRequest),
-  route("GET", `${web}/chats/:chatId/turns/:turnId`, "Read the detail of one turn."),
-  route("POST", `${web}/chats/:chatId/turns/:turnId/cancel`, "Cancel a running turn.", emptyWebRequest),
-  route("POST", `${web}/chats/:chatId/turns/:turnId/steer`, "Add text to a running turn.", steerRequest),
-  route("GET", `${web}/chats/:chatId/cards/:cardId`, "Read a question or approval card."),
-  route("POST", `${web}/chats/:chatId/cards/:cardId/answer`, "Answer a question or approval card.", answerRequest),
-  route("POST", `${web}/chats/:chatId/reset`, "Start a new context window in a chat; the history stays.", resetRequest),
-  route("POST", `${web}/chats/:chatId/purge`, "Delete the history of a chat; `confirm` repeats the chat id.", purgeRequest),
-  route("POST", `${web}/groups`, "Create a group of the owner and some of the owner's agents.", createGroupRequest),
-  route("PATCH", `${web}/groups/:roomId`, "Rename, archive or unarchive a group.", updateGroupRequest),
-  route("POST", `${web}/groups/:roomId/members`, "Add one of the owner's agents to a group.", addGroupMemberRequest),
-  route("DELETE", `${web}/groups/:roomId/members/:agentId`, "Remove an agent from a group."),
-  route("GET", `${web}/identities`, "List the owner's linked channel identities."),
-  route("DELETE", `${web}/identities/:identityId`, "Unlink a channel identity."),
-  route("POST", `${web}/identities/pairing-codes`, "Create a pairing code that links a channel account through `/link <code>`.", pairingCodeRequest),
-  route("GET", `${web}/identities/pairing-codes`, "List the pending pairing codes."),
-  route("DELETE", `${web}/identities/pairing-codes/:codeId`, "Cancel a pending pairing code."),
-  route("POST", `${web}/attachments`, "Upload one attachment as the raw request body, with `Content-Length`, `Content-Type` and `X-File-Name` headers."),
-  route("GET", `${web}/attachments/:attachmentId`, "Download an attachment; a single byte range is supported."),
+  route("GET", `${web}/me`, "read", "The signed-in person, linked identities and the limits of the web API."),
+  route("POST", `${web}/socket-tickets`, "read", "Issue a single-use ticket (60 seconds) for the event socket.", emptyWebRequest),
+  route("GET", SOCKET_PATH, "read", "WebSocket upgrade for the event socket, authenticated by `?ticket=`; not a plain HTTP request."),
+  route("GET", `${web}/chats`, "read", "Page through the owner's chat index."),
+  route("POST", `${web}/chats/dm`, "chat", "Open the owner's direct chat with an agent, creating it when missing.", dmRequest),
+  route("GET", `${web}/chats/:chatId`, "read", "Read one chat with its members."),
+  route("GET", `${web}/chats/:chatId/events`, "read", "Page through the history of a chat."),
+  route("POST", `${web}/chats/:chatId/read`, "read", "Move the owner's read marker of a chat.", readRequest),
+  route("POST", `${web}/chats/:chatId/messages`, "chat", "Send an owner message to a direct chat or a group.", sendRequest),
+  route("POST", `${web}/chats/:chatId/events/:eventId/redact`, "chat", "Redact one of the owner's messages.", redactRequest),
+  route("GET", `${web}/chats/:chatId/turns/:turnId`, "read", "Read the detail of one turn."),
+  route("POST", `${web}/chats/:chatId/turns/:turnId/cancel`, "chat", "Cancel a running turn.", emptyWebRequest),
+  route("POST", `${web}/chats/:chatId/turns/:turnId/steer`, "chat", "Add text to a running turn.", steerRequest),
+  route("GET", `${web}/chats/:chatId/cards/:cardId`, "read", "Read a question or approval card."),
+  route("POST", `${web}/chats/:chatId/cards/:cardId/answer`, "approve", "Answer a question or approval card.", answerRequest),
+  route("POST", `${web}/chats/:chatId/reset`, "chat", "Start a new context window in a chat; the history stays.", resetRequest),
+  route("POST", `${web}/chats/:chatId/purge`, "owner", "Delete the history of a chat; `confirm` repeats the chat id.", purgeRequest),
+  route("POST", `${web}/groups`, "manage", "Create a group of the owner and some of the owner's agents.", createGroupRequest),
+  route("PATCH", `${web}/groups/:roomId`, "manage", "Rename, archive or unarchive a group.", updateGroupRequest),
+  route("POST", `${web}/groups/:roomId/members`, "manage", "Add one of the owner's agents to a group.", addGroupMemberRequest),
+  route("DELETE", `${web}/groups/:roomId/members/:agentId`, "manage", "Remove an agent from a group."),
+  route("GET", `${web}/identities`, "read", "List the owner's linked channel identities."),
+  route("DELETE", `${web}/identities/:identityId`, "owner", "Unlink a channel identity."),
+  route("POST", `${web}/identities/pairing-codes`, "owner", "Create a pairing code that links a channel account through `/link <code>`.", pairingCodeRequest),
+  route("GET", `${web}/identities/pairing-codes`, "read", "List the pending pairing codes."),
+  route("DELETE", `${web}/identities/pairing-codes/:codeId`, "owner", "Cancel a pending pairing code."),
+  route("POST", `${web}/attachments`, "chat", "Upload one attachment as the raw request body, with `Content-Length`, `Content-Type` and `X-File-Name` headers."),
+  route("GET", `${web}/attachments/:attachmentId`, "read", "Download an attachment; a single byte range is supported."),
 ];
+
+const patterns = routerApiReference.map((entry) => ({ method: entry.method as string, scope: entry.scope,
+  pattern: new RegExp(`^${entry.path.split("/").map((part) => part.startsWith(":") ? "[^/]+" : part.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("/")}$`) }));
+/**
+ * The scope of a concrete request: `path` is the request path without its query string, compared as received (no
+ * decoding, case-sensitive, no trailing slash); a `:param` is one non-empty segment. `undefined` means the request is
+ * not one of this table's routes as written, and a caller that authorizes by scope must refuse it: Express itself
+ * also serves a route under another letter case or with a trailing slash.
+ */
+export function routerRouteScope(method: string, path: string): RouterRouteScope | undefined {
+  return patterns.find((entry) => entry.method === method && entry.pattern.test(path))?.scope;
+}
