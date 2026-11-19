@@ -1,0 +1,67 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 880 380" width="880" role="img" aria-label="Agent Kit: Router, Host, Connectors and Environment between people and agent kernels">
+  <style>
+    text { font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Helvetica, Arial, sans-serif; fill: #1f2328; }
+    .t { font-size: 17px; font-weight: 600; }
+    .s { font-size: 13px; fill: #59636e; }
+    .e { font-size: 13px; fill: #59636e; }
+    .box { fill: #ffffff; stroke: #d1d9e0; stroke-width: 1.5; }
+    .edge { fill: #f6f8fa; stroke: #d1d9e0; stroke-width: 1.5; stroke-dasharray: 5 4; }
+    .line { stroke: #8c959f; stroke-width: 1.5; fill: none; }
+    .head { fill: #8c959f; }
+    .r { fill: #0969da; } .h { fill: #1a7f37; } .c { fill: #9a6700; } .v { fill: #8250df; }
+    @media (prefers-color-scheme: dark) {
+      text { fill: #f0f6fc; } .s, .e { fill: #9198a1; }
+      .box { fill: #151b23; stroke: #3d444d; } .edge { fill: #0d1117; stroke: #3d444d; }
+      .line { stroke: #656c76; } .head { fill: #656c76; }
+      .r { fill: #4493f8; } .h { fill: #3fb950; } .c { fill: #d29922; } .v { fill: #ab7df8; }
+    }
+  </style>
+  <defs><marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="head" d="M0 0L10 5L0 10z"/></marker></defs>
+
+  <rect class="edge" x="20" y="40" width="170" height="130" rx="10"/>
+  <text class="t" x="105" y="82" text-anchor="middle">People</text>
+  <text class="s" x="105" y="108" text-anchor="middle">Feishu · Weixin</text>
+  <text class="s" x="105" y="128" text-anchor="middle">Telegram · Email</text>
+  <text class="s" x="105" y="148" text-anchor="middle">Web · push</text>
+
+  <rect class="box" x="250" y="40" width="180" height="130" rx="10"/>
+  <rect class="r" x="250" y="40" width="180" height="6" rx="3"/>
+  <text class="t" x="340" y="82" text-anchor="middle">Router</text>
+  <text class="s" x="340" y="108" text-anchor="middle">accounts · channels</text>
+  <text class="s" x="340" y="128" text-anchor="middle">conversation ledger</text>
+  <text class="s" x="340" y="148" text-anchor="middle">delivery · approvals</text>
+
+  <rect class="box" x="490" y="40" width="180" height="130" rx="10"/>
+  <rect class="h" x="490" y="40" width="180" height="6" rx="3"/>
+  <text class="t" x="580" y="82" text-anchor="middle">Host</text>
+  <text class="s" x="580" y="108" text-anchor="middle">one interface to</text>
+  <text class="s" x="580" y="128" text-anchor="middle">native agent harnesses</text>
+  <text class="s" x="580" y="148" text-anchor="middle">sessions · tools</text>
+
+  <rect class="edge" x="730" y="40" width="130" height="130" rx="10"/>
+  <text class="t" x="795" y="82" text-anchor="middle">Kernels</text>
+  <text class="s" x="795" y="108" text-anchor="middle">Codex · Claude</text>
+  <text class="s" x="795" y="128" text-anchor="middle">Pi · OpenCode</text>
+  <text class="s" x="795" y="148" text-anchor="middle">Hermes · …</text>
+
+  <path class="line" d="M190 105H250" marker-start="url(#a)" marker-end="url(#a)"/>
+  <path class="line" d="M430 105H490" marker-start="url(#a)" marker-end="url(#a)"/>
+  <path class="line" d="M670 105H730" marker-start="url(#a)" marker-end="url(#a)"/>
+
+  <rect class="box" x="220" y="230" width="240" height="110" rx="10"/>
+  <rect class="c" x="220" y="230" width="240" height="6" rx="3"/>
+  <text class="t" x="340" y="272" text-anchor="middle">Connectors</text>
+  <text class="s" x="340" y="296" text-anchor="middle">Google · GitHub · Notion · Feishu</text>
+  <text class="s" x="340" y="316" text-anchor="middle">credentials stay outside the agent</text>
+
+  <rect class="box" x="490" y="230" width="180" height="110" rx="10"/>
+  <rect class="v" x="490" y="230" width="180" height="6" rx="3"/>
+  <text class="t" x="580" y="272" text-anchor="middle">Environment</text>
+  <text class="s" x="580" y="298" text-anchor="middle">create · pause · resume</text>
+  <text class="s" x="580" y="318" text-anchor="middle">Cloudflare · Docker</text>
+
+  <path class="line" d="M580 230V170" marker-end="url(#a)"/>
+  <text class="e" x="590" y="205">runs in</text>
+  <path class="line" d="M520 170V200H340V230" marker-end="url(#a)"/>
+  <text class="e" x="430" y="192" text-anchor="middle">tool calls</text>
+</svg>
