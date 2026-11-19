@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { randomBytes, randomUUID } from "node:crypto";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { hostname } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { parseArgs } from "node:util";
 import { z } from "zod";
@@ -12,6 +13,7 @@ import { routeInteraction } from "../interactions.js";
 import { TaskStore } from "./store.js";
 import { waitForBootstrap } from "./bootstrap.js";
 import { kernels } from "../capabilities.js";
+import { enrollHostLink, hostLinkFile, readHostLink } from "./link.js";
 
 async function main() {
   const { values, positionals } = parseArgs({
@@ -35,6 +37,10 @@ async function main() {
       native: { type: "boolean" },
       probe: { type: "boolean" },
       timeout: { type: "string" },
+      url: { type: "string" },
+      code: { type: "string" },
+      name: { type: "string" },
+      "enroll-only": { type: "boolean" },
     },
   });
   if (values.help || !positionals.length) {
@@ -43,6 +49,8 @@ async function main() {
   agent-host doctor --config host.json [--native] [--probe]
   agent-host run --config host.json [--runtime ID] [--session ID] [--settings JSON] [--json] "Your task"
   agent-host serve --config host.json [--host 127.0.0.1] [--port 37420] [--token-file path] [--ready-file path]
+  agent-host link --config host.json --url https://router.example --code XXXX-XXXX [--runtime ID] [--name DEVICE] [--enroll-only] [--json]
+link pairs this machine with a Router using a pairing code, stores the device credential in the state directory and then serves; serve reconnects to a stored link by itself. --enroll-only stops after pairing.
 Native credentials stay in the Kernel's existing configuration. --native starts a native handshake; --probe executes a short model request and may incur provider usage. run prints a session ID to continue later. Noninteractive permission requests are declined.`);
     return;
   }
@@ -76,7 +84,7 @@ Native credentials stay in the Kernel's existing configuration. --native starts 
     );
     return;
   }
-  if (!["serve", "run", "doctor"].includes(operation ?? ""))
+  if (!["serve", "run", "doctor", "link"].includes(operation ?? ""))
     throw new Error("Unknown command; use agent-host --help");
   if (values["ready-file"]) {
     if (
@@ -110,6 +118,27 @@ Native credentials stay in the Kernel's existing configuration. --native starts 
     JSON.parse(await readFile(filename, "utf8")),
   );
   const stateDirectory = resolve(dirname(filename), config.stateDirectory);
+  if (operation === "link") {
+    if (!values.url || !values.code) throw new Error("link_requires_url_and_code");
+    const profile = values.runtime
+      ? config.runtimes.find((runtime) => runtime.id === values.runtime)
+      : config.runtimes.length === 1 ? config.runtimes[0] : undefined;
+    if (!profile)
+      throw new Error(values.runtime ? "runtime_not_found"
+        : `link_requires_runtime: pass --runtime with one of ${config.runtimes.map((runtime) => runtime.id).join(", ")}`);
+    await mkdir(stateDirectory, { recursive: true, mode: 0o700 });
+    const deviceName = (values.name ?? hostname()).slice(0, 100);
+    const link = await enrollHostLink({ url: values.url, code: values.code, deviceName, platform: process.platform,
+      runtime: { id: profile.id, kernel: profile.kernel }, stateDirectory });
+    if (values.json)
+      console.log(JSON.stringify({ linkId: link.linkId, agentId: link.agentId, runtimeId: link.runtimeId, deviceName,
+        url: link.url, linkFile: hostLinkFile(stateDirectory) }));
+    else {
+      console.log(`Linked runtime ${profile.id} (${profile.kernel}) to ${link.url} as ${JSON.stringify(deviceName)}.`);
+      console.log(`Device credential: ${hostLinkFile(stateDirectory)}`);
+    }
+    if (values["enroll-only"]) return;
+  }
   const runtimes = createConfiguredRuntimes(config, filename);
   if (operation === "doctor") {
     const ownership = values.probe
@@ -236,11 +265,18 @@ Native credentials stay in the Kernel's existing configuration. --native starts 
       }
     }
   }
+  const link = await readHostLink(stateDirectory);
   const host = await startAgentHostServer({
     ...config,
     stateDirectory,
     runtimes,
     token,
+    ...(link
+      ? { link: { url: link.url, credential: link.credential, runtimeId: link.runtimeId,
+          onState: (state) => console.log(`Host link ${{ online: "online", offline: "offline; reconnecting",
+            rejected: "rejected by the Router; pair again with agent-host link",
+            replaced: "taken over by another process using this credential; stopped" }[state]}`) } }
+      : {}),
     host: values.host ?? config.host,
     port: values.port
       ? z.coerce.number().int().min(0).max(65535).parse(values.port)
@@ -253,6 +289,7 @@ Native credentials stay in the Kernel's existing configuration. --native starts 
       : `Authentication token file: ${tokenFile}`,
   );
   console.log(`State directory: ${stateDirectory}`);
+  if (link) console.log(`Host link: runtime ${link.runtimeId} to ${link.url}`);
   const stop = () => {
     const deadline = setTimeout(() => {
       console.error("Agent Host shutdown timed out");

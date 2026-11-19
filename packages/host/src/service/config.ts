@@ -150,6 +150,8 @@ export const configSchema = z
     port: z.number().int().min(0).max(65535).default(37420),
     allowedOrigins: z.array(z.string().url()).default([]),
     workspaceFiles: z.boolean().default(false),
+    /** How long a native approval or question waits for an answer before it is closed as timed out. */
+    interactionTimeoutMs: z.number().int().min(1_000).max(86_400_000).default(120_000),
     runtimes: z.array(profileSchema).min(1),
   })
   .strict();

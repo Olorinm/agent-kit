@@ -17,3 +17,11 @@ export type {
 
 export { diagnoseRuntime, type DiagnosticReport } from "./diagnostics.js";
 export { configSchema, createConfiguredRuntimes } from "./config.js";
+export {
+  enrollHostLink,
+  readHostLink,
+  routerBaseUrl,
+  type HostLinkFile,
+  type HostLinkOptions,
+  type HostLinkState,
+} from "./link.js";

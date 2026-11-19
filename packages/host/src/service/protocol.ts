@@ -117,6 +117,8 @@ export const sessionSchema = z
     tools: z.array(toolSchema),
     configurationKey: z.string(),
     nativeDeletedAt: z.string().optional(),
+    /** Set on a session a host link started. */
+    origin: z.literal("link").optional(),
     createdAt: z.string(),
   })
   .strict();

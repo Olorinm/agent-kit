@@ -40,6 +40,8 @@ Your product owns its UI, accounts, business permissions, memory strategy and da
 
 Start with the [quickstart](docs/quickstart.md), [common API](docs/common-api.md) or [HTTP service guide](docs/http-service.md). Native installations and authentication are configured separately.
 
+A service on a machine without a public address can connect out to a Router that then sends it messages, and nothing else: see [Host link](docs/host-link.md).
+
 See [capability discovery](docs/capabilities.md) to distinguish implemented operations, setup requirements, native negotiation and missing integrations before presenting features to users.
 
 ## Examples and verification
