@@ -11,6 +11,9 @@ Router 负责账号、Agent、渠道连接和任务投递。创建执行环境�
 | `GET /connection-options` | 所有者可选的邮件服务（`id`、`label`） |
 | `GET /agents/:id/configuration` | Agent、Host（`runtimeId`）、连接列表（`id`、`kind`）和实时渠道状态，不含密钥 |
 | `POST /agents/:id/connections` | 连接一个平台 |
+| `DELETE /agents/:id/connections/:connection` | 断开一个连接 |
+| `GET /agents/:id/connections/:connection/access` | 连接的 `groupIds`、`peerAddresses` 和 `ownerAddresses` |
+| `PUT /agents/:id/connections/:connection/access` | 替换 `groupIds` 和 `peerAddresses` |
 | `GET /agents/:id/connection-jobs`、`GET /agents/:id/connection-jobs/:job` | 查看连接任务 |
 | `POST /agents/:id/connection-jobs/:job/pairing` | 提交微信配对码：`{ "code": "123456" }` |
 | `POST /agents/:id/check` | 只读检查 Host 和每个连接，请求体为 `{}` |
@@ -37,6 +40,28 @@ Bark 推送和手动创建的飞书应用由运营者写入 Agent 的渠道配�
 - `retry`：重新开始。
 
 重试时保留原来的 `domain`。已分配给其他 Agent 的应用会被拒绝。
+
+## 断开连接
+
+`DELETE /agents/:id/connections/:connection` 移除一个连接，`:connection` 是配置里的连接 `id`（`feishu`、`weixin`、`telegram`、`mail`，或运营者自定的 id）。返回 `200` 和移除后的 Agent 配置（`agent`、`host`、`connections`）。
+
+- 该连接的消费者停止，Agent 的其余连接重新启动，过程与新增连接相同；之后不再通过它收发消息。
+- Router 为该连接保存的凭据文件一并删除：Agent 连接目录下的 `feishu/`、`weixin.json`、`telegram-token` 或 `mail-key`。运营者以其他文件名或放在目录之外的凭据文件不会删除，Bark 连接的文件也不会删除。
+- 历史保留：该连接的会话、消息仍在 Agent 的账本和 Web API 中，会话上下文不变。尚在队列中的回复标记为 `rejected`（`connection_removed`），不会发出。
+- 之后可以用 `POST /agents/:id/connections` 重新连接。飞书凭据删除后应用被释放，重新连接会创建新应用，除非请求里用 `appId` 指定原应用。
+- 所有者已关联的身份不变，需要时通过 Web API 的身份路由解除。
+
+错误：`404 connection_not_found`（配置里没有这个连接；内置的 `web` 和 `room` 不是配置的连接，不能移除）、`404 agent_not_found`、`409 agent_has_active_or_unknown_run`（Agent 有运行中或结果未知的 run，配置未改动，待 run 结束、对账或关闭后重试）。
+
+## 允许的群和联系人
+
+`GET /agents/:id/connections/:connection/access` 返回 `{ "groupIds": [...], "peerAddresses": [...], "ownerAddresses": [...] }`。`PUT` 同一路径，请求体 `{ "groupIds": [...], "peerAddresses": [...] }`，整体替换这两个列表并返回同样的对象。两个字段都必填，不接受其他字段；清空列表传空数组。每个列表最多 100 项，每项 1 到 512 个字符。列表是替换而不是合并。`ownerAddresses` 不由此路由修改。
+
+修改会保存并立即作用于运行中的连接，不需要重启进程：Agent 的渠道停止后以新列表启动。已有会话不受影响：这两个列表不属于 Host scope，也不属于任何会话绑定，已放行的对话继续使用原会话；被移出列表的发送者从下一条消息起被拒绝，之前被拒绝的消息不会补跑。
+
+错误：`400 invalid_request`、`400 weixin_bot_api_supports_private_conversations_only`（微信没有群，`groupIds` 必须为空）、`400 bark_is_send_only`（Bark 只发通知，两个列表都必须为空）、`404 connection_not_found`（`web` 和 `room` 同样返回）、`404 agent_not_found`、`409 agent_has_active_or_unknown_run`。渠道返回的 `400` 使用该渠道自身校验的错误码。
+
+没有所有者权限的服务令牌不能断开连接或修改列表（`403 owner_sign_in_required`），但可以读取。
 
 ## 检查
 

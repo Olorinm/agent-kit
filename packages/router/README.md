@@ -65,7 +65,7 @@ The service listens on `127.0.0.1:8790` and stores its state under `state/agent-
 | `AGENT_R2_ENDPOINT` or `AGENT_R2_ACCOUNT_ID` | The R2 endpoint, or the account id it is derived from. |
 | `AGENT_ATTACHMENT_QUOTA_BYTES` | Attachment quota per owner. Default 5 GiB. |
 
-Owners sign in through the edge identity. A standalone service without `AGENT_EDGE_IDENTITY_FILE` accepts no owner requests; an embedding product can supply its own bearer-token authenticator.
+Owners sign in through the edge identity. A standalone service has no bearer-token authenticator, so without `AGENT_EDGE_IDENTITY_FILE` it accepts no owner requests. A bearer token is accepted only when an embedding product supplies `dependencies.authenticate`; see [Accounts and agents](docs/guides/managed-agents.md).
 
 ## Embed in a product
 
@@ -89,8 +89,15 @@ All routes except `GET /health/live` are under `/_agent-router/v1` and require a
 | `GET /account` | The authenticated owner |
 | `GET`, `POST /agents`; `GET`, `DELETE /agents/:id` | List, create, read and delete agents |
 | `GET /connection-options`; `/agents/:id/configuration`, `/connections`, `/connection-jobs`, `/check` | Channel connection setup and checks |
+| `DELETE /agents/:id/connections/:connection` | Disconnect a channel connection |
+| `GET`, `PUT /agents/:id/connections/:connection/access` | Read and replace a connection's allowed groups and peers |
 | `/agents/:id/communication` | Channel and Host status; `sessions`, `work-events`, `tasks` and `runs` for work sessions and run observation |
 | `/web/...` | Ledger web API: chats, events, messages, cards, groups, attachments, identities and socket tickets |
+
+The complete list is exported as data: `routerApiReference` (`src/api-reference.ts`) has one entry per route with its
+method, path, a one-sentence summary, the JSON Schema of the request body where the route validates one, and
+`operator: true` where a default service token may make the request. A test compares it with the routes registered on
+the Express app, so it cannot fall behind the code.
 
 ## Documentation
 
