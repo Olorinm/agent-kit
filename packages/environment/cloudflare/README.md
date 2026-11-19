@@ -3,7 +3,8 @@
 An operator gateway over Cloudflare's native Durable Object Container API.
 The existing Environment interface remains unchanged; Mau handles accounts,
 ownership and lifecycle coordination, while Host retains native Agent sessions,
-tools and approvals. Cloudflare is the only provider of the Environment package.
+tools and approvals. The Environment package also has a local
+[Docker provider](../README.md#docker-local) for trying things out; it enforces none of this gateway's restrictions.
 
 ## Deploy
 

@@ -41,13 +41,24 @@ const credentials = (req: IncomingMessage): OwnerRequest => ({ headers: Object.f
   .flatMap((name) => req.headers[name] === undefined ? [] : [[name, req.headers[name]]])) });
 const baseLimits = { textBytes: 24_000, eventBytes: 256 * 1024, historyPage: LIMITS.pageEvents, historyBytes: LIMITS.pageBytes,
   attachmentBytes: 25 * 1024 * 1024, attachmentsPerMessage: 10, socketsPerPerson: 10, sendsPerMinute: 60 };
-const sendRequest = z.object({
+/** Request bodies of the web routes; `api-reference.ts` publishes them as JSON Schema. */
+export const emptyRequest = z.object({}).strict();
+export const sendRequest = z.object({
   idempotencyKey: z.string().regex(/^[A-Za-z0-9_-]{16,128}$/), text: z.string().max(1_000_000),
   attachments: z.array(z.string().min(1).max(128)).max(10).optional(),
   mentions: z.object({ agentIds: z.array(z.string().min(1).max(128)).max(50), all: z.boolean().optional() }).strict().optional(),
   replyTo: z.string().min(1).max(64).optional(),
 }).strict();
 const seq = z.coerce.number().int().min(0).max(Number.MAX_SAFE_INTEGER);
+const key = sendRequest.shape.idempotencyKey;
+export const dmRequest = z.object({ agentId: z.string().min(1).max(128) }).strict();
+export const readRequest = z.object({ seq }).strict();
+export const redactRequest = z.object({ idempotencyKey: key }).strict();
+export const answerRequest = z.object({ idempotencyKey: key, choiceId: z.string().min(1).max(16).optional(), text: z.string().min(1).max(24_000).optional(),
+  result: z.json().optional() }).strict().refine((body) => [body.choiceId !== undefined, body.text !== undefined, "result" in body].filter(Boolean).length <= 1, "one_answer_form");
+export const steerRequest = z.object({ idempotencyKey: key, text: z.string().min(1).max(baseLimits.textBytes) }).strict();
+export const resetRequest = z.object({ idempotencyKey: key, cancelActive: z.boolean().optional() }).strict();
+export const purgeRequest = z.object({ idempotencyKey: key, confirm: z.string().max(512), cancelActive: z.boolean().optional() }).strict();
 const historyQuery = z.object({ before: seq.optional(), after: seq.optional(), generation: z.coerce.number().int().min(1).optional(),
   limit: z.coerce.number().int().min(1).max(LIMITS.pageEvents).default(50), strict: z.enum(["true", "false"]).optional() }).strict()
   .refine((query) => query.before === undefined || query.after === undefined, "before_and_after_are_exclusive");
@@ -105,7 +116,7 @@ export function createWebLedger(dependencies: WebLedgerDependencies) {
       auth: { via, ...(email ? { email } : {}), ...(expiresAt ? { expiresAt: new Date(expiresAt).toISOString() } : {}) } });
   });
   router.post("/socket-tickets", (req, res) => {
-    z.object({}).strict().parse(req.body ?? {});
+    emptyRequest.parse(req.body ?? {});
     res.set("Cache-Control", "no-store").json(tickets.issue(principal(res), credentials(req)));
   });
   router.get("/chats", (req, res) => {
@@ -115,7 +126,7 @@ export function createWebLedger(dependencies: WebLedgerDependencies) {
   });
   /** Creates the agent's owner DM chat (session and web conversation) when it does not exist yet. Idempotent. */
   router.post("/chats/dm", async (req, res) => {
-    const body = z.object({ agentId: z.string().min(1).max(128) }).strict().parse(req.body);
+    const body = dmRequest.parse(req.body);
     const chatId = `dm:${body.agentId}`, target = await chat(res, chatId);
     target.openDm(body.agentId, principal(res).personId);
     const summary = target.summary(chatId, principal(res).personId);
@@ -135,7 +146,7 @@ export function createWebLedger(dependencies: WebLedgerDependencies) {
     res.json((await chat(res, req.params.chatId)).page(req.params.chatId, { ...query, strict: query.strict === "true" }));
   });
   router.post("/chats/:chatId/read", async (req, res) => {
-    const body = z.object({ seq }).strict().parse(req.body);
+    const body = readRequest.parse(req.body);
     res.json((await chat(res, req.params.chatId)).read(req.params.chatId, principal(res).personId, body.seq));
   });
   router.get("/chats/:chatId/turns/:turnId", async (req, res) => res.json((await chat(res, req.params.chatId)).turn(req.params.chatId, req.params.turnId)));
@@ -183,12 +194,11 @@ export function createWebLedger(dependencies: WebLedgerDependencies) {
       addressed: [{ agentId: resolved.agentId, state: result.inputState === "control" ? "control" : "queued" }] });
   });
   router.post("/chats/:chatId/events/:eventId/redact", sends, async (req, res) => {
-    const body = z.object({ idempotencyKey: sendRequest.shape.idempotencyKey }).strict().parse(req.body ?? {});
+    const body = redactRequest.parse(req.body ?? {});
     const chatId = req.params.chatId as string, { target, resolved, channel } = await writable(res, chatId);
     const result = channel.redact(principal(res).personId, resolved.sessionKey, req.params.eventId as string, body.idempotencyKey);
     res.json({ status: result.duplicate ? "duplicate" : "accepted", event: rendered(target, chatId, resolved, result.event), dropped: result.dropped });
   });
-  const key = sendRequest.shape.idempotencyKey;
   const commands = rateLimit({ windowMs: 60_000, limit: baseLimits.sendsPerMinute, standardHeaders: "draft-8", legacyHeaders: false,
     keyGenerator: (_req, res) => `control:${principal(res).personId}`,
     handler: (req, res) => {
@@ -219,8 +229,6 @@ export function createWebLedger(dependencies: WebLedgerDependencies) {
     if (options.keep?.(response) ?? true) target.saveCommand(person, idempotencyKey, hash, response);
     return response;
   };
-  const answerRequest = z.object({ idempotencyKey: key, choiceId: z.string().min(1).max(16).optional(), text: z.string().min(1).max(24_000).optional(),
-    result: z.json().optional() }).strict().refine((body) => [body.choiceId !== undefined, body.text !== undefined, "result" in body].filter(Boolean).length <= 1, "one_answer_form");
   const scoped = (control: LedgerControl, cardId: string, sessionKey: string) => {
     const card = control.card(cardId);
     if (!card || card.sessionKey !== sessionKey) throw new WorkError("card_not_found", 404);
@@ -243,12 +251,12 @@ export function createWebLedger(dependencies: WebLedgerDependencies) {
       duplicate: async () => ({ status: "duplicate", card: await control.view(cardId) }) }));
   });
   router.post("/chats/:chatId/turns/:turnId/cancel", commands, async (req, res) => {
-    z.object({}).strict().parse(req.body ?? {});
+    emptyRequest.parse(req.body ?? {});
     const { resolved, control } = await controlled(res, req.params.chatId as string, true);
     res.json(await control.cancel(resolved.sessionKey, req.params.turnId as string));
   });
   router.post("/chats/:chatId/turns/:turnId/steer", commands, async (req, res) => {
-    const body = z.object({ idempotencyKey: key, text: z.string().min(1).max(baseLimits.textBytes) }).strict().parse(req.body ?? {});
+    const body = steerRequest.parse(req.body ?? {});
     if (Buffer.byteLength(body.text) > baseLimits.textBytes) throw new WorkError("message_too_large", 413);
     if (!body.text.trim()) throw new WorkError("message_empty", 422);
     const chatId = req.params.chatId as string, turnId = req.params.turnId as string, { target, resolved, control, render } = await controlled(res, chatId, true);
@@ -258,7 +266,7 @@ export function createWebLedger(dependencies: WebLedgerDependencies) {
     }, { keep: (response) => response.status === "accepted" }));
   });
   router.post("/chats/:chatId/reset", commands, async (req, res) => {
-    const body = z.object({ idempotencyKey: key, cancelActive: z.boolean().optional() }).strict().parse(req.body ?? {});
+    const body = resetRequest.parse(req.body ?? {});
     const chatId = req.params.chatId as string, { target, resolved, control, render } = await controlled(res, chatId, true);
     res.json(await once(res, target, body.idempotencyKey, ["chat.reset", chatId, Boolean(body.cancelActive)], async () => {
       const result = await control.reset(resolved.sessionKey, { cancelActive: Boolean(body.cancelActive) });
@@ -266,7 +274,7 @@ export function createWebLedger(dependencies: WebLedgerDependencies) {
     }));
   });
   router.post("/chats/:chatId/purge", commands, async (req, res) => {
-    const body = z.object({ idempotencyKey: key, confirm: z.string().max(512), cancelActive: z.boolean().optional() }).strict().parse(req.body ?? {});
+    const body = purgeRequest.parse(req.body ?? {});
     const chatId = req.params.chatId as string;
     if (body.confirm !== chatId) throw new WorkError("purge_confirmation_required", 422);
     const { target, resolved, control } = await controlled(res, chatId, true);

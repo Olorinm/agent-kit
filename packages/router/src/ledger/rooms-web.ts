@@ -16,6 +16,9 @@ export interface RoomRoutesContext {
 const key = z.string().regex(/^[A-Za-z0-9_-]{16,128}$/);
 const agentId = z.string().min(1).max(128);
 const roomId = z.string().regex(/^rm_[0-9A-Za-z]{10,40}$/);
+export const createGroupRequest = z.object({ idempotencyKey: key, title: z.string().min(1).max(256), agentIds: z.array(agentId).min(1).max(20) }).strict();
+export const updateGroupRequest = z.object({ title: z.string().min(1).max(256).optional(), archived: z.boolean().optional() }).strict();
+export const addGroupMemberRequest = z.object({ agentId }).strict();
 
 /** Group commands of ADR 0005 section 17.1. */
 export function mountRoomRoutes(router: express.Router, context: RoomRoutesContext): void {
@@ -26,7 +29,7 @@ export function mountRoomRoutes(router: express.Router, context: RoomRoutesConte
     return { hub, roomId: parsed.data };
   };
   router.post("/groups", async (req, res) => {
-    const body = z.object({ idempotencyKey: key, title: z.string().min(1).max(256), agentIds: z.array(agentId).min(1).max(20) }).strict().parse(req.body);
+    const body = createGroupRequest.parse(req.body);
     const hub = context.hub(res), { personId } = context.principal(res);
     for (const id of new Set(body.agentIds)) if (active(res).has(id)) await context.open(id).catch(() => undefined);
     const { roomId } = hub.rooms.create(personId, body, active(res));
@@ -34,13 +37,13 @@ export function mountRoomRoutes(router: express.Router, context: RoomRoutesConte
     res.status(201).json({ ...summary, members: hub.rooms.members(roomId) });
   });
   router.patch("/groups/:roomId", (req, res) => {
-    const body = z.object({ title: z.string().min(1).max(256).optional(), archived: z.boolean().optional() }).strict().parse(req.body ?? {});
+    const body = updateGroupRequest.parse(req.body ?? {});
     const target = room(res, req.params.roomId);
     target.hub.rooms.update(target.roomId, context.principal(res).personId, body);
     res.json(target.hub.rooms.summary(roomChatId(target.roomId), context.principal(res).personId));
   });
   router.post("/groups/:roomId/members", async (req, res) => {
-    const body = z.object({ agentId }).strict().parse(req.body);
+    const body = addGroupMemberRequest.parse(req.body);
     const target = room(res, req.params.roomId);
     if (active(res).has(body.agentId)) await context.open(body.agentId).catch(() => undefined);
     res.json({ members: target.hub.rooms.addMember(target.roomId, context.principal(res).personId, body.agentId, active(res)) });

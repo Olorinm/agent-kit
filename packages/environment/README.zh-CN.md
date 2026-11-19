@@ -2,16 +2,19 @@
 
 [English](README.md) | [简体中文](README.zh-CN.md)
 
-用一套 TypeScript API 和 CLI，为任意 Agent 创建和管理云端执行环境。
+用一套 TypeScript API 和 CLI，为任意 Agent 创建和管理执行环境。
 
-目前提供一个供应商：**Cloudflare**。它通过运维网关调用 Cloudflare 原生的 Durable Object
-Container API；网关源码和独立的加密恢复备份在 [cloudflare/](cloudflare/README.md)。
+目前提供两个供应商。**Cloudflare** 通过运维网关调用 Cloudflare 原生的 Durable Object
+Container API；网关源码和独立的加密恢复备份在 [cloudflare/](cloudflare/README.md)。**Docker**
+把环境跑成本机的容器，不需要云账号，用来在自己的电脑上试用，见 [Docker（本地）](#docker本地)。
 
 ```text
 上层服务
         │ 选择供应商和模板，保存环境 ID
 Agent Environment
-        └── Cloudflare 网关（cloudflare/）
+        ├── Cloudflare 网关（cloudflare/）
+        │           └── 容器：工具、Agent 运行时
+        └── 本机 Docker
                     └── 容器：工具、Agent 运行时
 ```
 
@@ -28,7 +31,7 @@ Agent Environment
 
 ## 开始使用
 
-需要 Node.js 24+，以及已部署的 [Cloudflare 网关](cloudflare/README.md)。
+需要 Node.js 24+，以及已部署的 [Cloudflare 网关](cloudflare/README.md)；用 [Docker 供应商](#docker本地)时只需要本机 Docker。
 
 ```sh
 npm ci
@@ -49,6 +52,45 @@ node dist/cli.js destroy --config /secure/providers.json --provider cloudflare -
 
 在其他项目中使用时，安装 GitHub Release 里的包（或 `npm pack` 后安装生成的包）；没有发布到 npm。
 
+## Docker（本地）
+
+`docker` 类型通过 `docker` 命令把每个环境跑成本机的一个容器。这样不需要 Cloudflare 账号，也不需要密钥文件，
+就能在自己的电脑上跑起用到这个包的产品：
+
+```json
+{ "providers": [{ "id": "local", "kind": "docker" }] }
+```
+
+```sh
+node dist/cli.js create --config providers.json --provider local --template node24
+```
+
+可选字段：`dockerPath`（默认 `docker`）、`maxEnvironments`（默认 3，已停止的环境也算）、`ports`（默认 `[37420]`）。
+
+**只用于在自己的机器上试用，不要用于生产：**
+
+- **不限制出网。** `modelServices` 和 `modelAccounts` 会被接受，但不起作用。本地环境能访问整个互联网，
+  以及你这台机器能访问的网络。
+- **除 Docker 本身外没有隔离。** 命令在容器里以 root 运行，不限 CPU 和内存。能使用 Docker 的人都能进入环境。
+  `env` 的值作为 `docker` 参数传入：本机其他用户能在进程列表里看到，`create` 传入的还能用 `docker inspect` 看到。
+- **没有到期时间。** `capabilities.automaticPause` 为 `false`：`timeoutSeconds`、`onTimeout` 和 `setTimeout()`
+  只做校验，不会执行。环境一直运行，直到被暂停或销毁。
+- 没有备份，也没有快照恢复。
+
+其余行为与 Cloudflare 网关一致，调用方不用改：
+
+- 模板 `node24` 在第一次使用时基于 `node:24-trixie-slim` 构建，标签为 `agent-environment-node24:<hash>`：
+  Debian trixie 加 Node 24，命令和文件传输以 root 执行，另有给 Agent 运行时用的 `user`（uid 1001，`/home/user`）。
+  容器等到 `/opt/agent-environment/start.sh` 出现后运行它，所以[网关的启动脚本](cloudflare/examples/start-host.sh)可以直接用。
+- `pause()` 停止容器，停好才返回。文件保留，进程不保留。`resume()` 重新启动容器，启动脚本会再跑一遍。
+  因为其他原因停止的容器（Docker 重启、电脑重启、启动脚本退出）同样显示为 `paused`，可以恢复。
+- `httpEndpoint()` 返回 `http://127.0.0.1:<端口>`，没有请求头。只有 `ports` 里的端口会发布，且只发布在本机回环地址上。
+  主机端口由 Docker 在每次启动时分配，恢复后要重新获取。
+- 超时或被取消的命令会连同它的子进程在容器里被终止，并标记为执行结果不确定。同一进程内有命令或文件传输在进行时，
+  `pause`、`resume`、`destroy` 会以 `environment_busy` 拒绝。
+
+`AGENT_ENVIRONMENT_DOCKER_TEST=1 npm test` 会多跑一个针对本机 Docker 的完整生命周期测试。
+
 ## 需要注意的行为
 
 - `pause()` 只确认请求已受理；查询到 `paused` 后再恢复。到期会保存文件系统快照并停止计算，不恢复进程内存。
@@ -63,7 +105,7 @@ node dist/cli.js destroy --config /secure/providers.json --provider cloudflare -
 
 1. 新增 `src/<供应商>.ts`，导出 `create<Provider>Provider(options)`。
 2. 在 [src/config.ts](src/config.ts) 的 `factories` 表里登记它的 `kind`，配置文件才能选用。
-3. 在 [src/index.ts](src/index.ts) 导出，并在 `test/` 下用本地夹具服务写测试。
+3. 在 [src/index.ts](src/index.ts) 导出，并在 `test/` 下用本地夹具写测试。
 
 凭据只放在配置引用的私有密钥文件里，不要写进 metadata 或环境 ID。
 

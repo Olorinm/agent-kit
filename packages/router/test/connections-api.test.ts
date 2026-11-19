@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import express from "express";
-import { mkdtempSync, rmSync, readFileSync, statSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync, readFileSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
@@ -135,13 +135,16 @@ async function fixture() {
   cleanup.push(() => setup.close());
   function client(name: string) {
     return {
-      async api(path: string, body?: unknown, token = "fixture-" + name) {
+      async call(method: string, path: string, body?: unknown, token = "fixture-" + name) {
         const response = await fetch(base + root + path, {
-          method: body === undefined ? "GET" : "POST",
+          method,
           headers: {Authorization: "Bearer " + token, "Content-Type": "application/json"},
           ...(body === undefined ? {} : {body: JSON.stringify(body)}),
         });
         return {status: response.status, data: response.status === 204 ? null : await response.json() as any};
+      },
+      api(path: string, body?: unknown, token?: string) {
+        return this.call(body === undefined ? "GET" : "POST", path, body, token);
       },
     };
   }
@@ -301,4 +304,122 @@ it("failed replacement restores execution sessions and the original channel conf
   expect(f.settings.configuration(agent)).toEqual(prior);
   expect(store.get("execution_sessions", "context")).toEqual({ sessionId: "keep-native", runtimeId: "personal" });
   expect(store.get("communication_runs", "finished")).toEqual({ phase: "finished" });
+});
+
+describe("connection management over HTTP", () => {
+  /** A Bark connection written by the operator: its key file is not one of Router's own. */
+  const bark = (f: Awaited<ReturnType<typeof fixture>>, agent: ManagedAgent) => {
+    const file = join(f.settings.agentDirectory(agent.id), "operator-bark-key");
+    privateFile(file, "fixture-device-key");
+    return f.settings.edit(agent.owner, agent.id, (config) => {
+      config.connections.push({ id: "bark", kind: "bark", server: "http://127.0.0.1:9", deviceKeyFile: file, ownerAddresses: [], peerAddresses: [], groupIds: [],
+        title: "Agent", preview: true, maxLength: 300, notify: { replies: true, replyAfterSeconds: 30, questions: true, schedules: true } });
+    }).then(() => file);
+  };
+  const peer = (id: string) => ({ externalId: id, sender: "peer@example.test", scope: "direct" as const, threadId: "thread-" + id, text: "hello",
+    reply: { target: "peer@example.test", messageId: id, data: {} } });
+
+  it("removes a configured connection with the credentials Router saved, keeps history and lets the platform connect again", async () => {
+    const f = await fixture(), a = f.client("alice"), b = f.client("bob");
+    const agent = (await a.api("/agents", {name: "helper"})).data, path = "/agents/" + agent.id;
+    expect((await f.connect(agent)).status).toBe(200);
+    const operatorFile = await bark(f, agent), directory = f.settings.agentDirectory(agent.id);
+    const runtime = await f.service.runtime(agent.id);
+    runtime.extension!.communication!.receive("mail", { ...peer("kept"), sender: "alice@example.test" });
+    expect(await a.call("DELETE", path + "/connections/unknown")).toEqual({status: 404, data: {error: "connection_not_found"}});
+    // The built-in owner surfaces are registered by Router, not configured: they cannot be removed.
+    for (const builtin of ["web", "room"])
+      expect(await a.call("DELETE", path + "/connections/" + builtin)).toEqual({status: 404, data: {error: "connection_not_found"}});
+    expect(await b.call("DELETE", path + "/connections/mail")).toEqual({status: 404, data: {error: "agent_not_found"}});
+    runtime.store.set("communication_runs", "uncertain", {phase: "unknown"});
+    expect(await a.call("DELETE", path + "/connections/mail")).toEqual({status: 409, data: {error: "agent_has_active_or_unknown_run"}});
+    expect(existsSync(join(directory, "mail-key"))).toBe(true);
+    expect((await a.api(path + "/configuration")).data.communication.connections.find((item: any) => item.id === "mail").started).toBe(true);
+    runtime.store.delete("communication_runs", "uncertain");
+    const removed = await a.call("DELETE", path + "/connections/mail");
+    expect(removed).toMatchObject({status: 200, data: {agent: {id: agent.id}, host: null, connections: [{id: "bark", kind: "bark"}]}});
+    expect(existsSync(join(directory, "mail-key"))).toBe(false);
+    expect(JSON.parse(readFileSync(join(directory, "channels.json"), "utf8")).agents[0].connections.map((item: any) => item.id)).toEqual(["bark"]);
+    const live = (await a.api(path + "/configuration")).data.communication.connections.map((item: any) => item.id);
+    expect(live).toContain("web");
+    expect(live).not.toContain("mail");
+    // The message received over the removed connection is still in the agent's ledger.
+    expect((await f.service.runtime(agent.id)).extension!.communication!.ledger.claimFor("mail", "kept")).toMatchObject({connectionId: "mail", eventId: expect.any(String)});
+    expect(await a.call("DELETE", path + "/connections/mail")).toEqual({status: 404, data: {error: "connection_not_found"}});
+    expect((await a.call("DELETE", path + "/connections/bark")).data.connections).toEqual([]);
+    expect(readFileSync(operatorFile, "utf8")).toBe("fixture-device-key");
+    expect((await f.connect(agent)).status).toBe(200);
+    expect((await a.api(path + "/configuration")).data.communication.connections.find((item: any) => item.id === "mail").started).toBe(true);
+  });
+
+  it("removes the saved Feishu app directory only for the connection that uses it", async () => {
+    const f = await fixture(), agent = await f.service.create(alice, "helper"), directory = f.settings.agentDirectory(agent.id);
+    privateFile(join(directory, "feishu", "app-secret"), "fixture-secret");
+    privateFile(join(directory, "feishu", "credentials.json"), { version: 1, appId: "cli_fixture", appSecretFile: "app-secret", domain: "feishu", ownerOpenId: "ou_owner" });
+    privateFile(join(directory, "weixin.json"), "{}");
+    const written = (connection: object) => (f.settings as any).written(agent.id, connection);
+    expect(written({ kind: "feishu", credentialsFile: join(directory, "feishu", "credentials.json") })).toEqual([join(directory, "feishu")]);
+    expect(written({ kind: "feishu", credentialsFile: "feishu/credentials.json" })).toEqual([join(directory, "feishu")]);
+    expect(written({ kind: "feishu", appId: "cli_other", appSecretFile: "elsewhere/app-secret" })).toEqual([]);
+    expect(written({ kind: "feishu", credentialsFile: join(directory, "..", "shared", "credentials.json") })).toEqual([]);
+    expect(written({ kind: "weixin", credentialsFile: join(directory, "weixin.json") })).toEqual([join(directory, "weixin.json")]);
+    expect(written({ kind: "telegram", botTokenFile: join(directory, "telegram-token") })).toEqual([join(directory, "telegram-token")]);
+    expect(written({ kind: "telegram", botTokenFile: join(directory, "weixin.json") })).toEqual([]);
+    expect(written({ kind: "bark", deviceKeyFile: join(directory, "mail-key") })).toEqual([]);
+  });
+
+  it("reads and replaces the allowlists of a connection without a restart and through the channel's own validation", async () => {
+    const f = await fixture(), a = f.client("alice"), b = f.client("bob");
+    const agent = (await a.api("/agents", {name: "helper"})).data, path = "/agents/" + agent.id, access = path + "/connections/mail/access";
+    expect(await a.api(access)).toEqual({status: 404, data: {error: "connection_not_found"}});
+    expect((await f.connect(agent)).status).toBe(200);
+    await bark(f, agent);
+    expect(await a.api(access)).toEqual({status: 200, data: {groupIds: [], peerAddresses: [], ownerAddresses: ["alice@example.test"]}});
+    expect((await b.api(access)).status).toBe(404);
+    const core = async () => (await f.service.runtime(agent.id)).extension!.communication!;
+    expect((await core()).receive("mail", peer("before"))).toMatchObject({state: "ignored"});
+    for (const invalid of [{}, {groupIds: []}, {peerAddresses: []}, {groupIds: [], peerAddresses: [], ownerAddresses: []}, {groupIds: [""], peerAddresses: []},
+      {groupIds: [], peerAddresses: Array.from({length: 101}, (_, index) => "peer-" + index)}, {groupIds: "thread", peerAddresses: []}])
+      expect(await a.call("PUT", access, invalid), JSON.stringify(invalid).slice(0, 80)).toEqual({status: 400, data: {error: "invalid_request"}});
+    expect((await b.call("PUT", access, {groupIds: [], peerAddresses: []})).status).toBe(404);
+    expect(await a.call("PUT", path + "/connections/web/access", {groupIds: [], peerAddresses: []})).toEqual({status: 404, data: {error: "connection_not_found"}});
+    const allowed = {groupIds: ["thread-1"], peerAddresses: ["peer@example.test"]};
+    expect(await a.call("PUT", access, allowed)).toEqual({status: 200, data: {...allowed, ownerAddresses: ["alice@example.test"]}});
+    expect(await a.api(access)).toEqual({status: 200, data: {...allowed, ownerAddresses: ["alice@example.test"]}});
+    expect(new ConnectionConfiguration(f.directory, join(f.directory, "options.json")).configuration(agent)?.connections[0]).toMatchObject(allowed);
+    // The running channel uses the new lists: the same sender is now admitted.
+    expect((await core()).receive("mail", peer("after"))).toMatchObject({state: "received"});
+    // Both lists are replaced, never merged.
+    expect((await a.call("PUT", access, {groupIds: [], peerAddresses: []})).data).toMatchObject({groupIds: [], peerAddresses: []});
+    expect((await core()).receive("mail", peer("removed"))).toMatchObject({state: "ignored"});
+    // A push channel has no senders: its module refuses any list, and nothing is saved.
+    const refused = path + "/connections/bark/access";
+    expect(await a.call("PUT", refused, {groupIds: [], peerAddresses: ["someone"]})).toEqual({status: 400, data: {error: "bark_is_send_only"}});
+    expect(await a.call("PUT", refused, {groupIds: ["group"], peerAddresses: []})).toEqual({status: 400, data: {error: "bark_is_send_only"}});
+    expect(await a.api(refused)).toEqual({status: 200, data: {groupIds: [], peerAddresses: [], ownerAddresses: []}});
+    const runtime = await f.service.runtime(agent.id);
+    runtime.store.set("communication_runs", "uncertain", {phase: "unknown"});
+    expect(await a.call("PUT", access, allowed)).toEqual({status: 409, data: {error: "agent_has_active_or_unknown_run"}});
+    expect((await a.api(access)).data).toMatchObject({groupIds: [], peerAddresses: []});
+  });
+
+  it("keeps the Host scope and the session binding of an existing session across an access change", async () => {
+    const f = await fixture(), a = f.client("alice");
+    const agent = (await a.api("/agents", {name: "helper"})).data, path = "/agents/" + agent.id;
+    await f.host(agent);
+    expect((await f.connect(agent)).status).toBe(200);
+    const work = path + "/communication/work-events";
+    const first = await a.api(work, {eventId: "first", input: "remember 42"});
+    await vi.waitFor(async () => expect((await a.api(work + "/first")).data).toMatchObject({status: "completed"}), {timeout: 7000});
+    const store = (await f.service.runtime(agent.id)).store;
+    const scope = store.get("communication_host", "scope"), sessions = store.entries("execution_sessions");
+    expect(scope).toEqual(expect.any(String));
+    expect(sessions.length).toBeGreaterThan(0);
+    expect((await a.call("PUT", path + "/connections/mail/access", {groupIds: ["thread-1"], peerAddresses: ["peer@example.test"]})).status).toBe(200);
+    expect(store.get("communication_host", "scope")).toBe(scope);
+    expect(store.entries("execution_sessions")).toEqual(sessions);
+    expect((await a.api(work, {eventId: "second", input: "continue", sessionId: first.data.sessionId})).status).toBe(202);
+    await vi.waitFor(async () => expect((await a.api(work + "/second")).data).toMatchObject({status: "completed", answer: "Fixture reply: continue"}), {timeout: 7000});
+    expect([...f.hostRuns.values()][1].sessionId).toBe([...f.hostRuns.values()][0].sessionId);
+  }, 20000);
 });

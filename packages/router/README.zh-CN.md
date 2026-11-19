@@ -65,7 +65,7 @@ npm run agent:service
 | `AGENT_R2_ENDPOINT` 或 `AGENT_R2_ACCOUNT_ID` | R2 端点，或用于推导端点的账号 ID。 |
 | `AGENT_ATTACHMENT_QUOTA_BYTES` | 每个所有者的附件配额，默认 5 GiB。 |
 
-所有者通过边缘身份登录。独立服务未设置 `AGENT_EDGE_IDENTITY_FILE` 时不接受任何所有者请求；嵌入方产品可以提供自己的 bearer token 认证函数。
+所有者通过边缘身份登录。独立服务未设置 `AGENT_EDGE_IDENTITY_FILE` 时不接受任何所有者请求；只有嵌入方产品提供 `dependencies.authenticate` 时才接受 bearer token，见[账号与 Agent](docs/guides/managed-agents.md)。
 
 ## 嵌入产品
 
@@ -89,8 +89,12 @@ await router.start();
 | `GET /account` | 当前认证的所有者 |
 | `GET`、`POST /agents`；`GET`、`DELETE /agents/:id` | 列出、创建、读取和删除 Agent |
 | `GET /connection-options`；`/agents/:id/configuration`、`/connections`、`/connection-jobs`、`/check` | 渠道连接的配置与检查 |
+| `DELETE /agents/:id/connections/:connection` | 断开一个渠道连接 |
+| `GET`、`PUT /agents/:id/connections/:connection/access` | 读取、替换连接允许的群和联系人 |
 | `/agents/:id/communication` | 渠道和 Host 状态；其下的 `sessions`、`work-events`、`tasks`、`runs` 用于工作会话和运行观察 |
 | `/web/...` | 账本 Web API：聊天、事件、消息、卡片、群组、附件、身份和 socket ticket |
+
+完整的路由清单以数据形式导出：`routerApiReference`（`src/api-reference.ts`）每条路由一项，包含方法、路径、一句话说明、请求体的 JSON Schema（路由有校验时），以及默认服务令牌可调用时的 `operator: true`。有测试把它与 Express 应用上实际注册的路由逐一比对，因此不会落后于代码。
 
 ## 文档
 

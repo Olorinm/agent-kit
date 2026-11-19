@@ -29,6 +29,8 @@ export const agentChannelConfigSchema = z.object({ agentId: z.uuid(), connection
     if (host.binding ? host.url !== undefined || host.tokenFile !== undefined : !host.url || !host.tokenFile)
       context.addIssue({ code: "custom", message: "host_requires_binding_or_http_credentials" });
   }).optional() }).strict();
+/** The issue codes of a connection's own module (`ChannelModule.validate`); empty when the module accepts it. */
+export const connectionIssues = (connection: z.infer<typeof connectionSchema>): string[] => findChannelModule(connection.kind)?.validate?.(connection) ?? [];
 export const channelConfigSchema = z.object({ agents: z.array(agentChannelConfigSchema).min(1).max(100) }).strict().superRefine((config, context) => {
   if (new Set(config.agents.map((agent) => agent.agentId)).size !== config.agents.length) context.addIssue({ code: "custom", message: "duplicate_agent_id" });
   for (const agent of config.agents) {
@@ -38,7 +40,7 @@ export const channelConfigSchema = z.object({ agents: z.array(agentChannelConfig
     if (agent.connections.some((item) => item.id === WEB_CONNECTION)) context.addIssue({ code: "custom", message: "connection_id_reserved_for_web" });
     if (agent.connections.some((item) => item.id === ROOM_CONNECTION)) context.addIssue({ code: "custom", message: "connection_id_reserved_for_room" });
     for (const item of agent.connections)
-      for (const message of findChannelModule(item.kind)?.validate?.(item) ?? []) context.addIssue({ code: "custom", message });
+      for (const message of connectionIssues(item)) context.addIssue({ code: "custom", message });
   }
 });
 export type AgentChannelConfig = z.infer<typeof agentChannelConfigSchema>;

@@ -20,6 +20,11 @@ await router.start();
 application with every route under `/_agent-router/v1`. `upgrade` handles the event socket of the web API and returns
 `false` for any other upgrade request.
 
+The package also exports `routerApiReference`, an array of `{ method, path, summary, body?, operator? }` with one entry
+for every route of `app` and for the event socket. `path` is the full Express path, `body` the JSON Schema of the
+request body, and `operator: true` marks a request a default service token may make. A product that adds its own
+routes can merge its entries with this array to publish one API list.
+
 ## Configuration
 
 `config` is a `ServiceConfig`: `serverName` (the account namespace of owner ids `@name:<serverName>`), `publicUrl`,

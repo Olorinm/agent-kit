@@ -78,6 +78,22 @@ export interface ServiceDependencies {
 }
 /** Registry collections of the removed visitor channel ledger (`ChannelRouter`); deleted once by a migration. */
 export const LEGACY_CHANNEL_COLLECTIONS = ["channel_entries", "channel_visitors", "channel_events", "channel_contexts", "channel_reply_attachments"];
+/** Request bodies of the owner routes below; `api-reference.ts` publishes them as JSON Schema. */
+export const emptyRequest = z.object({}).strict();
+export const createAgentRequest = z.object({ name: agentName }).strict();
+export const nativeSessionRequest = z.object({ action: z.enum(["read", "history", "items", "rename", "archive", "unarchive", "delete"]),
+  name: z.string().min(1).max(1000).optional(), limit: z.number().int().min(1).max(1000).optional(),
+  cursor: z.string().max(10000).optional(), turnId: z.string().max(160).optional(),
+  itemsView: z.enum(["notLoaded", "summary", "full"]).optional(), sortDirection: z.enum(["asc", "desc"]).optional(),
+}).strict();
+export const forkSessionRequest = z.object({ targetSessionId: z.string().min(1).max(160), entryId: z.string().max(160).optional(), beforeEntryId: z.string().max(160).optional() }).strict();
+export const steerSessionRequest = z.object({ input: z.string().min(1).max(24_000) }).strict();
+export const workEventRequest = z.object({ eventId: z.string().min(1).max(160), sessionId: z.string().min(1).max(160).optional(), input: z.string().max(24_000),
+  context: z.json().optional(), inputItems: z.array(z.record(z.string(), z.json())).max(100).optional(),
+  settings: z.record(z.string(), z.json()).optional(), mode: z.enum(["turn", "compact"]).optional(),
+}).strict();
+export const callResultRequest = z.object({ result: z.json() }).strict();
+export const reconcileRunRequest = z.object({ runId: z.string().min(1).max(160) }).strict();
 const newToken = () => randomBytes(32).toString("base64url");
 function equal(a: string, b: string): boolean {
   const left = Buffer.from(a), right = Buffer.from(b);
@@ -371,7 +387,7 @@ export function createManagedApp(service: ManagedService, setup?: express.Router
   });
   app.get(`${root}/agents`, (_req, res) => res.json({ data: service.agents(res.locals.owner).map((agent) => service.publicAgent(agent)) }));
   app.post(`${root}/agents`, async (req, res) => {
-    const { name } = z.object({ name: agentName }).strict().parse(req.body);
+    const { name } = createAgentRequest.parse(req.body);
     res.status(201).json(service.publicAgent(await service.create(res.locals.owner, name)));
   });
   app.use(`${root}/agents/:agentId`, (req, res, next) => { service.owned(String(req.params.agentId), res.locals.owner); next(); });
@@ -398,33 +414,26 @@ export function createManagedApp(service: ManagedService, setup?: express.Router
   app.get(`${communication}/sessions`, async (req, res) => res.json({ data: (await sessions(req.params.agentId)).list() }));
   app.get(`${communication}/sessions/:sessionId`, async (req, res) => res.json((await sessions(req.params.agentId)).getSession(req.params.sessionId)));
   app.post(`${communication}/sessions/:sessionId/native`, async (req, res) => {
-    const body = z.object({ action: z.enum(["read", "history", "items", "rename", "archive", "unarchive", "delete"]),
-      name: z.string().min(1).max(1000).optional(), limit: z.number().int().min(1).max(1000).optional(),
-      cursor: z.string().max(10000).optional(), turnId: z.string().max(160).optional(),
-      itemsView: z.enum(["notLoaded", "summary", "full"]).optional(), sortDirection: z.enum(["asc", "desc"]).optional(),
-    }).strict().parse(req.body);
+    const body = nativeSessionRequest.parse(req.body);
     res.json(await (await sessions(req.params.agentId)).native(req.params.sessionId, body));
   });
   app.post(`${communication}/sessions/:sessionId/fork`, async (req, res) => {
-    const body = z.object({ targetSessionId: z.string().min(1).max(160), entryId: z.string().max(160).optional(), beforeEntryId: z.string().max(160).optional() }).strict().parse(req.body);
+    const body = forkSessionRequest.parse(req.body);
     const { targetSessionId, ...options } = body;
     res.json(await (await sessions(req.params.agentId)).fork(req.params.sessionId, targetSessionId, options));
   });
   app.post(`${communication}/sessions/:sessionId/steer`, async (req, res) => {
-    const body = z.object({ input: z.string().min(1).max(24_000) }).strict().parse(req.body);
+    const body = steerSessionRequest.parse(req.body);
     await (await sessions(req.params.agentId)).steer(req.params.sessionId, body.input); res.json({ status: "accepted" });
   });
   app.post(`${communication}/work-events`, async (req, res) => {
-    const body = z.object({ eventId: z.string().min(1).max(160), sessionId: z.string().min(1).max(160).optional(), input: z.string().max(24_000),
-      context: z.json().optional(), inputItems: z.array(z.record(z.string(), z.json())).max(100).optional(),
-      settings: z.record(z.string(), z.json()).optional(), mode: z.enum(["turn", "compact"]).optional(),
-    }).strict().parse(req.body);
+    const body = workEventRequest.parse(req.body);
     res.status(202).json(await (await sessions(req.params.agentId)).submit({ ...body,
       admission: { kind: "owner", owner: res.locals.owner, agentId: req.params.agentId, reference: body.eventId } }));
   });
   app.get(`${communication}/work-events/:eventId`, async (req, res) => res.json((await sessions(req.params.agentId)).get(req.params.eventId)));
   app.post(`${communication}/work-events/:eventId/cancel`, async (req, res) => {
-    z.object({}).strict().parse(req.body);
+    emptyRequest.parse(req.body);
     res.json(await (await sessions(req.params.agentId)).cancel(req.params.eventId));
   });
   app.get(`${communication}/tasks`, async (req, res) => {
@@ -440,7 +449,7 @@ export function createManagedApp(service: ManagedService, setup?: express.Router
     res.json(await (await observation(req.params.agentId)).events(req.params.claimId, after, limit));
   });
   app.post(`${communication}/runs/:claimId/calls/:callId/result`, async (req, res) => {
-    const body = z.object({ result: z.json() }).strict().parse(req.body);
+    const body = callResultRequest.parse(req.body);
     const runtime = await extension(req.params.agentId), value = await observation(req.params.agentId);
     const resolve = () => value.resolve(req.params.claimId, req.params.callId, body.result);
     // One card record for every answer surface (ADR 0005 16.1): the first answer wins, a later one is stale.
@@ -450,20 +459,20 @@ export function createManagedApp(service: ManagedService, setup?: express.Router
     res.json({ status });
   });
   app.post(`${communication}/tasks/:taskId/cancel`, async (req, res) => {
-    z.object({}).strict().parse(req.body);
+    emptyRequest.parse(req.body);
     await (await observation(req.params.agentId)).cancel(req.params.taskId);
     res.json({ status: "accepted" });
   });
   app.post(`${root}/agents/:agentId/communication/calls/:callId/result`, async (req, res) => {
-    const body = z.object({ result: z.json() }).strict().parse(req.body);
+    const body = callResultRequest.parse(req.body);
     const status = await (await extension(req.params.agentId)).resolve(req.params.callId, body.result); res.json({ status: status ?? "accepted" });
   });
   app.post(`${root}/agents/:agentId/communication/runs/:claimId/reconcile`, async (req, res) => {
-    const body = z.object({ runId: z.string().min(1).max(160) }).strict().parse(req.body);
+    const body = reconcileRunRequest.parse(req.body);
     await (await extension(req.params.agentId)).reconcile(req.params.claimId, body.runId); res.json({ status: "accepted" });
   });
   app.post(`${root}/agents/:agentId/communication/runs/:claimId/close`, async (req, res) => {
-    z.object({}).strict().parse(req.body);
+    emptyRequest.parse(req.body);
     await (await extension(req.params.agentId)).closeUnknown(req.params.claimId); res.json({ status: "closed" });
   });
   app.use((_req, res) => res.status(404).json({ error: "not_found" }));

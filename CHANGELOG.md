@@ -5,6 +5,26 @@ tag publishes a GitHub Release whose notes are this file's section for that vers
 section in the version-bump commit before tagging. Changes up to the versions listed under
 0.8.0-alpha.1 are in each package's own `CHANGELOG.md`.
 
+## [0.11.0-alpha.7] - 2026-11-19
+
+- **Router:** `DELETE /_agent-router/v1/agents/:agentId/connections/:connectionId` disconnects
+  a channel connection: it leaves the agent's configuration, its worker stops and the
+  credential files Router wrote for it are removed. Chat history stays. Unknown connections
+  (and the built-in `web` and `room`) return `404 connection_not_found`; an agent with an
+  active or unknown run returns `409 agent_has_active_or_unknown_run`.
+- **Router:** `GET` and `PUT /_agent-router/v1/agents/:agentId/connections/:connectionId/access`
+  read and replace a connection's `groupIds` and `peerAddresses` without a restart. The
+  channel's own validation applies. Existing sessions are kept.
+- **Router:** `routerApiReference` lists every owner-facing HTTP route (method, path, summary,
+  request body schema, whether a default service token may call it). A test compares it with
+  the routes the app registers.
+- **Router:** the managed-agents guide states exactly when a bearer token is accepted.
+- **Environment:** provider kind `docker` runs each environment as a local Docker container
+  through the `docker` CLI, for trying a product on one's own machine. It keeps the Cloudflare
+  provider's contract for files, commands, pause and resume. It does not enforce
+  `modelServices` or `modelAccounts` and has no automatic timeout. A `docker` entry in the
+  providers file needs no `apiUrl` or `apiKeyFile`.
+
 ## [0.11.0-alpha.6] - 2026-11-19
 
 - **Router:** approvals (kernel permission requests, connector approvals, `approval` owner

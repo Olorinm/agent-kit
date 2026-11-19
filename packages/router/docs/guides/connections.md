@@ -13,6 +13,9 @@ The routes below are under `/_agent-router/v1` and require the authenticated own
 | `GET /connection-options` | The mail services an owner can choose (`id`, `label`) |
 | `GET /agents/:id/configuration` | The agent, its Host (`runtimeId`) and its connections (`id`, `kind`), plus live channel status. No secrets. |
 | `POST /agents/:id/connections` | Connect one platform |
+| `DELETE /agents/:id/connections/:connection` | Disconnect a connection |
+| `GET /agents/:id/connections/:connection/access` | The connection's `groupIds`, `peerAddresses` and `ownerAddresses` |
+| `PUT /agents/:id/connections/:connection/access` | Replace `groupIds` and `peerAddresses` |
 | `GET /agents/:id/connection-jobs` | Recent setup jobs |
 | `GET /agents/:id/connection-jobs/:job` | One setup job |
 | `POST /agents/:id/connection-jobs/:job/pairing` | Supply a Weixin pairing code: `{ "code": "123456" }` |
@@ -78,6 +81,72 @@ A failed Feishu job includes a `recovery` object (`action`, optional `appId`, `d
 
 Keep the original `domain` when retrying. An app that is already assigned to another agent is rejected.
 
+## Disconnect a platform
+
+`DELETE /agents/:id/connections/:connection` removes one connection; `:connection` is its `id` in the configuration
+(`feishu`, `weixin`, `telegram`, `mail`, or the id the operator gave it). The answer is `200` with the agent's
+configuration as `GET /agents/:id/configuration` lists it (`agent`, `host`, `connections`), without the removed entry.
+
+- The connection's consumer is stopped and the agent's other connections are started again, the same way a connection
+  is added. Nothing is received or sent over the removed connection afterwards.
+- The credential files Router saved for the connection are deleted: `feishu/` (app credentials and secret),
+  `weixin.json`, `telegram-token` or `mail-key` in the agent's connection directory. A credential file the operator
+  placed under another name or outside that directory is left alone, as are the files of a Bark connection.
+- History stays. The conversations, messages and sessions of the connection remain in the agent's ledger and in the
+  web API; a session keeps its context. A reply that was still queued for the connection is marked `rejected` with
+  `connection_removed`, and nothing is sent.
+- The platform can be connected again with `POST /agents/:id/connections`. Deleting the saved Feishu credentials
+  releases the app: connecting Feishu again creates a new app unless the request names the existing one with `appId`.
+- The owner's linked identities are not changed; unlink them through the identity routes of the web API.
+
+| Status | Meaning |
+| --- | --- |
+| `404 connection_not_found` | No connection with that id in the agent's configuration. The built-in `web` and `room` surfaces are part of every agent, are not configured connections and cannot be removed. |
+| `404 agent_not_found` | The agent does not exist or belongs to another owner |
+| `409 agent_has_active_or_unknown_run` | The agent has a running run or a run with an unknown outcome. Nothing changed; wait for the run, reconcile or close it, then repeat the request. |
+
+## Allowed groups and peers
+
+Every connection has three lists (see [Channels](personal-channels.md#addresses-groups-and-status)): `ownerAddresses`,
+the owner's own identities; `peerAddresses`, other senders that may start work; and `groupIds`, the groups, topics or
+threads in which they may.
+
+`GET /agents/:id/connections/:connection/access` returns them:
+
+```json
+{ "groupIds": ["oc_…"], "peerAddresses": ["ou_…"], "ownerAddresses": ["ou_…"] }
+```
+
+`PUT` on the same path replaces `groupIds` and `peerAddresses` and answers `200` with the same object:
+
+```json
+{ "groupIds": ["oc_…"], "peerAddresses": ["ou_…", "ou_…"] }
+```
+
+Both members are required and no other member is accepted; send an empty array to clear a list. A list has at most 100
+entries of 1 to 512 characters. The lists are replaced, not merged: read them first to add one entry.
+`ownerAddresses` is not changed by this route; it is set when the platform is connected, and further accounts of the
+owner are linked with pairing codes.
+
+The change is saved and applied to the running connection without a restart of the process: the agent's channels are
+stopped and started with the new lists. Existing sessions are not affected. The lists are not part of the Host scope or
+of any session binding, so a conversation that was already admitted continues in the same session, and a sender that
+is no longer listed is refused from the next message on. A message that was refused earlier is not run later.
+
+| Status | Meaning |
+| --- | --- |
+| `400 invalid_request` | The body is not exactly two valid lists |
+| `400 weixin_bot_api_supports_private_conversations_only` | Weixin has no groups: `groupIds` must be empty |
+| `400 bark_is_send_only` | Bark only sends notifications: both lists must be empty |
+| `404 connection_not_found` | No connection with that id in the agent's configuration (also for `web` and `room`) |
+| `404 agent_not_found` | The agent does not exist or belongs to another owner |
+| `409 agent_has_active_or_unknown_run` | As for disconnecting: nothing changed, repeat the request after the run |
+
+A `400` from the channel carries the issue code of that channel's own validation; another channel may add its own.
+
+A service token without owner access cannot disconnect a connection or change these lists
+(`403 owner_sign_in_required`); it can read them.
+
 ## Check and chat
 
 `POST /agents/:id/check` returns `{ "checks": [...] }`. Each check has `agentId`, `kind`, `status` (`verified`,
@@ -107,7 +176,8 @@ receives and stores messages, but nothing answers them.
 Omit it when no email connection is offered. Router does not load cloud credentials or environment profiles.
 
 Each agent's connections are stored in `connections/agents/<agentId>/channels.json` under the state directory, next to
-their credential files. Persist the whole state directory. A configuration change is applied atomically: the previous
+their credential files. Persist the whole state directory. Disconnecting a connection and changing its allowed groups
+and peers are done through the routes above; the file does not have to be edited for them. A configuration change is applied atomically: the previous
 consumer is stopped before its replacement starts, and a change is refused while the agent has a running run or a run
 with an unknown outcome.
 

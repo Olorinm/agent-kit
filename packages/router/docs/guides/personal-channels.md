@@ -29,7 +29,8 @@ agent's channel configuration, `connections/agents/<agentId>/channels.json` in t
 
 Relative file paths are resolved against the directory of the file. Credentials are always files, never inline values.
 An operator can edit this file while Router is stopped. Every connection accepts `ownerAddresses`, `peerAddresses` and
-`groupIds` in addition to the fields below.
+`groupIds` in addition to the fields below. An owner removes a connection and replaces its `peerAddresses` and
+`groupIds` over HTTP while Router runs; see [Connections](connections.md#disconnect-a-platform).
 
 | Channel | Implementation | Required fields | Capabilities |
 | --- | --- | --- | --- |

@@ -7,11 +7,58 @@ import { WorkError } from "../execution/work.js";
 import { ServiceHttp } from "../http.js";
 import { privateFile } from "../services/feishu/cli.js";
 import { checkChannels } from "../service/check.js";
+import { connectionIssues, type AgentChannelConfig } from "../service/channels.js";
+import { connectionFields } from "../channels/api.js";
 import { ConnectionConfiguration } from "./configuration.js";
 import { ConnectionSetup } from "./connections.js";
 
 const root = "/_agent-router/v1";
-const object = z.object({}).strict();
+/** Request bodies of the connection routes; `api-reference.ts` publishes them as JSON Schema. */
+export const checkRequest = z.object({}).strict();
+export const connectRequest = z.discriminatedUnion("kind", [
+  z
+    .object({
+      kind: z.literal("feishu"),
+      appId: z.string().regex(/^cli_[a-zA-Z0-9_]{1,128}$/).optional(),
+      domain: z.enum(["feishu", "lark"]).default("feishu"),
+    })
+    .strict(),
+  z.object({ kind: z.literal("weixin") }).strict(),
+  z
+    .object({
+      kind: z.literal("telegram"),
+      token: z.string().min(1).max(1024),
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.literal("grove-mail"),
+      serviceId: z.string().min(1).max(48),
+      inboxId: z.email(),
+      apiKey: z.string().min(1).max(4096),
+      ownerEmail: z.email(),
+    })
+    .strict(),
+]);
+export const pairingRequest = z.object({ code: z.string().regex(/^\d{1,12}$/) }).strict();
+/** Both lists are replaced; each has the limits of the connection configuration. */
+export const accessRequest = z
+  .object({
+    groupIds: connectionFields.groupIds.unwrap(),
+    peerAddresses: connectionFields.peerAddresses.unwrap(),
+  })
+  .strict();
+/** A connection of the agent's configuration. The built-in web and room surfaces are not configured connections. */
+function configured(config: AgentChannelConfig | undefined, id: string) {
+  const connection = config?.connections.find((connection) => connection.id === id);
+  if (!connection) throw new WorkError("connection_not_found", 404);
+  return connection;
+}
+const access = ({ groupIds, peerAddresses, ownerAddresses }: AgentChannelConfig["connections"][number]) => ({
+  groupIds,
+  peerAddresses,
+  ownerAddresses,
+});
 
 /** Mounted AFTER the managed service's existing account authentication and Agent ownership checks. */
 export function createConnections(
@@ -54,33 +101,7 @@ export function createConnections(
     });
   });
   app.post(root + "/agents/:agentId/connections", async (req, res) => {
-    const body = z
-      .discriminatedUnion("kind", [
-        z
-          .object({
-            kind: z.literal("feishu"),
-            appId: z.string().regex(/^cli_[a-zA-Z0-9_]{1,128}$/).optional(),
-            domain: z.enum(["feishu", "lark"]).default("feishu"),
-          })
-          .strict(),
-        z.object({ kind: z.literal("weixin") }).strict(),
-        z
-          .object({
-            kind: z.literal("telegram"),
-            token: z.string().min(1).max(1024),
-          })
-          .strict(),
-        z
-          .object({
-            kind: z.literal("grove-mail"),
-            serviceId: z.string().min(1).max(48),
-            inboxId: z.email(),
-            apiKey: z.string().min(1).max(4096),
-            ownerEmail: z.email(),
-          })
-          .strict(),
-      ])
-      .parse(req.body);
+    const body = connectRequest.parse(req.body);
     const agent = service.owned(String(req.params.agentId), res.locals.owner);
     if (
       configuration
@@ -144,6 +165,39 @@ export function createConnections(
       }),
     );
   });
+  app.delete(root + "/agents/:agentId/connections/:connectionId", async (req, res) => {
+    const agent = service.owned(String(req.params.agentId), res.locals.owner);
+    res.json(
+      await configuration.remove(
+        res.locals.owner,
+        agent.id,
+        String(req.params.connectionId),
+      ),
+    );
+  });
+  app.get(root + "/agents/:agentId/connections/:connectionId/access", (req, res) => {
+    const agent = service.owned(String(req.params.agentId), res.locals.owner);
+    res.json(
+      access(
+        configured(
+          configuration.configuration(agent),
+          String(req.params.connectionId),
+        ),
+      ),
+    );
+  });
+  app.put(root + "/agents/:agentId/connections/:connectionId/access", async (req, res) => {
+    const body = accessRequest.parse(req.body);
+    const agent = service.owned(String(req.params.agentId), res.locals.owner),
+      id = String(req.params.connectionId);
+    await configuration.edit(res.locals.owner, agent.id, (config) => {
+      const connection = configured(config, id);
+      Object.assign(connection, body);
+      const [refused] = connectionIssues(connection);
+      if (refused) throw new WorkError(refused, 400);
+    });
+    res.json(access(configured(configuration.configuration(agent), id)));
+  });
   app.get(root + "/agents/:agentId/connection-jobs", (req, res) =>
     res.json({
       data: connections.list(res.locals.owner, String(req.params.agentId)),
@@ -159,10 +213,7 @@ export function createConnections(
     ),
   );
   app.post(root + "/agents/:agentId/connection-jobs/:id/pairing", (req, res) => {
-    const { code } = z
-      .object({ code: z.string().regex(/^\d{1,12}$/) })
-      .strict()
-      .parse(req.body);
+    const { code } = pairingRequest.parse(req.body);
     connections.pairing(
       res.locals.owner,
       String(req.params.agentId),
@@ -172,7 +223,7 @@ export function createConnections(
     res.status(204).end();
   });
   app.post(root + "/agents/:agentId/check", async (req, res) => {
-    object.parse(req.body);
+    checkRequest.parse(req.body);
     const agent = service.owned(String(req.params.agentId), res.locals.owner);
     const config = configuration.configuration(agent) ?? {
       agentId: agent.id,

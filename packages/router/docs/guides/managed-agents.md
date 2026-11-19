@@ -41,17 +41,29 @@ configured owner. `AGENT_EDGE_IDENTITY_FILE` points to a JSON file:
 - `origins` lists the browser origins allowed for requests that change state. The default is the origin of
   `AGENT_SERVICE_URL`; an HTTPS `Origin` that matches the request's own `Host` is also accepted (plain HTTP only for
   a loopback host).
-- `bearer` is `allow` (default) or `deny`. With `deny`, a request without an assertion is rejected even when the
-  embedding product supplies a bearer authenticator.
+- `bearer` is `allow` (default) or `deny`; see [Bearer tokens](#bearer-tokens-of-an-embedding-product).
 
-Only the signed assertion is read. An email that is not listed in `owners` gets `403 owner_not_configured`. A request
-that carries both an assertion and a bearer token must resolve to the same owner.
+Only the signed assertion is read. An email that is not listed in `owners` gets `403 owner_not_configured`.
 
 ### Bearer tokens of an embedding product
 
-A product that embeds Router can pass `dependencies.authenticate`, a function that resolves a bearer token to an owner id
-or throws (see [Embedding Agent Router](../architecture/embedding.md)). The standalone service has no bearer
-authenticator, so it needs the edge identity.
+Router itself issues no owner tokens and has no login route. An `Authorization: Bearer <token>` header is accepted
+only when a product that embeds Router passes `dependencies.authenticate`, a function that resolves a token to an owner
+id or throws (see [Embedding Agent Router](../architecture/embedding.md)). The standalone service passes none, so it
+answers every bearer request with `401 account_login_required` and needs the edge identity.
+
+With an authenticator, a bearer token is checked as follows:
+
+- The token is passed to `authenticate`. The owner id it returns must be in the service's namespace and must not start
+  with `@_ar_`; otherwise the request gets `403 local_owner_account_required`. A token starting with `ari_` (a worker
+  instance token) is never an owner credential.
+- Without an edge identity configuration, the bearer token alone decides.
+- With an edge identity and no assertion on the request, the bearer token decides when `bearer` is `allow`. With
+  `bearer: "deny"` the request gets `401 edge_identity_required`: the bearer path is off.
+- With an edge identity and an assertion, the assertion decides and an invalid assertion never falls back to the
+  bearer token. When `bearer` is `allow` and the request also carries a bearer token, the token must resolve to the
+  same owner (`401 principal_conflict` otherwise); it does not widen what a service token may do. With
+  `bearer: "deny"` the bearer token is not read.
 
 `GET /_agent-router/v1/account` returns the authenticated owner: `owner`, `personId`, `via` (`edge`, `edge-service` or
 `bearer`) and, for an edge login, `email`.

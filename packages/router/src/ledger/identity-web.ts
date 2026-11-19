@@ -6,6 +6,7 @@ import type { Identities } from "./identity.js";
 interface Principal { personId: string; ownerId: string; email?: string | undefined }
 const INSTRUCTIONS = (code: string) => `在要关联的渠道里私聊你的任一 Agent，发送：/link ${code}`;
 const id = z.string().regex(/^[A-Za-z0-9_-]{1,64}$/);
+export const pairingCodeRequest = z.object({}).strict();
 
 /**
  * Identity page API (ADR 0005 18.1, 18.4, 18.5), mounted under `/_agent-router/v1/web`:
@@ -21,7 +22,7 @@ export function identityRoutes(router: express.Router, identity: Identities, pri
     res.set("Cache-Control", "no-store").json({ data: identity.list(owner.personId, owner) });
   });
   router.post("/identities/pairing-codes", (req, res) => {
-    z.object({}).strict().parse(req.body ?? {});
+    pairingCodeRequest.parse(req.body ?? {});
     const created = identity.createCode(principal(res).ownerId);
     res.status(201).set("Cache-Control", "no-store").json({ ...created, instructions: INSTRUCTIONS(created.code) });
   });

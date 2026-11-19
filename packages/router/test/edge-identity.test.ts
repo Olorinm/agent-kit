@@ -222,7 +222,8 @@ describe("owner API with edge identity", () => {
       expect((await t.api(path, operator, "POST", {})).data.error).not.toBe("owner_sign_in_required");
     for (const [method, path] of [["POST", `${root}/agents`], ["DELETE", `${root}/agents/${agent.id}`], ["POST", `${root}/web/chats/${chat}/purge`], ["POST", `${root}/web/chats/${chat}/reset`],
       ["POST", `${root}/web/chats/${chat}/cards/card/answer`], ["POST", `${root}/web/identities/pairing-codes`], ["DELETE", `${root}/web/identities/1`], ["POST", `${root}/web/groups`],
-      ["PUT", `${root}/agents/${agent.id}/configuration`]] as const)
+      ["PUT", `${root}/agents/${agent.id}/configuration`], ["DELETE", `${root}/agents/${agent.id}/connections/mail`],
+      ["PUT", `${root}/agents/${agent.id}/connections/mail/access`]] as const)
       expect(await t.api(path, operator, method, {}), `${method} ${path}`).toEqual(refused);
     expect(t.managed.agents(owner).map((item) => item.status)).toEqual(["active"]);
     // A matching bearer does not turn the service token into the owner.

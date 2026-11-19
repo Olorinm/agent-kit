@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, unlinkSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, unlinkSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { z } from "zod";
 import { privateFile, loadFeishuCredentials } from "../services/feishu/cli.js";
@@ -262,6 +262,36 @@ export class ConnectionConfiguration {
         }
         return this.summary(agent);
       });
+    this.queue = operation.catch(() => {});
+    return operation;
+  }
+  /**
+   * The credential files Router's own connect flows wrote for a connection (`connections.ts`, `routes.ts`).
+   * A file the operator configured under another name or outside the agent directory is not Router's to delete.
+   */
+  private written(agentId: string, connection: AgentChannelConfig["connections"][number]): string[] {
+    const directory = this.agentDirectory(agentId);
+    const [file, name] = connection.kind === "feishu" ? [connection.credentialsFile, join("feishu", "credentials.json")]
+      : connection.kind === "weixin" ? [connection.credentialsFile, "weixin.json"]
+      : connection.kind === "telegram" ? [connection.botTokenFile, "telegram-token"]
+      : connection.kind === "grove-mail" ? [connection.apiKeyFile, "mail-key"] : [];
+    if (!file || !name || resolve(directory, file) !== join(directory, name)) return [];
+    // The Feishu directory holds the credentials, the app secret and the creation marker of this one app.
+    return [join(directory, connection.kind === "feishu" ? "feishu" : name)];
+  }
+  /** Remove one configured connection, then its credential files. Stored messages and sessions stay. */
+  remove(owner: string, agentId: string, connectionId: string) {
+    let files: string[] = [];
+    const operation = this.edit(owner, agentId, (config) => {
+      const connection = config.connections.find((item) => item.id === connectionId);
+      if (!connection) throw new WorkError("connection_not_found", 404);
+      files = this.written(agentId, connection);
+      config.connections = config.connections.filter((item) => item !== connection);
+    }).then((summary) => {
+      for (const file of files) rmSync(file, { recursive: true, force: true });
+      return summary;
+    });
+    // A later edit (connecting the same platform again) waits until the files are gone.
     this.queue = operation.catch(() => {});
     return operation;
   }
