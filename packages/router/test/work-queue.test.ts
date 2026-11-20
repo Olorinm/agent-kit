@@ -29,6 +29,19 @@ describe("work queue", () => {
     work.update(claim.claimId!, "reply", "done");
     expect(work.claim("session-b")!.id).toBe(second.id);
   });
+  it("releases a claim that was never handed to an executor back to the queue", async () => {
+    const work = queue(), task = await work.send(request(), source), claim = work.claim("worker")!;
+    expect(() => work.release(claim.claimId!, "other")).toThrow("claim_not_found");
+    let recorded = false;
+    work.release(claim.claimId!, "worker", () => { recorded = true; });
+    expect(recorded).toBe(true);
+    expect((await work.get(task.id)).status?.state).toBe(TaskState.TASK_STATE_SUBMITTED);
+    expect(() => work.update(claim.claimId!, "reply", "late")).toThrow("claim_not_found");
+    const again = work.claim("worker")!;
+    expect(again.id).toBe(task.id); expect(again.claimId).not.toBe(claim.claimId);
+    work.update(again.claimId!, "reply", "done");
+    expect(() => work.release(again.claimId!, "worker")).toThrow("claim_closed");
+  });
   it("persists claims and output events across restart without redelivering them to another worker", async () => {
     const dir = mkdtempSync(join(tmpdir(), "cli-work-")); cleanup.push(() => rmSync(dir, { recursive: true, force: true }));
     let store = new DurableStore(join(dir, "work.sqlite"), B);

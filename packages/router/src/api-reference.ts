@@ -5,6 +5,7 @@
  */
 import { z } from "zod";
 import { restrictOperator } from "./auth/edge-identity.js";
+import { HOST_LINK_ENROLL_PATH, HOST_LINK_SOCKET_PATH, hostLinkCodeRequest, hostLinkEnrollRequest } from "./execution/host-links.js";
 import { accessRequest, checkRequest, connectRequest, pairingRequest } from "./connections/routes.js";
 import { pairingCodeRequest } from "./ledger/identity-web.js";
 import { addGroupMemberRequest, createGroupRequest, updateGroupRequest } from "./ledger/rooms-web.js";
@@ -36,6 +37,10 @@ export interface RouterApiRoute {
  * - `manage`: creating, deleting and changing agents, their connections and allowlists, connection jobs, checks,
  *   groups, and the `communication` routes for sessions, work events, tasks and runs.
  * - `owner`: only the signed-in owner, never a grant: purging a chat's history, pairing codes and identity links.
+ *
+ * Two host link routes are not owner requests and never reach `authorizeOperator`: enrollment is authenticated by a
+ * pairing code and the link socket by a device credential. Their scopes are the strictest (`owner`) for the write
+ * and `read` for the upgrade, like every `GET`.
  */
 export type RouterRouteScope = "read" | "chat" | "approve" | "manage" | "owner";
 
@@ -68,6 +73,12 @@ export const routerApiReference: RouterApiRoute[] = [
   route("GET", `${agent}/connection-jobs/:id`, "read", "Read one connection setup job, with its consent link while the owner has something to open or scan."),
   route("POST", `${agent}/connection-jobs/:id/pairing`, "manage", "Supply the pairing code Weixin shows during a setup job.", pairingRequest),
   route("POST", `${agent}/check`, "manage", "Run read-only checks of the Host and of every connection.", checkRequest),
+
+  route("GET", `${root}/host-links`, "read", "List the owner's host links: machines whose Agent Host connects to Router by itself."),
+  route("POST", `${root}/host-links/pairing-codes`, "owner", "Create a single-use pairing code (one hour) that links a machine's Agent Host to an agent.", hostLinkCodeRequest),
+  route("DELETE", `${root}/host-links/:linkId`, "manage", "Revoke a host link: its device credential stops working and its connection is closed."),
+  route("POST", HOST_LINK_ENROLL_PATH, "owner", "Exchange a pairing code for a device credential; the code is the only authentication.", hostLinkEnrollRequest),
+  route("GET", HOST_LINK_SOCKET_PATH, "read", "WebSocket upgrade for a linked Agent Host, authenticated by its device credential; not a plain HTTP request."),
 
   route("GET", communication, "read", "Channel and Host status of the agent: connections, inbox, outbox and pending calls."),
   route("GET", `${communication}/sessions`, "read", "List the agent's work sessions."),

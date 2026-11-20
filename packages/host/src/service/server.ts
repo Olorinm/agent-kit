@@ -30,6 +30,7 @@ import {
   saveRunAttachment,
 } from "./files.js";
 import type { ServiceRuntime } from "./runtime.js";
+import { connectHostLink, type HostLinkOptions } from "./link.js";
 
 export interface HostServerOptions {
   runtimes: ServiceRuntime[];
@@ -43,6 +44,35 @@ export interface HostServerOptions {
   interactionTimeoutMs?: number;
   /** Trusted local file access is opt-in, separate from native Agent permissions. */
   workspaceFiles?: boolean;
+  /** Keep an outbound connection to a Router that may exchange messages with one runtime (see docs/host-link.md). */
+  link?: HostLinkOptions;
+}
+interface Call { method: string; url: string; body(limit?: number): Promise<unknown> }
+interface Answer { status: number; value: unknown }
+const answer = (status: number, value: unknown): Answer => ({ status, value });
+/** What a host link may ask for: health, its runtime's description, and runs with their events and calls. */
+function linkAllows(method: string | undefined, path: string[]): boolean {
+  const [, area, second, third, , last] = path;
+  if (method === "GET")
+    return (path.length === 2 && (area === "health" || area === "runtimes")) ||
+      (area === "runs" && (path.length === 3 || (path.length === 4 && (third === "events" || third === "calls"))));
+  if (method !== "POST") return false;
+  if (area === "runtimes") return path.length === 3 && second === "inspect";
+  return area === "runs" && (path.length === 2 || (path.length === 4 && (third === "cancel" || third === "steer")) ||
+    (path.length === 6 && third === "calls" && last === "result"));
+}
+/** A linked submission is a message for the linked runtime: it defines no instructions, tools, native items or files. */
+function linkStart(value: unknown, runtimeId: string): unknown {
+  const input = z.record(z.string(), z.unknown()).parse(value);
+  for (const field of ["instructions", "tools", "toolOutput", "inputItems", "attachments"]) {
+    const supplied = input[field];
+    if (supplied !== undefined && supplied !== "" && !(Array.isArray(supplied) && !supplied.length))
+      throw new HostError(403, `link_field_not_allowed:${field}`);
+  }
+  if (input.runtimeId !== runtimeId) throw new HostError(403, "link_runtime_not_allowed");
+  if (input.context !== undefined && JSON.stringify(input.context).length > 4_000)
+    throw new HostError(413, "link_context_too_large");
+  return input;
 }
 interface ActiveRun {
   record: RunRecord;
@@ -82,6 +112,10 @@ export async function startAgentHostServer(options: HostServerOptions) {
       throw new Error("invalid_runtime_configuration");
     runtimes.set(runtime.id, runtime);
   }
+  const interactionTimeoutMs = options.interactionTimeoutMs ?? 120_000;
+  if (!Number.isInteger(interactionTimeoutMs) || interactionTimeoutMs < 1 || interactionTimeoutMs > 86_400_000)
+    throw new Error("invalid_interaction_timeout");
+  if (options.link && !runtimes.has(options.link.runtimeId)) throw new Error("link_runtime_not_found");
   const store = new TaskStore(
     join(resolve(options.stateDirectory), "tasks.sqlite"),
     options.eventLimit,
@@ -260,7 +294,7 @@ export async function startAgentHostServer(options: HostServerOptions) {
     }
   }
 
-  async function start(input: StartRun): Promise<RunRecord> {
+  async function start(input: StartRun, linked = false): Promise<RunRecord> {
     const runtime = getRuntime(input.runtimeId);
     const submissionHash = fingerprintJson(input);
     const priorSubmission = () => {
@@ -318,6 +352,8 @@ export async function startAgentHostServer(options: HostServerOptions) {
       instructions: input.instructions,
       tools: input.tools,
       configurationKey: runtime.configurationKey,
+      // A session the link started is continued only through the link, and a local session never through it.
+      ...(linked ? { origin: "link" as const } : {}),
     };
     if (previous) {
       const { id: _id, createdAt: _createdAt, ...existing } = previous;
@@ -341,7 +377,7 @@ export async function startAgentHostServer(options: HostServerOptions) {
       store,
       record.id,
       controller.signal,
-      options.interactionTimeoutMs ?? 120_000,
+      interactionTimeoutMs,
     );
     const task: ActiveRun = {
       record,
@@ -366,25 +402,29 @@ export async function startAgentHostServer(options: HostServerOptions) {
     return { ...record };
   }
 
+  const failure = (error: unknown): Answer => ({
+    status:
+      error instanceof HostError
+        ? error.status
+        : error instanceof z.ZodError || error instanceof SyntaxError
+          ? 400
+          : (error as NodeJS.ErrnoException)?.code === "ENOENT"
+            ? 404
+            : 500,
+    value: {
+      error:
+        error instanceof z.ZodError
+          ? "invalid_request"
+          : error instanceof Error
+            ? error.message
+            : "host_error",
+      ...(error instanceof CodexRequestFailure ? { nativeError: { kind: error.kind, method: error.method, code: error.code, data: error.data } } : {}),
+    },
+  });
   const server = createServer((request, response) => {
     void handle(request, response).catch((error: unknown) => {
-      const status =
-        error instanceof HostError
-          ? error.status
-          : error instanceof z.ZodError || error instanceof SyntaxError
-            ? 400
-            : (error as NodeJS.ErrnoException)?.code === "ENOENT"
-              ? 404
-              : 500;
-      reply(response, status, {
-        error:
-          error instanceof z.ZodError
-            ? "invalid_request"
-            : error instanceof Error
-              ? error.message
-              : "host_error",
-        ...(error instanceof CodexRequestFailure ? { nativeError: { kind: error.kind, method: error.method, code: error.code, data: error.data } } : {}),
-      });
+      const failed = failure(error);
+      reply(response, failed.status, failed.value);
     });
   });
   async function handle(request: IncomingMessage, response: ServerResponse) {
@@ -417,64 +457,87 @@ export async function startAgentHostServer(options: HostServerOptions) {
       !timingSafeEqual(supplied, expected)
     )
       throw new HostError(401, "unauthorized");
+    const { status, value } = await route({
+      method: request.method ?? "GET",
+      url: request.url ?? "/",
+      body: (limit) => body(request, limit),
+    });
+    reply(response, status, value);
+  }
+  /**
+   * The v1 operations, apart from transport: the HTTP listener calls this for the owner, the host link for a
+   * Router that may only exchange messages with one runtime (`linked`).
+   */
+  async function route(call: Call, linked?: string): Promise<Answer> {
     if (closing) throw new HostError(503, "host_closing");
     if (persistenceFailed) throw new HostError(503, "host_storage_failed");
-    const url = new URL(request.url ?? "/", "http://agent-host.local");
+    const url = new URL(call.url, "http://agent-host.local");
     const path = url.pathname
       .split("/")
       .filter(Boolean)
       .map(decodeURIComponent);
-    const method = request.method;
+    const method = call.method;
     if (path[0] !== "v1") throw new HostError(404, "route_not_found");
+    if (linked && !linkAllows(method, path)) throw new HostError(403, "link_route_not_allowed");
+    /** A link reaches its one runtime only. */
+    const visible = (runtimeId: string) => {
+      if (linked && runtimeId !== linked) throw new HostError(403, "link_runtime_not_allowed");
+      return getRuntime(runtimeId);
+    };
+    /** The local working directory is not part of what a link is told. */
+    const outline = async (runtime: ServiceRuntime) => {
+      const { cwd, ...description } = await describe(runtime);
+      return linked ? description : { ...description, cwd };
+    };
     if (method === "GET" && path.join("/") === "v1/runs/by-request") {
       const runtimeId = idSchema.parse(url.searchParams.get("runtimeId"));
-      getRuntime(runtimeId);
+      visible(runtimeId);
       const requestKey = z.string().min(1).max(500).parse(url.searchParams.get("requestKey"));
-      return reply(response, 200, { run: store.submission(runtimeId, requestKey)?.run ?? null });
+      return answer(200, { run: store.submission(runtimeId, requestKey)?.run ?? null });
     }
     if (method === "POST" && path.join("/") === "v1/runtimes/native") {
-      const input = z.object({ runtimeId: idSchema, method: z.string().min(1).max(250), params: z.json().optional(), notification: z.boolean().optional() }).strict().parse(await body(request));
+      const input = z.object({ runtimeId: idSchema, method: z.string().min(1).max(250), params: z.json().optional(), notification: z.boolean().optional() }).strict().parse(await call.body());
       const native = getRuntime(input.runtimeId).native;
       if (!native) throw new HostError(403, "native_access_not_enabled");
-      if (input.notification) { await native.notify(input.method, input.params); return reply(response, 200, {}); }
-      return reply(response, 200, { result: (await native.request(input.method, input.params)) ?? null });
+      if (input.notification) { await native.notify(input.method, input.params); return answer(200, {}); }
+      return answer(200, { result: (await native.request(input.method, input.params)) ?? null });
     }
     if (path[1] === "runtimes" && path[2] && path[3]?.startsWith("native-")) {
       const native = getRuntime(path[2]).native;
       if (!native) throw new HostError(403, "native_access_not_enabled");
       if (!native.attached) await native.ready();
       if (method === "GET" && path.length === 4 && path[3] === "native-events")
-        return reply(response, 200, native.events(Number(url.searchParams.get("after") ?? 0), Number(url.searchParams.get("limit") ?? 200), url.searchParams.get("epoch") ?? undefined));
+        return answer(200, native.events(Number(url.searchParams.get("after") ?? 0), Number(url.searchParams.get("limit") ?? 200), url.searchParams.get("epoch") ?? undefined));
       if (method === "GET" && path.length === 4 && path[3] === "native-requests")
-        return reply(response, 200, { requests: native.requests(), epoch: native.epoch });
+        return answer(200, { requests: native.requests(), epoch: native.epoch });
       if (method === "POST" && path.length === 6 && path[3] === "native-requests" && path[5] === "result") {
-        const input = z.object({ result: z.json().optional(), error: z.object({ code: z.number().optional(), message: z.string(), data: z.json().optional() }).strict().optional() }).strict().parse(await body(request));
-        native.resolve(path[4]!, input); return reply(response, 200, {});
+        const input = z.object({ result: z.json().optional(), error: z.object({ code: z.number().optional(), message: z.string(), data: z.json().optional() }).strict().optional() }).strict().parse(await call.body());
+        native.resolve(path[4]!, input); return answer(200, {});
       }
       throw new HostError(404, "route_not_found");
     }
     if (method === "GET" && path.length === 2 && path[1] === "health")
-      return reply(response, 200, { ok: true, protocolVersion: 1,
-        capabilities: { runIdempotency: true, nativeSessionManagement: true, nativeRpc: true, inputItems: true } });
+      return answer(200, { ok: true, protocolVersion: 1,
+        capabilities: linked ? { runIdempotency: true } : { runIdempotency: true, nativeSessionManagement: true, nativeRpc: true, inputItems: true } });
     if (method === "GET" && path.length === 2 && path[1] === "runtimes")
-      return reply(response, 200, {
-        runtimes: await Promise.all([...runtimes.values()].map(describe)),
+      return answer(200, {
+        runtimes: await Promise.all([...runtimes.values()].filter((runtime) => !linked || runtime.id === linked).map(outline)),
       });
     if (method === "POST" && path.join("/") === "v1/runtimes/inspect") {
       const input = z
         .object({ runtimeId: idSchema })
         .strict()
-        .parse(await body(request));
-      return reply(response, 200, await describe(getRuntime(input.runtimeId)));
+        .parse(await call.body());
+      return answer(200, await outline(visible(input.runtimeId)));
     }
     if (method === "POST" && path.join("/") === "v1/runtimes/discover") {
       const input = z
         .object({ runtimeId: idSchema })
         .strict()
-        .parse(await body(request));
+        .parse(await call.body());
       const runtime = getRuntime(input.runtimeId);
       const discovered = await runtime.discover?.();
-      return reply(response, 200, {
+      return answer(200, {
         ...(await describe(runtime)),
         ...discovered,
         discovery: discovered ? "native" : "static",
@@ -503,7 +566,7 @@ export async function startAgentHostServer(options: HostServerOptions) {
           cursor: z.string().max(10000).optional(),
         })
         .strict()
-        .parse(await body(request));
+        .parse(await call.body());
       const runtime = getRuntime(input.runtimeId),
         manager = runtime.sessions;
       if (!manager) throw new HostError(409, "native_sessions_unsupported");
@@ -516,9 +579,9 @@ export async function startAgentHostServer(options: HostServerOptions) {
         signal: AbortSignal.timeout(60_000),
       };
       if (input.action === "list")
-        return reply(response, 200, await manager.list(query));
+        return answer(200, await manager.list(query));
       if (input.action === "bindings")
-        return reply(response, 200, { bindings: await manager.bindings() });
+        return answer(200, { bindings: await manager.bindings() });
       if (!input.sessionId) throw new HostError(400, "session_id_required");
       if (input.action === "adopt") {
         if (!runtime.adopt || !input.nativeSessionId) throw new HostError(409, "native_session_adopt_unavailable");
@@ -527,7 +590,7 @@ export async function startAgentHostServer(options: HostServerOptions) {
         try {
           const result = await runtime.adopt(input.sessionId, input.nativeSessionId, input.instructions ?? "", input.tools ?? []);
           store.saveSession({ id: input.sessionId, runtimeId: runtime.id, instructions: input.instructions ?? "", tools: input.tools ?? [], configurationKey: runtime.configurationKey, createdAt: new Date().toISOString() });
-          return reply(response, 200, result);
+          return answer(200, result);
         } finally { managing.delete(input.sessionId); }
       }
       const session = store.session(input.sessionId);
@@ -538,9 +601,9 @@ export async function startAgentHostServer(options: HostServerOptions) {
       if (session.configurationKey !== runtime.configurationKey)
         throw new HostError(409, "session_configuration_conflict");
       if (manager.supportsConcurrentReads) {
-        if (input.action === "read") return reply(response, 200, await manager.read(input.sessionId, query));
-        if (input.action === "history") return reply(response, 200, await manager.history(input.sessionId, query));
-        if (input.action === "items") return reply(response, 200, await manager.items(input.sessionId, query));
+        if (input.action === "read") return answer(200, await manager.read(input.sessionId, query));
+        if (input.action === "history") return answer(200, await manager.history(input.sessionId, query));
+        if (input.action === "items") return answer(200, await manager.items(input.sessionId, query));
       }
       const ids = [
         input.sessionId,
@@ -562,19 +625,17 @@ export async function startAgentHostServer(options: HostServerOptions) {
         throw new HostError(409, "fork_target_required_or_exists");
       ids.forEach((id) => managing.add(id));
       try {
-        if (input.action === "read") return reply(response, 200, await manager.read(input.sessionId, query));
-        if (input.action === "items") return reply(response, 200, await manager.items(input.sessionId, query));
+        if (input.action === "read") return answer(200, await manager.read(input.sessionId, query));
+        if (input.action === "items") return answer(200, await manager.items(input.sessionId, query));
         if (input.action === "rename") {
           if (!input.name) throw new HostError(400, "session_name_required");
-          await manager.rename(input.sessionId, input.name); return reply(response, 200, {});
+          await manager.rename(input.sessionId, input.name); return answer(200, {});
         }
         if (input.action === "archive" || input.action === "unarchive") {
-          await manager.archive(input.sessionId, input.action === "archive"); return reply(response, 200, {});
+          await manager.archive(input.sessionId, input.action === "archive"); return answer(200, {});
         }
         if (input.action === "history")
-          return reply(
-            response,
-            200,
+          return answer(200,
             await manager.history(input.sessionId, query),
           );
         if (input.action === "fork") {
@@ -588,36 +649,35 @@ export async function startAgentHostServer(options: HostServerOptions) {
             id: input.targetSessionId!,
             createdAt: new Date().toISOString(),
           });
-          return reply(response, 200, fork);
+          return answer(200, fork);
         }
         const deleted = await manager.delete(input.sessionId, query);
         store.saveSession({
           ...session,
           nativeDeletedAt: new Date().toISOString(),
         });
-        return reply(response, 200, deleted);
+        return answer(200, deleted);
       } finally {
         ids.forEach((id) => managing.delete(id));
       }
     }
     if (method === "GET" && path.length === 2 && path[1] === "sessions")
-      return reply(response, 200, { sessions: store.sessions() });
+      return answer(200, { sessions: store.sessions() });
     if (path[1] === "runs" && path.length === 2) {
       if (method === "POST")
-        return reply(
-          response,
-          202,
-          await start(startRunSchema.parse(await body(request, 44_000_000))),
+        return answer(202,
+          await start(startRunSchema.parse(linked ? linkStart(await call.body(44_000_000), linked) : await call.body(44_000_000)), Boolean(linked)),
         );
       if (method === "GET")
-        return reply(response, 200, {
+        return answer(200, {
           runs: store.runs(url.searchParams.get("sessionId") ?? undefined),
         });
     }
     if (path[1] === "runs" && path[2]) {
       const run = getRun(idSchema.parse(path[2]));
+      if (linked && run.runtimeId !== linked) throw new HostError(404, "run_not_found");
       if (method === "GET" && path.length === 3)
-        return reply(response, 200, run);
+        return answer(200, run);
       if (path.length === 4 && path[3] === "events" && method === "GET") {
         const after = z.coerce
           .number()
@@ -631,27 +691,27 @@ export async function startAgentHostServer(options: HostServerOptions) {
           .min(1)
           .max(1_000)
           .parse(url.searchParams.get("limit") ?? 200);
-        return reply(response, 200, store.events(run, after, limit));
+        return answer(200, store.events(run, after, limit));
       }
       if (path.length === 4 && path[3] === "cancel" && method === "POST") {
         const task = active.get(run.id);
         task?.controller.abort(new Error("run_cancelled"));
-        return reply(response, 200, { cancellationRequested: Boolean(task) });
+        return answer(200, { cancellationRequested: Boolean(task) });
       }
       if (path.length === 4 && path[3] === "steer" && method === "POST") {
         const { input } = z
           .object({ input: z.string().min(1).max(100_000) })
           .strict()
-          .parse(await body(request));
+          .parse(await call.body());
         const task = active.get(run.id);
         if (!task) throw new HostError(409, "run_not_active");
         if (!task.runtime.steer)
           throw new HostError(409, "steering_unsupported");
         await task.runtime.steer(run.sessionId, input);
-        return reply(response, 200, { ok: true });
+        return answer(200, { ok: true });
       }
       if (path.length === 4 && path[3] === "calls" && method === "GET")
-        return reply(response, 200, { calls: store.calls(run.id) });
+        return answer(200, { calls: store.calls(run.id) });
       if (
         path.length === 6 &&
         path[3] === "calls" &&
@@ -661,12 +721,12 @@ export async function startAgentHostServer(options: HostServerOptions) {
         const { result } = z
           .object({ result: z.json() })
           .strict()
-          .parse(await body(request, 44_000_000));
+          .parse(await call.body(44_000_000));
         const broker =
           active.get(run.id)?.broker ??
           new CallBroker(store, run.id, AbortSignal.abort(), 0);
         broker.resolve(idSchema.parse(path[4]), result);
-        return reply(response, 200, { ok: true });
+        return answer(200, { ok: true });
       }
     }
     if (
@@ -681,9 +741,7 @@ export async function startAgentHostServer(options: HostServerOptions) {
       const root = getRuntime(session.runtimeId).cwd;
       if (method === "GET") {
         const file = url.searchParams.get("path") ?? "";
-        return reply(
-          response,
-          200,
+        return answer(200,
           url.searchParams.get("list") === "true"
             ? { entries: listWorkspaceFiles(root, file) }
             : readWorkspaceFile(
@@ -704,12 +762,10 @@ export async function startAgentHostServer(options: HostServerOptions) {
             expectedRevision: z.string().nullable().optional(),
           })
           .strict()
-          .parse(await body(request, 44_000_000));
+          .parse(await call.body(44_000_000));
         if (input.encoding === "base64")
           attachmentSchema.shape.data.parse(input.content);
-        return reply(
-          response,
-          200,
+        return answer(200,
           writeWorkspaceFile(
             root,
             input.path,
@@ -740,6 +796,16 @@ export async function startAgentHostServer(options: HostServerOptions) {
   const address = server.address();
   if (!address || typeof address === "string")
     throw new Error("host_address_unavailable");
+  const link = options.link && connectHostLink(options.link, async ({ method, path, body }) => {
+    try {
+      const { status, value } = await route({ method, url: path,
+        body: async () => { if (body === undefined) throw new HostError(415, "json_required"); return body; } }, options.link!.runtimeId);
+      return { status, body: value };
+    } catch (error) {
+      const failed = failure(error);
+      return { status: failed.status, body: failed.value };
+    }
+  });
   const addressHost = address.address.includes(":")
     ? `[${address.address}]`
     : address.address;
@@ -748,6 +814,7 @@ export async function startAgentHostServer(options: HostServerOptions) {
     close(): Promise<void> {
       if (closed) return closed;
       closing = true;
+      link?.close();
       closed = (async () => {
         const stopped = new Promise<void>((resolve, reject) =>
           server.close((error) => (error ? reject(error) : resolve())),

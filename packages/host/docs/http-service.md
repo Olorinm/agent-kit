@@ -124,6 +124,8 @@ Relative paths are resolved from the configuration file. The process listens on 
 
 Authentication uses `AGENT_HOST_TOKEN`, or a generated private `host-state/token` file. `--token-file` selects an existing token file. Tokens are not printed. Keep service state outside product workspaces. The CLI stores no provider credentials; Agents use native login/configuration and the server's environment.
 
+A machine without a public address can connect out to a Router instead of being called: see [Host link](host-link.md).
+
 The token identifies one trusted owner with access to every configured profile, session and task. This is not multi-tenant authorization. Products with different trust boundaries need separate instances/state directories or their own authenticated gateway. Non-loopback deployment needs an appropriately protected network/TLS endpoint. Browser access requires an explicit `allowedOrigins` list; the editor below keeps the owner token in a local companion instead of distributing it to browser code.
 
 ## Runtime profiles
@@ -283,7 +285,7 @@ Workspace file access is opt-in via `workspaceFiles: true`. Paths stay under the
   Host does not listen on `http://127.0.0.1:37420`.
 - Progress keeps completed native items, tool events and outcomes for the whole run (safety cap `durableEventLimit`, default 50,000). Codex streaming fragments (`item/*/delta`, `item/*/outputDelta` and their `assistant.delta`/`reasoning.delta` projections, marked `transient: true`) are live-only, as in Codex rollouts: the latest `eventLimit` (default 2,000) stay readable while the run is active, and all are dropped when it finishes because each item's `item/completed` carries the full text/output.
 - Event pages report `historyTruncated` only when durable events before the cursor were lost; this requires explicit acknowledgement through `onHistoryGap`. `liveGap` means superseded fragments before the cursor are gone; rebuild from completed items or the stored final answer.
-- Call deadlines default to 120 seconds. Cancellation/deadline aborts pending handlers and rejects late replies. It cannot undo an effect already committed by a product.
+- Product-tool call deadlines default to 120 seconds (`timeoutMs` of a tool). Native approvals and questions wait for `interactionTimeoutMs` of `host.json` (default `120000`, at most `86400000`). Cancellation/deadline aborts pending handlers and rejects late replies. It cannot undo an effect already committed by a product.
 - Reposting the same result for a completed call succeeds, including after restart. A different result conflicts. The same SDK task object caches executions across repeated observation; different clients/pages can execute the same pending call. The product must persist a `callId` receipt together with its business change. This is not an exactly-once side-effect guarantee.
 - SQLite saves task results/events/call records independently of the product. It holds one process's exclusive state lock, released by the OS on crash. A second service cannot share this state directory concurrently.
 - After a crash, unfinished runs become `failed` with `outcomeUnknown: true` and `host_restarted`; pending calls become cancelled. Nothing is replayed automatically. Completed native bindings can be continued by a new, explicitly submitted turn. Preserve both Host state and the Kernel's native storage.

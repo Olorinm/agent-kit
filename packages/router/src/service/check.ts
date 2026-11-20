@@ -1,10 +1,11 @@
 import { ServiceHttp } from "../http.js";
+import type { HostTransport } from "../execution/host.js";
 import { channelModule } from "../channels/registry.js";
 import { channelFiles, type ChannelConfiguration } from "./channels.js";
 
 export interface Check { agentId: string; connectionId?: string; kind: string; status: "verified" | "needs_action" | "not_verified" | "disabled"; detail: string; }
 /** Checks access without starting consumers, consuming messages, sending replies or running a model. */
-export async function checkChannels(configuration: ChannelConfiguration, node?: ServiceHttp, suppliedHost?: ServiceHttp): Promise<Check[]> {
+export async function checkChannels(configuration: ChannelConfiguration, node?: ServiceHttp, suppliedHost?: HostTransport): Promise<Check[]> {
   const checks: Check[] = [], files = channelFiles(configuration.directory);
   for (const agent of configuration.agents) {
     if (agent.host) {

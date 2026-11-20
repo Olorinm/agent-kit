@@ -12,7 +12,8 @@ import { CliWork, WorkError } from "./work.js";
 import type { WorkInput, WorkSender } from "./delivery.js";
 import { closeRequest, createRequest, displaySchema, displayTooLarge, expireRequests, ownerRequestSchema, requestCardId, requestDeliveryId,
   type OwnerRequestInput, type WorkDisplay } from "../ledger/requests.js";
-import { AgentLedger, legacySession } from "../ledger/ledger.js";
+import { AgentLedger, legacySession, type CardKind } from "../ledger/ledger.js";
+import type { CardOrigin, CardView } from "../ledger/control.js";
 import { personId } from "../ledger/registry.js";
 import { WEB_CONNECTION } from "../ledger/surfaces.js";
 
@@ -80,9 +81,19 @@ export interface OwnerRequestResult {
 }
 /** One entry of `WorkSessions.settlements`: a work event whose turn ended, or an owner request that was closed. */
 export type Settlement = { seq: number; settledAt: string } & ({ kind: "work"; event: WorkEventResult } | { kind: "request"; request: OwnerRequestResult });
+/** A card of a work event's turn that waits for the owner: an approval or question its run asked. */
+export interface WorkPendingCard {
+  cardId: string;
+  /** The web chat that shows the card and takes its answer: `dm:<agentId>` for the owner conversation, else `obs:<agentId>:<sessionId>`. */
+  chatId: string;
+  kind: CardKind; text: string; choices: Array<{ choiceId: string; label: string }>; deadlineAt: string | null;
+  origin?: CardOrigin;
+}
 export interface WorkEventResult {
   eventId: string; taskId: string; sessionId: string; status: string; answer: string;
   runId?: string; error?: string; outcomeUnknown: boolean;
+  /** Present while the turn waits for the owner to answer; the turn continues when every card is answered or closed. */
+  pendingCards?: WorkPendingCard[];
   /** Present for a submission with `reply`. */
   reply?: WorkReplyReceipt;
 }
@@ -291,11 +302,18 @@ export class WorkSessions {
     if (!event) throw new WorkError("work_event_not_found", 404);
     const task = this.work.inspect(event.taskId), native = this.store.get<HostRun>("execution_results", event.taskId);
     const run = this.store.entries<RunBinding>("communication_runs").map(({ value }) => value).reverse().find(value => value.taskId === event.taskId);
+    const ledger = this.communication.ledger, chatId = ledger.session(event.sessionId)?.kind === "owner_main" ? `dm:${this.agentId}` : `obs:${this.agentId}:${event.sessionId}`;
+    const pendingCards = ledger.openCards({ turnId: event.taskId }).filter(card => card.source !== "router" && !card.answerKey).map((card): WorkPendingCard => {
+      const body = (ledger.event(card.eventId)?.body.card ?? {}) as Partial<CardView>;
+      return { cardId: card.cardId, chatId, kind: card.kind, text: body.text ?? "", choices: (body.choices ?? []).map(({ choiceId, label }) => ({ choiceId, label })),
+        deadlineAt: card.deadlineAt === null ? null : new Date(card.deadlineAt).toISOString(), ...(body.origin ? { origin: body.origin } : {}) };
+    });
     return { eventId, taskId: event.taskId, sessionId: event.sessionId,
       status: run?.phase === "unknown" ? "unknown" : task.status === "canceled" ? "cancelled" : task.status,
       answer: native?.answer ?? "", ...(run?.runId ? { runId: run.runId } : {}),
       ...(run?.error ? { error: run.error } : native?.outcome?.error ? { error: native.outcome.error } : {}),
       outcomeUnknown: run?.phase === "unknown" || native?.outcome?.outcomeUnknown === true,
+      ...(pendingCards.length ? { pendingCards } : {}),
       // The answer is recorded when the channel core has published the turn's result.
       ...(event.reply ? { reply: this.receipt(event.reply, replyDeliveryId(event.taskId), `turn:${event.taskId}`,
         Boolean(AgentLedger.open(this.store).turn(event.taskId)?.finalEventId)) } : {}) };

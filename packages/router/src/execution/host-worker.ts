@@ -7,11 +7,11 @@ import { DurableStore } from "../communication/store.js";
 import { digest, key } from "./protocol.js";
 import { CliWork, WorkError } from "./work.js";
 import type { HostAdmission, HostCall, HostPort, HostStartInput } from "./host.js";
-import { runtimeWorkingDirectory } from "./host.js";
+import { HOST_OFFLINE, runtimeWorkingDirectory } from "./host.js";
 import type { HostTools, HostToolResult } from "./tools.js";
 import type { WorkDependencyWait } from "./sessions.js";
 import { AgentLedger, type TurnState } from "../ledger/ledger.js";
-import { cardBody, cardKind, STEER_COMMAND, STOP_COMMAND, type LedgerControl } from "../ledger/control.js";
+import { cardBody, cardKind, cardOriginLine, STEER_COMMAND, STOP_COMMAND, type CardOrigin, type LedgerControl } from "../ledger/control.js";
 import { textDelivery, toolDelivery, type WorkInput, type WorkSender } from "./delivery.js";
 
 interface ToolReceipt { hash: string; phase: "executing" | "completed" | "uncertain"; result?: HostToolResult; }
@@ -67,6 +67,8 @@ export class HostWorker {
         if (this.wake && this.work.claimable(this.instanceId, true, true, blockedContexts)) this.wake();
         throw error;
       }
+      // A Host that connects by itself is asked again after every absence; nothing is claimed while it is away.
+      if (this.host.online?.() === false) { this.connected = false; throw new ChannelHttpError(503, HOST_OFFLINE); }
       if (!this.connected) { await this.host.connect(); this.connected = true; }
       // Planned card answers whose Host call did not complete (ADR 16.1 step 6) are resolved again.
       await this.control?.reresolve().catch(() => undefined);
@@ -208,6 +210,8 @@ export class HostWorker {
         let attachments = undefined as import("../communication/types.js").MediaContent[] | undefined;
         try { attachments = await this.communication?.attachments(claim.id); }
         catch (error) { this.work.update(claim.claimId, "fail", `附件读取失败：${error instanceof Error && /^[a-z_]+$/.test(error.message) ? error.message : "attachment_read_failed"}。请重新发送或检查渠道权限。`, undefined, this.instanceId); return; }
+        const restricted = this.host.restricted === true;
+        if (restricted && attachments?.length) { this.work.update(claim.claimId, "fail", "这个 Agent 目前只接收文字消息，无法接收附件。", undefined, this.instanceId); return; }
         const authored = this.store.get<WorkInput>("work_session_inputs", claim.id);
         const input = Message.fromJSON(claim.input).parts.filter((part) => part.content?.$case === "text").map((part) => part.content!.value).join("\n");
         if (!input.trim() && !authored?.inputItems?.length && authored?.mode !== "compact") { this.work.update(claim.claimId, "fail", "此执行入口目前需要文字输入。", undefined, this.instanceId); return; }
@@ -228,7 +232,7 @@ export class HostWorker {
           const channelAllowed = this.tools?.allowed(claim.contextId, claim.id) === true;
           // Only trusted internally admitted work may reuse a catalog without a new channel message.
           // A forged external context ID must never inherit its owner's tool definitions.
-          const withTools = Boolean(this.tools) && savedSession.tools !== false && (authored ? savedSession.channelTools ?? channelAllowed : channelAllowed);
+          const withTools = !restricted && Boolean(this.tools) && savedSession.tools !== false && (authored ? savedSession.channelTools ?? channelAllowed : channelAllowed);
           if (savedSession.tools !== false && savedSession.channelTools === undefined && (channelAllowed || authored))
             this.store.set("execution_sessions", claim.contextId, { ...savedSession, channelTools: withTools });
           const admission = authored?.admission ?? this.options.admission?.(claim.contextId, claim.id);
@@ -239,7 +243,7 @@ export class HostWorker {
           const settings = defaults || authored?.settings ? { ...defaults, ...authored?.settings } : undefined;
           submissionAttempted = true;
           const started = await this.host.start({ sessionId, runtimeId,
-            instructions: this.instructions + (withTools ? this.tools!.instructions : ""), input: delivered ? delivered.input : input,
+            instructions: restricted ? "" : this.instructions + (withTools ? this.tools!.instructions : ""), input: delivered ? delivered.input : input,
             requestKey: binding.requestKey!,
             ...(delivered ? delivered.toolOutput ? { toolOutput: delivered.toolOutput } : {} : authored?.inputItems ? { inputItems: authored.inputItems } : {}),
             ...(settings ? { settings } : {}),
@@ -247,12 +251,20 @@ export class HostWorker {
             ...(admission ? { admission } : {}),
             ...(attachments?.length ? { attachments } : {}),
             ...(withTools ? { tools: this.tools!.definitions } : {}),
-            context: { ...(authored?.context && typeof authored.context === "object" ? authored.context : { data: authored?.context }), agentId: this.agentId, conversationId: claim.contextId, source: authored?.admission ?? { kind: "channel", sender: claim.from } } });
+            // A restricted Host is told who is asking and nothing else.
+            context: restricted ? { agentId: this.agentId, conversationId: claim.contextId, source: authored?.admission
+                ? { kind: authored.admission.kind, reference: authored.admission.reference, ...(authored.sender ? { sender: authored.sender } : {}) } : { kind: "channel", sender: claim.from } }
+              : { ...(authored?.context && typeof authored.context === "object" ? authored.context : { data: authored?.context }), agentId: this.agentId, conversationId: claim.contextId, source: authored?.admission ?? { kind: "channel", sender: claim.from } } });
           if (started.sessionId !== sessionId || started.runtimeId !== runtimeId) throw new Error("host_run_scope_mismatch");
           binding = { ...binding, phase: "running", runId: started.id };
           this.store.set("communication_runs", claim.claimId, binding);
           this.turn(claim.id, "running");
         } catch (error) {
+          if (error instanceof ChannelHttpError && error.code === HOST_OFFLINE) {
+            // Nothing reached the Host: the task returns to the queue and is claimed again once the Host is connected.
+            this.work.release(claim.claimId, this.instanceId, () => this.store.delete("communication_runs", claim.claimId!));
+            this.lastError = HOST_OFFLINE; return;
+          }
           const rejected = !submissionAttempted || (error instanceof ChannelHttpError || error instanceof WorkError) && [400, 401, 403, 404, 409, 413, 422].includes(error.status);
           const preparationError = !submissionAttempted && error instanceof Error && /^[a-z0-9_]+$/.test(error.message) ? error.message : undefined;
           // Host names the setting it refused; say so instead of the general rejection.
@@ -323,9 +335,10 @@ export class HostWorker {
   /**
    * Whether the runtime takes a standalone native tool output, as its Host describes it now (`input.nativeItems`).
    * Only an explicit `unsupported` selects the text form: a Host that does not describe its runtimes, or does not
-   * answer, is sent the tool output, as before.
+   * answer, is sent the tool output, as before. A restricted Host never takes one.
    */
   private async acceptsToolOutput(runtimeId: string): Promise<boolean> {
+    if (this.host.restricted) return false;
     if (!this.host.inspectRuntime) return true;
     try {
       const description = await this.host.inspectRuntime(runtimeId) as { capabilities?: { features?: Record<string, { status?: unknown } | undefined> } } | null;
@@ -416,34 +429,50 @@ export class HostWorker {
     }
     this.store.set("communication_run_events", binding.runId, { cursor, text });
   }
+  /** Who started the turn, when it was work the owner did not submit: the admission and sender of its submission. */
+  private origin(taskId: string): CardOrigin | undefined {
+    const authored = this.store.get<WorkInput>("work_session_inputs", taskId), admission = authored?.admission;
+    if (!admission || admission.kind === "owner") return undefined;
+    return { kind: admission.kind, reference: admission.reference, ...(authored.sender ? { sender: authored.sender } : {}) };
+  }
+  /**
+   * An interaction of a run becomes a card in the turn's session. A turn with a channel input (a received message, or
+   * work with an owner route) also gets the question as a message on that route. A turn without one has the card
+   * only: it is shown and answered where cards are (the web API, the run API), never in a channel.
+   */
   private present(binding: RunBinding, call: HostCall) {
-    const core = this.communication!, input = core.input(binding.taskId); if (!input) return;
-    if (this.store.get("communication_questions", call.id)) return;
-    const view = interaction(call);
+    const core = this.communication!, input = core.input(binding.taskId), cardId = HostWorker.card(call);
+    if (input ? this.store.get("communication_questions", call.id) : AgentLedger.open(this.store).card(cardId)) return;
+    const view = interaction(call), origin = this.origin(binding.taskId);
+    // Whoever decides sees whose turn this is before what it asks for.
+    const question = origin ? `${cardOriginLine(origin)}\n${view.text}` : view.text;
     const buttons = view.choices.map((choice, index) => {
       const token = digest(key(call.id, String(index))).slice(0, 32);
-      this.store.set("communication_actions", token, { callId: call.id, result: choice.result });
+      if (input) this.store.set("communication_actions", token, { callId: call.id, result: choice.result });
       return { label: choice.label, token };
     });
-    const nativeButtons = core.capabilities(binding.taskId)?.buttons;
-    // An approval is decided by a button; a channel without buttons shows the request and points to the web console.
-    const choices = buttons.length && !nativeButtons && !view.approval ? "\n" + buttons.map((button, index) => `${index + 1}. ${button.label}`).join("\n") : "";
-    const instructions = view.sensitive ? "" : view.approval ? `\n${nativeButtons ? APPROVAL_BY_BUTTON : APPROVAL_ELSEWHERE}` : buttons.length ? nativeButtons ? "\n可点击选项，或直接回复选项名称/编号。" : "\n请回复选项名称或编号。" : "\n请直接回复答案；多个问题请用 JSON 按问题填写。";
-    const text = view.text + choices + instructions;
-    const noticeId = core.notice(input, text, `question:${call.id}`, { text, ...(nativeButtons ? { buttons } : {}) });
-    this.store.set("communication_questions", call.id, { call, taskId: binding.taskId, conversationId: binding.contextId, source: input.source, connectionId: input.connectionId, noticeId, closed: false });
+    let noticeId: string | undefined;
+    if (input) {
+      const nativeButtons = core.capabilities(binding.taskId)?.buttons;
+      // An approval is decided by a button; a channel without buttons shows the request and points to the web console.
+      const choices = buttons.length && !nativeButtons && !view.approval ? "\n" + buttons.map((button, index) => `${index + 1}. ${button.label}`).join("\n") : "";
+      const instructions = view.sensitive ? "" : view.approval ? `\n${nativeButtons ? APPROVAL_BY_BUTTON : APPROVAL_ELSEWHERE}` : buttons.length ? nativeButtons ? "\n可点击选项，或直接回复选项名称/编号。" : "\n请回复选项名称或编号。" : "\n请直接回复答案；多个问题请用 JSON 按问题填写。";
+      const text = question + choices + instructions;
+      noticeId = core.notice(input, text, `question:${call.id}`, { text, ...(nativeButtons ? { buttons } : {}) });
+      this.store.set("communication_questions", call.id, { call, taskId: binding.taskId, conversationId: binding.contextId, source: input.source, connectionId: input.connectionId, noticeId, closed: false });
+    }
     this.ledger((ledger) => {
-      const cardId = HostWorker.card(call), sessionKey = ledger.sessionForContext(binding.contextId);
+      const sessionKey = ledger.sessionForContext(binding.contextId) ?? (input ? undefined : ledger.turn(binding.taskId)?.sessionKey);
       if (!sessionKey || ledger.card(cardId)) return;
       const kind = cardKind(call, Boolean(view.sensitive)), deadline = Date.parse(call.deadlineAt);
-      const card = cardBody({ cardId, agentId: this.agentId, turnId: binding.taskId, claimId: binding.claimId, call, text: view.text,
-        choices: view.choices.map((choice) => choice.label), kind });
+      const card = cardBody({ cardId, agentId: this.agentId, turnId: binding.taskId, claimId: binding.claimId, call, text: question,
+        choices: view.choices.map((choice) => choice.label), kind, ...(origin ? { origin } : {}) });
       const event = ledger.append(sessionKey, { kind: "card", role: "assistant", senderType: "agent", senderId: this.agentId, turnId: binding.taskId,
         idempotencyKey: `card:${cardId}`, body: { card } }).event;
       ledger.addCard({ cardId, callId: call.id, runId: call.runId, claimId: binding.claimId, turnId: binding.taskId, sessionKey, eventId: event.eventId,
         kind, deadlineAt: Number.isFinite(deadline) ? deadline : null });
       buttons.forEach((button, index) => ledger.addCardToken(button.token, cardId, String(index), view.choices[index]!.result));
-      ledger.attachDelivery(noticeId, event.eventId);
+      if (noticeId) ledger.attachDelivery(noticeId, event.eventId);
     });
   }
   /** Execution contexts of later windows (`<key>.w<n>`) belong to the same session (ADR 16.3). */

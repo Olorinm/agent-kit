@@ -19,8 +19,10 @@ export function createRouter(config: ServiceConfig, options: {
   let closed = false;
   return {
     service, connections, app: createManagedApp(service, routes.router),
-    /** Event socket upgrade (ADR 0005 8.4); true when handled. */
-    upgrade: (req: IncomingMessage, socket: Duplex, head: Buffer) => service.web.upgrade(req, socket, head),
+    /** Host links: pairing codes, the linked machines and their state changes (`HostLinks`). */
+    hostLinks: service.hostLinks,
+    /** Event socket upgrade (ADR 0005 8.4) and host link socket upgrade; true when handled. */
+    upgrade: (req: IncomingMessage, socket: Duplex, head: Buffer) => service.hostLinks.upgrade(req, socket, head) || service.web.upgrade(req, socket, head),
     start: () => {
       if (closed) return Promise.reject(new Error("router_closed"));
       return starting ??= service.start();
@@ -34,8 +36,10 @@ export function createRouter(config: ServiceConfig, options: {
 export { ManagedService, type ManagedAgent, type ServiceConfig, type ServiceDependencies, type ServiceExtension } from "./service/managed.js";
 export type { AgentRuntime } from "./agents/runtime.js";
 export { ConnectionConfiguration, type HostBindingProvider } from "./connections/configuration.js";
+export type { CardOrigin, CardView } from "./ledger/control.js";
 export { WorkError as RouterError } from "./execution/work.js";
-export { HttpAgentHost, type HostPort, type HostStartInput, type HostAdmission, type NativeSessionInput, type HostRun, type HostCall } from "./execution/host.js";
+export { HostLinks, HOST_LINK_SOCKET_PATH, HOST_LINK_ENROLL_PATH, type HostLink, type HostLinkEvent } from "./execution/host-links.js";
+export { HttpAgentHost, HostRuns, HOST_OFFLINE, type HostTransport, type HostPort, type HostStartInput, type HostAdmission, type NativeSessionInput, type HostRun, type HostCall } from "./execution/host.js";
 export { ServiceHttp, ChannelHttpError } from "./http.js";
 export type { HostTool, HostToolResult, HostTools } from "./execution/tools.js";
 export { checkChannels } from "./service/check.js";
@@ -45,4 +49,4 @@ export { routerApiReference, routerRouteScope, type RouterApiRoute, type RouterR
 
 export { RunObservation, type CommunicationTask, type RunReference, type TaskFilter } from "./execution/observation.js";
 export { WorkSessions, type WorkSessionSubmission, type WorkEventResult, type WorkSessionWaitOptions, type WorkDependencyWait,
-  type WorkReplyReceipt, type WorkSender, type WorkDisplay, type OwnerRequestInput, type OwnerRequestResult, type Settlement } from "./execution/sessions.js";
+  type WorkReplyReceipt, type WorkPendingCard, type WorkSender, type WorkDisplay, type OwnerRequestInput, type OwnerRequestResult, type Settlement } from "./execution/sessions.js";

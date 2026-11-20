@@ -80,6 +80,10 @@ without exposing environment ids or providers to Router. `HttpAgentHost` and `Se
 HTTP protocol. Bindings are execution identities: they must not silently target a replacement runtime or discard native
 sessions.
 
+Bindings that start with `link:` are Router's own: they name a [host link](../guides/host-links.md), a machine whose
+Agent Host connects to Router by itself. Router resolves them through `router.hostLinks` and never asks the product's
+provider about them.
+
 `connections.withStoppedRuntime(owner, agentId, operation, rollback)` serializes runtime replacement, stops delivery
 workers and refuses running or unknown runs before invoking a product lifecycle operation. Both successful and failed
 operations rebuild the channel runtime through its factory. The product owns its operation journal, recovery and

@@ -40,6 +40,8 @@ HTTP 服务保留附件的实际字节、内核支持的原生图片输入与图
 
 从[快速开始](docs/quickstart.md)、[统一接口说明](docs/common-api.md)或[HTTP 后台接入说明](docs/http-service.md)开始。原生内核的安装和登录单独配置。
 
+没有公网地址的电脑可以让后台主动连到 Router，Router 经这条连接只能收发消息：见 [Host link](docs/host-link.md)（英文）。
+
 通过[能力查询](docs/capabilities.md)，可以在展示功能前区分已经实现、需要配置、需要原生协商和尚未接入的操作。
 
 ## 示例和验证

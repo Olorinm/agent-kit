@@ -82,7 +82,7 @@ await router.start();
 
 ## HTTP 接口
 
-除 `GET /health/live` 外，所有路由都在 `/_agent-router/v1` 下，并要求已认证的所有者。
+除 `GET /health/live` 外，所有路由都在 `/_agent-router/v1` 下，并要求已认证的所有者；只有已配对电脑使用的两个入口例外（`POST /host-links/enroll` 和 `/host-links/socket` 的升级请求）。
 
 | 路由 | 用途 |
 | --- | --- |
@@ -91,6 +91,7 @@ await router.start();
 | `GET /connection-options`；`/agents/:id/configuration`、`/connections`、`/connection-jobs`、`/check` | 渠道连接的配置与检查 |
 | `DELETE /agents/:id/connections/:connection` | 断开一个渠道连接 |
 | `GET`、`PUT /agents/:id/connections/:connection/access` | 读取、替换连接允许的群和联系人 |
+| `GET /host-links`、`POST /host-links/pairing-codes`、`DELETE /host-links/:link` | 主动连到 Router 的电脑（Agent Host）：配对、列出、吊销 |
 | `/agents/:id/communication` | 渠道和 Host 状态；其下的 `sessions`、`work-events`、`tasks`、`runs` 用于工作会话和运行观察 |
 | `/web/...` | 账本 Web API：聊天、事件、消息、卡片、群组、附件、身份和 socket ticket |
 
@@ -116,6 +117,7 @@ await router.start();
 | 通过 HTTP 连接渠道 | [渠道连接](docs/guides/connections.zh-CN.md) · [English](docs/guides/connections.md) |
 | 渠道配置、群聊、媒体与恢复 | [渠道](docs/guides/personal-channels.md)（英文） |
 | 工作会话和产品提交的工作 | [原生会话](docs/guides/native-sessions.md)（英文） |
+| 没有公网地址的电脑上的 Agent Host 主动连到 Router | [Host links](docs/guides/host-links.md)（英文） |
 | 执行环境里的工具 | [执行环境里的工具](docs/guides/worker-tools.zh-CN.md) · [English](docs/guides/worker-tools.md) |
 | 编写渠道适配器 | [新增渠道](docs/guides/adding-a-channel.md)（英文） |
 | 嵌入 API | [嵌入 Agent Router](docs/architecture/embedding.md)（英文） |
