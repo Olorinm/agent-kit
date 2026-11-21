@@ -34,6 +34,21 @@ async function setup(overrides: Partial<ServiceConfig> = {}) {
 }
 const root = "/_agent-router/v1";
 describe("owner accounts, Agents and worker instances", () => {
+  it("edits an existing profile in place and reserves the original address", async () => {
+    const { service } = await setup();
+    const agent = await service.create(owner, "mac-codex");
+    const runtime = await service.runtime(agent.id);
+    expect(service.updateProfile(owner, agent.id, { name: "Mac", description: "My workstation" }))
+      .toEqual({ ...agent, name: "Mac", description: "My workstation" });
+    expect(await service.runtime(agent.id)).toBe(runtime);
+    expect(() => service.updateProfile(other, agent.id, { name: "Other" })).toThrow("agent_not_found");
+    for (const name of ["mac", "mac-codex"]) await expect(service.create(owner, name)).rejects.toThrow("partner_name_taken");
+    expect(service.updateProfile(owner, agent.id, { description: null })).toMatchObject({ name: "Mac", description: null });
+    const second = await service.create(owner, "second");
+    expect(() => service.updateProfile(owner, second.id, { name: "MAC", description: "conflict" })).toThrow("partner_name_taken");
+    expect(service.agent(second.id)).toEqual(second);
+    expect((await service.create(other, "mac")).owner).toBe(other);
+  });
   it("drops the removed visitor channel ledger once and no longer serves its routes", async () => {
     const cfg = config();
     const seed = new DurableStore(join(cfg.stateDir, "registry.sqlite"), cfg.serverName);

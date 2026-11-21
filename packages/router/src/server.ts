@@ -33,7 +33,7 @@ export function createRouter(config: ServiceConfig, options: {
     },
   };
 }
-export { ManagedService, type ManagedAgent, type ServiceConfig, type ServiceDependencies, type ServiceExtension } from "./service/managed.js";
+export { ManagedService, agentProfileName, type ManagedAgent, type ServiceConfig, type ServiceDependencies, type ServiceExtension } from "./service/managed.js";
 export type { AgentRuntime } from "./agents/runtime.js";
 export { ConnectionConfiguration, type HostBindingProvider } from "./connections/configuration.js";
 export type { CardOrigin, CardView } from "./ledger/control.js";

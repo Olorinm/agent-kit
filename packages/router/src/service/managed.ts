@@ -22,6 +22,11 @@ import { OwnerAttachments } from "../ledger/blobs-hub.js";
 import type { AttachmentReference, MediaContent } from "../communication/types.js";
 
 export const agentName = z.string().regex(/^[a-z][a-z0-9-]{0,47}$/);
+/** Editable owner-facing profile. The address and runtime identity are assigned only at creation. */
+export const agentProfileName = z.string().trim().min(1).max(48).regex(/^[\p{L}\p{N}][\p{L}\p{M}\p{N} _-]*$/u);
+const profileUpdate = z.object({ name: agentProfileName.optional(),
+  description: z.string().trim().min(1).max(200).regex(/^[^\p{Cc}\p{Zl}\p{Zp}]*$/u).nullable().optional(),
+}).strict().refine(value => value.name !== undefined || value.description !== undefined);
 /** An owner or agent account id, `@name:namespace`. The namespace is the service's `serverName`. */
 export const accountId = z.string().max(255).regex(/^@[a-z0-9._=\-/+]+:[a-zA-Z0-9.-]+(?::[0-9]+)?$/);
 export interface ManagedAgent {
@@ -30,6 +35,7 @@ export interface ManagedAgent {
    * the name it has in stored records.
    */
   id: string; owner: string; name: string; address: string; matrixId: string;
+  description?: string | null;
   createdAt: string; status: "provisioning" | "active" | "deleting";
 }
 interface Instance { id: string; agentId: string; name: string; tokenHash: string; createdAt: string; lastSeen: string | null; revoked: boolean; }
@@ -209,14 +215,35 @@ export class ManagedService {
     if (!user.endsWith(`:${this.config.serverName}`) || user.startsWith("@_ar_")) throw new WorkError("local_owner_account_required", 403);
     return user;
   }
+  private address(owner: string, name: string) {
+    return owner.slice(1, owner.indexOf(":")) + "/" + name + "@" + this.config.serverName;
+  }
+  private assertNameAvailable(owner: string, name: string, except?: string) {
+    const folded = name.toLowerCase(), address = this.address(owner, folded);
+    if (this.agents(owner).some(agent => agent.id !== except && (agent.name.toLowerCase() === folded || agent.address === address)))
+      throw new WorkError("partner_name_taken", 409);
+  }
+  updateProfile(owner: string, id: string, input: { name?: string; description?: string | null }) {
+    const change = profileUpdate.parse(input);
+    const agent = this.store.transaction(() => {
+      const current = this.owned(id, owner);
+      if (current.status === "deleting") throw new WorkError("agent_deleting", 409);
+      if (change.name !== undefined) this.assertNameAvailable(owner, change.name, id);
+      const updated: ManagedAgent = { ...current, name: change.name ?? current.name,
+        ...(change.description !== undefined ? { description: change.description } : {}) };
+      this.store.set("agents", id, updated);
+      return updated;
+    });
+    return agent;
+  }
   async create(owner: string, name: string): Promise<ManagedAgent> {
     agentName.parse(name);
     let agent = this.agents(owner).find((a) => a.name === name);
     if (!agent) {
       if (this.agents(owner).length >= 50) throw new WorkError("agent_limit_reached", 429);
       const id = randomUUID();
-      const localpart = owner.slice(1, owner.indexOf(":"));
-      agent = { id, owner, name, address: `${localpart}/${name}@${this.config.serverName}`,
+      this.assertNameAvailable(owner, name);
+      agent = { id, owner, name, address: this.address(owner, name),
         matrixId: `@_ar_${id.replaceAll("-", "")}:${this.config.serverName}`, createdAt: new Date().toISOString(), status: "provisioning" };
       this.store.set("agents", id, agent);
     }
@@ -277,7 +304,7 @@ export class ManagedService {
       runtime.start();
       await runtime.extension?.start();
     } catch (error) { this.ledgers.delete(agent.id); await runtime.extension?.stop(); runtime.stop(); store.close(); throw error; }
-    this.store.set("agents", agent.id, { ...agent, status: "active" });
+    this.store.set("agents", agent.id, { ...this.agent(agent.id), status: "active" });
     try { this.hubs.hub(agent.owner).sync(agent.id); } catch { /* The hub catches up on the next publication. */ }
     return runtime;
   }

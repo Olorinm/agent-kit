@@ -5,6 +5,11 @@ tag publishes a GitHub Release whose notes are this file's section for that vers
 section in the version-bump commit before tagging. Changes up to the versions listed under
 0.8.0-alpha.1 are in each package's own `CHANGELOG.md`.
 
+## [0.11.0-alpha.10] - 2026-11-21
+
+- Router lets an embedding product edit an agent's name and description together. Direct chats
+  show its current name. Its address, runtime, device link and conversation history stay with its ID.
+
 ## [0.11.0-alpha.9] - 2026-11-19
 
 - **Host:** `agent-host link --url <router> --code <pairing code>` pairs a machine with a Router and
