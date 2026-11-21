@@ -282,7 +282,7 @@ export class OwnerHub {
     const row = this.store.db.prepare("SELECT * FROM hub_chats WHERE chat_id=?").get(chatId);
     const session = target.ledger.session(target.sessionKey);
     const readSeq = this.readSeq(chatId, personId);
-    return { chatId, kind: target.kind, title: row ? String(row.title) : target.kind === "dm" ? this.directory.agentName(target.agentId) : session?.label ?? chatId,
+    return { chatId, kind: target.kind, title: target.kind === "dm" ? this.directory.agentName(target.agentId) : row ? String(row.title) : session?.label ?? chatId,
       agentIds: [target.agentId], readOnly: target.kind === "observed", lastSeq: session?.lastSeq ?? 0, generation: session?.generation ?? 1, readSeq,
       unread: session ? target.ledger.unread(target.sessionKey, readSeq, personId) : 0,
       lastEvent: row?.last_event ? JSON.parse(String(row.last_event)) : null,
