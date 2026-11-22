@@ -176,12 +176,21 @@ process.setgroups([]); process.setgid(gid); process.setuid(uid);
 const c = fs.constants, dirFlags = c.O_RDONLY | c.O_DIRECTORY | c.O_NOFOLLOW;
 const fdPath = fd => "/proc/self/fd/" + fd;
 const homeRoot = fs.openSync("/home", dirFlags);
-const home = fs.openSync(fdPath(homeRoot) + "/" + name, dirFlags);
-if (fs.fstatSync(home).uid !== uid) throw Error("invalid_guest_home");
+function ownedDirectory(path) {
+  let fd;
+  try { fd = fs.openSync(path, dirFlags); } catch (err) {
+    if (err.code === "EACCES" || err.code === "ENOENT") process.exit(75);
+    throw err;
+  }
+  const owner = fs.fstatSync(fd).uid;
+  if (owner === 0) process.exit(75); // A fresh bootstrap may still be assigning the guest home.
+  if (owner !== uid) throw Error("invalid_guest_directory_owner");
+  return fd;
+}
+const home = ownedDirectory(fdPath(homeRoot) + "/" + name);
 const dir = fdPath(home) + "/.codex";
 try { fs.mkdirSync(dir, { mode: 0o700 }); } catch (err) { if (err.code !== "EEXIST") throw err; }
-const fd = fs.openSync(dir, dirFlags);
-if (fs.fstatSync(fd).uid !== uid) throw Error("invalid_codex_home");
+const fd = ownedDirectory(dir);
 const destination = fdPath(fd) + "/auth.json";
 const prior = fs.lstatSync(destination, { throwIfNoEntry: false });
 if (prior && !prior.isFile()) throw Error("invalid_codex_auth");
