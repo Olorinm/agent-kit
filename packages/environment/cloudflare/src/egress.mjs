@@ -26,24 +26,38 @@ export function modelServices(value) {
 }
 /** Services whose requests name their account, so an environment can be held to its own. */
 export const ACCOUNT_SERVICES=Object.freeze(['openai']);
+/** Services whose real credentials can be held and injected by the gateway outside the sandbox. */
+export const CREDENTIAL_SERVICES=Object.freeze(['openai']);
 /** @returns {Record<string,string[]> | undefined} An empty object removes a stored selection. */
 export function modelAccounts(value) {
  if(value===undefined)return undefined;
  if(!value||typeof value!=='object'||Array.isArray(value)||Object.entries(value).some(([name,ids])=>!ACCOUNT_SERVICES.includes(name)||!Array.isArray(ids)||!ids.length||ids.length>8||new Set(ids).size!==ids.length||ids.some(id=>typeof id!=='string'||!/^[A-Za-z0-9_-]{1,128}$/.test(id))))throw new Error('invalid_model_accounts');
  return value;
 }
+/** @returns {Record<string,string> | undefined} An empty object removes a stored selection. */
+export function modelCredentials(value) {
+ if(value===undefined)return undefined;
+ if(!value||typeof value!=='object'||Array.isArray(value)||Object.entries(value).some(([name,id])=>!CREDENTIAL_SERVICES.includes(name)||typeof id!=='string'||!/^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$/.test(id)))throw new Error('invalid_model_credentials');
+ return value;
+}
+/** Decodes an unverified JWT payload segment as UTF-8 JSON, or undefined when malformed. */
+export function jwtPayload(token) {
+ const match=/^[A-Za-z0-9_-]+\.([A-Za-z0-9_-]+)\.[A-Za-z0-9_-]+$/.exec(token??'');
+ if(!match)return undefined;
+ try {
+  const bytes=Uint8Array.from(atob(match[1].replaceAll('-','+').replaceAll('_','/')),c=>c.charCodeAt(0));
+  const parsed=JSON.parse(new TextDecoder('utf-8',{fatal:true}).decode(bytes));
+  return parsed&&typeof parsed==='object'&&!Array.isArray(parsed)?parsed:undefined;
+ } catch {return undefined;}
+}
 /**
  * The account a ChatGPT access token names. The signature is not checked here: the provider refuses a token it did
  * not sign, so a token naming an admitted account is that account's or useless.
  */
 function tokenAccount(authorization) {
- const token=/^Bearer [A-Za-z0-9_-]+\.([A-Za-z0-9_-]+)\.[A-Za-z0-9_-]+$/.exec(authorization??'');
- if(!token)return undefined;
- try {
-  const bytes=Uint8Array.from(atob(token[1].replaceAll('-','+').replaceAll('_','/')),c=>c.charCodeAt(0));
-  const account=JSON.parse(new TextDecoder('utf-8',{fatal:true}).decode(bytes))?.['https://api.openai.com/auth']?.chatgpt_account_id;
-  return typeof account==='string'?account:undefined;
- } catch {return undefined;}
+ const raw=typeof authorization==='string'&&authorization.startsWith('Bearer ')?authorization.slice(7):'';
+ const account=jwtPayload(raw)?.['https://api.openai.com/auth']?.chatgpt_account_id;
+ return typeof account==='string'?account:undefined;
 }
 /**
  * Why a request to an admitted destination is refused for an environment held to its model accounts; undefined when
@@ -64,11 +78,16 @@ export function accountRefusal(url, headers, accounts) {
  const named=headers.get('chatgpt-account-id');
  return allowed.includes(account)&&(named===null||allowed.includes(named))?undefined:'model_account_not_allowed';
 }
-/** The guest cannot widen this list. Redirects must pass through the policy again. */
-export function allowEgress(url, method, services = DEFAULT_MODEL_SERVICES) {
+/**
+ * The guest cannot widen this list. Redirects must pass through the policy again.
+ * @param {string} url @param {string} method @param {readonly string[]} [services] @param {Record<string,string>} [credentials]
+ */
+export function allowEgress(url, method, services = DEFAULT_MODEL_SERVICES, credentials = undefined) {
  const u=new URL(url);
  if(['deb.debian.org','security.debian.org'].includes(u.hostname)&&['http:','https:'].includes(u.protocol)&&!u.username&&!u.password&&!u.port&&!u.search&&['GET','HEAD'].includes(method)&&/^\/(debian|debian-security)\//.test(u.pathname)&&!/%2f|%5c|%2e|\\/i.test(u.pathname))return true;
  if(u.protocol!=='https:'||u.username||u.password||u.port&&u.port!=='443'||/%2f|%5c|%2e|\\/i.test(u.pathname))return false;
+ // When the gateway holds and refreshes OpenAI credentials itself, the guest has no reason to call auth.openai.com.
+ if(credentials&&Object.hasOwn(credentials,'openai')&&u.hostname==='auth.openai.com')return false;
  if(services.some(name=>rules.get(name)?.(u,method)))return true;
  // Bootstrap package fetches. Publishing and arbitrary destinations remain denied.
  if(u.hostname==='registry.npmjs.org')return ['GET','HEAD'].includes(method)&&!u.search;

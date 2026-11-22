@@ -1,4 +1,4 @@
-import { modelServices, modelAccounts } from "./egress.mjs";
+import { modelServices, modelAccounts, modelCredentials } from "./egress.mjs";
 const encoder = new TextEncoder();
 export const UUID = /^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/;
 
@@ -40,7 +40,7 @@ export function strings(value = {}) {
 export function createSpec(body) {
   if (body.template !== "node24") throw new Error("unknown_template");
   if (body.onTimeout !== undefined && !["kill", "pause"].includes(body.onTimeout)) throw new Error("invalid_timeout_policy");
-  const services = modelServices(body.modelServices), accounts = modelAccounts(body.modelAccounts);
+  const services = modelServices(body.modelServices), accounts = modelAccounts(body.modelAccounts), credentials = modelCredentials(body.modelCredentials);
   return {
     template: body.template,
     timeoutSeconds: lifetime(body.timeoutSeconds ?? 600),
@@ -49,5 +49,6 @@ export function createSpec(body) {
     env: strings(body.env),
     ...(services ? { modelServices: services } : {}),
     ...(accounts && Object.keys(accounts).length ? { modelAccounts: accounts } : {}),
+    ...(credentials && Object.keys(credentials).length ? { modelCredentials: credentials } : {}),
   };
 }

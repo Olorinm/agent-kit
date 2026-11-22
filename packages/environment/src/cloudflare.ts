@@ -1,7 +1,7 @@
 import { EnvironmentError, absolutePath, required } from "./errors.js";
 import type {
   CreateEnvironment, EnvironmentInfo, EnvironmentProvider, EnvironmentRef,
-  ExecOptions, FileEntry, HttpEndpoint, OutputChunk, ResumeOptions,
+  ExecOptions, FileEntry, HttpEndpoint, ModelCredentialInfo, ModelCredentialInput, OutputChunk, ResumeOptions,
 } from "./types.js";
 
 export interface CloudflareProviderOptions {
@@ -15,6 +15,7 @@ export interface CloudflareProviderOptions {
   allowHttp?: boolean;
 }
 const UUID = /^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/;
+const CREDENTIAL_ID = /^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$/;
 export function createCloudflareProvider(options: CloudflareProviderOptions): EnvironmentProvider {
   return new CloudflareProvider(options);
 }
@@ -95,7 +96,19 @@ class CloudflareProvider implements EnvironmentProvider {
     return values.map(x => this.project(x)).filter(x => Object.entries(metadata).every(([k, v]) => x.metadata[k] === v));
   }
   async resume(id: string, timeoutSeconds = 600, options: ResumeOptions = {}) {
-    return this.project(await (await this.request(this.path(id, "/resume"), "POST", { timeoutSeconds, modelServices: options.modelServices, modelAccounts: options.modelAccounts })).json());
+    return this.project(await (await this.request(this.path(id, "/resume"), "POST", { timeoutSeconds, modelServices: options.modelServices, modelAccounts: options.modelAccounts, modelCredentials: options.modelCredentials })).json());
+  }
+  async putModelCredential(id: string, input: ModelCredentialInput): Promise<ModelCredentialInfo> {
+    if (!CREDENTIAL_ID.test(id)) throw new EnvironmentError("invalid_credential_id", "Invalid model credential ID.");
+    const value = await (await this.request(`/v1/model-credentials/${encodeURIComponent(id)}`, "PUT", input)).json() as ModelCredentialInfo;
+    if (!value || value.id !== id || value.service !== input.service || value.mode !== input.mode)
+      throw new EnvironmentError("invalid_response", "Invalid model credential response.");
+    return value;
+  }
+  async deleteModelCredential(id: string): Promise<void> {
+    if (!CREDENTIAL_ID.test(id)) throw new EnvironmentError("invalid_credential_id", "Invalid model credential ID.");
+    try { await this.request(`/v1/model-credentials/${encodeURIComponent(id)}`, "DELETE"); }
+    catch (error) { if (!(error instanceof EnvironmentError && error.code === "model_credential_missing")) throw error; }
   }
   async pause(id: string) {
     if (this.hasUncertainExecution(id)) throw new EnvironmentError("execution_uncertain", "Reconcile execution before pausing.");

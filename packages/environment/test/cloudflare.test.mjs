@@ -124,3 +124,30 @@ test("rejects nonlocal HTTP, credential URLs and path injection before network I
   for (const apiUrl of ["http://example.com", "https://user:key@example.com", "https://example.com/private"])
     assert.throws(() => createCloudflareProvider({ id: "cf", apiUrl, apiKey: "test", allowHttp: true }));
 });
+test("CloudflareProvider stores and deletes gateway model credentials and passes modelCredentials on create and resume", async () => {
+  const sent = [];
+  await withServer(async (req, res) => {
+    const chunks = []; for await (const c of req) chunks.push(c);
+    const raw = Buffer.concat(chunks).toString();
+    sent.push([req.method, req.url, raw]);
+    if (req.url.startsWith("/v1/model-credentials/") && req.method === "PUT") {
+      res.end(JSON.stringify({ id: "codex-main", service: "openai", mode: "chatgpt", accountId: "acct-1", renewable: true, updatedAt: "2026-11-22T00:00:00.000Z" }));
+      return;
+    }
+    if (req.url.startsWith("/v1/model-credentials/") && req.method === "DELETE") { res.end(JSON.stringify({ deleted: true })); return; }
+    res.end(JSON.stringify({ id, state: "running", template: "node24", metadata: {} }));
+  }, async p => {
+    const info = await p.putModelCredential("codex-main", { service: "openai", mode: "chatgpt", accessToken: "tok", refreshToken: "rt", accountId: "acct-1" });
+    assert.equal(info.id, "codex-main"); assert.equal(info.accountId, "acct-1");
+    await p.create({ template: "node24", modelCredentials: { openai: "codex-main" } });
+    await p.resume(id, 900, { modelCredentials: { openai: "codex-main" } });
+    await p.deleteModelCredential("codex-main");
+    assert.deepEqual(sent, [
+      ["PUT", "/v1/model-credentials/codex-main", JSON.stringify({ service: "openai", mode: "chatgpt", accessToken: "tok", refreshToken: "rt", accountId: "acct-1" })],
+      ["POST", "/v1/environments", JSON.stringify({ template: "node24", modelCredentials: { openai: "codex-main" } })],
+      ["POST", `/v1/environments/${id}/resume`, JSON.stringify({ timeoutSeconds: 900, modelCredentials: { openai: "codex-main" } })],
+      ["DELETE", "/v1/model-credentials/codex-main", ""],
+    ]);
+    await assert.rejects(p.putModelCredential("../bad", { service: "openai", mode: "api_key", apiKey: "sk-1" }), { code: "invalid_credential_id" });
+  });
+});

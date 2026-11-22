@@ -14,8 +14,9 @@ const worker = compile(await readFile(new URL("../src/index.ts", import.meta.url
   .replace('from "cloudflare:workers"', `from "${runtime}"`)
   .replace('from "./backup"', `from "${backup}"`)
   .replace('from "./security.mjs"', `from "${new URL("../src/security.mjs", import.meta.url)}"`)
-  .replace('from "./egress.mjs"', `from "${new URL("../src/egress.mjs", import.meta.url)}"`);
-const { default: gateway, AgentSandbox, AgentEgress } = await import(moduleUrl(worker));
+  .replace('from "./egress.mjs"', `from "${new URL("../src/egress.mjs", import.meta.url)}"`)
+  .replace('from "./credentials.mjs"', `from "${new URL("../src/credentials.mjs", import.meta.url)}"`);
+const { default: gateway, AgentSandbox, AgentEgress, Catalog } = await import(moduleUrl(worker));
 const id = "33333333-3333-4333-8333-333333333333";
 const control = "fixture-operator-control";
 
@@ -290,4 +291,79 @@ test("the egress entrypoint refuses another account's token and the API host bef
     if (error) { assert.equal(response.status, 403); assert.deepEqual(await response.json(), { error }); assert.deepEqual(forwarded, []); }
     else { assert.equal(await response.text(), "upstream"); assert.deepEqual(forwarded, [url]); }
   }
+});
+
+test("gateway stores OpenAI credentials outside sandboxes, injects live headers, refreshes on 401 and blocks guest auth.openai.com", async t => {
+  const storeMap = new Map();
+  const storage = {
+    async get(key) { return structuredClone(storeMap.get(key)); },
+    async put(key, value) { storeMap.set(key, structuredClone(value)); },
+    async delete(key) { return storeMap.delete(key); },
+    async list({ prefix = "" } = {}) {
+      return new Map([...storeMap.entries()].filter(([k]) => k.startsWith(prefix)).map(([k, v]) => [k, structuredClone(v)]));
+    },
+  };
+  const catalog = new Catalog({ storage, blockConcurrencyWhile: fn => fn() }, { MAX_ENVIRONMENTS: "3" });
+  const env = { CONTROL_TOKEN: control, CATALOG: { getByName: () => catalog } };
+  const makeJwt = (acct, exp) => `e30.${Buffer.from(JSON.stringify({ exp, "https://api.openai.com/auth": { chatgpt_account_id: acct } })).toString("base64url")}.sig`;
+  const futureExp = Math.floor(Date.now() / 1000) + 3600;
+  const tok1 = makeJwt("account-1", futureExp), tok2 = makeJwt("account-1", futureExp + 3600);
+
+  // Operator stores credential via HTTP route; response never discloses secrets.
+  const putRes = await gateway.fetch(new Request("https://gateway.test/v1/model-credentials/codex-main", {
+    method: "PUT",
+    headers: { "X-Environment-Control": control, "Content-Type": "application/json" },
+    body: JSON.stringify({ service: "openai", mode: "chatgpt", accessToken: tok1, refreshToken: "rt_secret_1" }),
+  }), env);
+  assert.equal(putRes.status, 200);
+  const putBody = await putRes.json();
+  assert.equal(putBody.id, "codex-main"); assert.equal(putBody.accountId, "account-1"); assert.equal(putBody.renewable, true);
+  assert.equal(JSON.stringify(putBody).includes(tok1), false);
+  assert.equal(JSON.stringify(putBody).includes("rt_secret_1"), false);
+
+  // AgentEgress replaces placeholder Authorization + ChatGPT-Account-ID, blocks auth.openai.com, and retries once after 401 refresh.
+  const upstreamCalls = [];
+  let codexAttempts = 0;
+  t.mock.method(globalThis, "fetch", async (input, init) => {
+    const req = input instanceof Request ? input : new Request(input, init);
+    if (req.url === "https://auth.openai.com/oauth/token") {
+      const body = await req.json();
+      assert.equal(body.refresh_token, "rt_secret_1");
+      return Response.json({ access_token: tok2, refresh_token: "rt_secret_2" });
+    }
+    upstreamCalls.push({ url: req.url, auth: req.headers.get("authorization"), acct: req.headers.get("chatgpt-account-id"), body: await req.text() });
+    codexAttempts++;
+    return codexAttempts === 1 ? new Response("unauthorized", { status: 401 }) : new Response("ok-after-refresh", { status: 200 });
+  });
+  const egress = Object.assign(new AgentEgress(), {
+    ctx: { props: { modelServices: ["openai"], modelAccounts: { openai: ["account-1"] }, modelCredentials: { openai: "codex-main" } } },
+    env,
+  });
+  // Guest calling auth.openai.com directly is refused.
+  const blockedAuth = await egress.fetch(new Request("https://auth.openai.com/oauth/token", { method: "POST", body: "{}" }));
+  assert.equal(blockedAuth.status, 403); assert.deepEqual(await blockedAuth.json(), { error: "destination_not_allowed" });
+
+  // Guest calling chatgpt.com with placeholder token gets real token injected, refreshed on 401, and retried transparently.
+  const res = await egress.fetch(new Request("https://chatgpt.com/backend-api/codex/responses", {
+    method: "POST",
+    headers: { Authorization: "Bearer placeholder-only", "ChatGPT-Account-ID": "spoofed-account" },
+    body: '{"hello":"world"}',
+  }));
+  assert.equal(res.status, 200);
+  assert.equal(await res.text(), "ok-after-refresh");
+  assert.deepEqual(upstreamCalls, [
+    { url: "https://chatgpt.com/backend-api/codex/responses", auth: `Bearer ${tok1}`, acct: "account-1", body: '{"hello":"world"}' },
+    { url: "https://chatgpt.com/backend-api/codex/responses", auth: `Bearer ${tok2}`, acct: "account-1", body: '{"hello":"world"}' },
+  ]);
+
+  // Environment create and resume persist modelCredentials and expose only IDs on /security.
+  const f = fixture({ status: "paused" });
+  f.records.set("backup", { version: 2, createdAt: Date.now() });
+  assert.equal((await f.request({ timeoutSeconds: 600, modelCredentials: { openai: "codex-main" } }, control, "resume")).status, 200);
+  assert.deepEqual(f.egress[0], { props: { modelServices: ["openai"], modelCredentials: { openai: "codex-main" } } });
+  assert.deepEqual((await (await f.sandbox.fetch(new Request("https://internal/security"))).json()).modelCredentials, { openai: "codex-main" });
+  assert.equal((await f.request({}, control, "pause")).status, 200);
+  assert.equal((await f.request({ modelCredentials: {} }, control, "resume")).status, 200);
+  assert.deepEqual(f.egress[1], { props: { modelServices: ["openai"] } });
+  assert.equal((await (await f.sandbox.fetch(new Request("https://internal/security"))).json()).modelCredentials, null);
 });
