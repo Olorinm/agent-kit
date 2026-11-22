@@ -6,6 +6,18 @@ export interface EnvironmentInfo extends EnvironmentRef {
   template?: string;
   metadata: Record<string, string>;
 }
+export type ModelCredentialInput =
+  | { service: "openai"; mode: "chatgpt"; accessToken: string; refreshToken?: string; accountId?: string; clientId?: string }
+  | { service: "openai"; mode: "api_key"; apiKey: string };
+export interface ModelCredentialInfo {
+  id: string;
+  service: "openai";
+  mode: "chatgpt" | "api_key";
+  accountId?: string;
+  expiresAt?: string;
+  renewable: boolean;
+  updatedAt: string;
+}
 export interface CreateEnvironment {
   /** A provider template ID; resource limits, image and volumes live in that template. */
   template: string;
@@ -17,9 +29,13 @@ export interface CreateEnvironment {
   modelServices?: string[];
   /** Per model service, the accounts the environment's requests must belong to, e.g. `{ openai: ["<account id>"] }`. */
   modelAccounts?: Record<string, string[]>;
+  /** Per model service, the gateway-held credential ID injected on outbound requests, e.g. `{ openai: "codex-main" }`. */
+  modelCredentials?: Record<string, string>;
+  /** Guest login names whose Codex configuration must be sanitized before restoring a snapshot. */
+  codexAuthUsers?: string[];
 }
-/** What a resume may change; an omitted field keeps what the provider has stored. An empty `modelAccounts` removes it. */
-export type ResumeOptions = Pick<CreateEnvironment, "modelServices" | "modelAccounts">;
+/** What a resume may change; an omitted field keeps what the provider has stored. An empty `modelAccounts` or `modelCredentials` removes it. */
+export type ResumeOptions = Pick<CreateEnvironment, "modelServices" | "modelAccounts" | "modelCredentials" | "codexAuthUsers">;
 export interface ExecOptions {
   cwd?: string;
   env?: Record<string, string>;
@@ -55,6 +71,11 @@ export interface EnvironmentProvider {
   writeFile(id: string, path: string, data: string | Uint8Array): Promise<void>;
   removeFile(id: string, path: string): Promise<void>;
   listFiles(id: string, path: string, missingOk?: boolean): Promise<FileEntry[]>;
+  /** Optional gateway-managed model credential store, keeping real tokens outside the sandbox. */
+  getModelCredential?(id: string): Promise<ModelCredentialInfo | null>;
+  prepareCodexAuth?(id: string): Promise<void>;
+  putModelCredential?(id: string, input: ModelCredentialInput, options?: { ifAbsent?: boolean }): Promise<ModelCredentialInfo>;
+  deleteModelCredential?(id: string): Promise<void>;
   hasUncertainExecution(id: string): boolean;
   resetExecutionUncertainty(id: string): void;
 }

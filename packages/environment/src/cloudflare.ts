@@ -1,7 +1,7 @@
 import { EnvironmentError, absolutePath, required } from "./errors.js";
 import type {
   CreateEnvironment, EnvironmentInfo, EnvironmentProvider, EnvironmentRef,
-  ExecOptions, FileEntry, HttpEndpoint, OutputChunk, ResumeOptions,
+  ExecOptions, FileEntry, HttpEndpoint, ModelCredentialInfo, ModelCredentialInput, OutputChunk, ResumeOptions,
 } from "./types.js";
 
 export interface CloudflareProviderOptions {
@@ -15,6 +15,7 @@ export interface CloudflareProviderOptions {
   allowHttp?: boolean;
 }
 const UUID = /^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/;
+const CREDENTIAL_ID = /^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$/;
 export function createCloudflareProvider(options: CloudflareProviderOptions): EnvironmentProvider {
   return new CloudflareProvider(options);
 }
@@ -43,7 +44,7 @@ class CloudflareProvider implements EnvironmentProvider {
     if (!UUID.test(id)) throw new EnvironmentError("invalid_id", "Invalid Cloudflare environment ID.");
     return `/v1/environments/${id}${suffix}`;
   }
-  private async request(path: string, method = "GET", data?: unknown, signal?: AbortSignal) {
+  private async request(path: string, method = "GET", data?: unknown, signal?: AbortSignal, headers?: Record<string, string>) {
     const controller = new AbortController();
     const abort = () => controller.abort(signal?.reason);
     if (signal?.aborted) abort();
@@ -52,7 +53,7 @@ class CloudflareProvider implements EnvironmentProvider {
     try {
       const res = await fetch(this.base + path, {
         method, redirect: "error", signal: controller.signal,
-        headers: { "X-Environment-Control": this.key, ...(data === undefined ? {} : { "Content-Type": "application/json" }) },
+        headers: { ...headers, "X-Environment-Control": this.key, ...(data === undefined ? {} : { "Content-Type": "application/json" }) },
         ...(data === undefined ? {} : { body: JSON.stringify(data) }),
       });
       if (!res.ok) {
@@ -95,7 +96,30 @@ class CloudflareProvider implements EnvironmentProvider {
     return values.map(x => this.project(x)).filter(x => Object.entries(metadata).every(([k, v]) => x.metadata[k] === v));
   }
   async resume(id: string, timeoutSeconds = 600, options: ResumeOptions = {}) {
-    return this.project(await (await this.request(this.path(id, "/resume"), "POST", { timeoutSeconds, modelServices: options.modelServices, modelAccounts: options.modelAccounts })).json());
+    return this.project(await (await this.request(this.path(id, "/resume"), "POST", { timeoutSeconds, modelServices: options.modelServices, modelAccounts: options.modelAccounts, modelCredentials: options.modelCredentials, codexAuthUsers: options.codexAuthUsers })).json());
+  }
+  async getModelCredential(id: string): Promise<ModelCredentialInfo | null> {
+    if (!CREDENTIAL_ID.test(id)) throw new EnvironmentError("invalid_credential_id", "Invalid model credential ID.");
+    try { return await (await this.request(`/v1/model-credentials/${encodeURIComponent(id)}`)).json() as ModelCredentialInfo; }
+    catch (error) {
+      if (error instanceof EnvironmentError && error.code === "model_credential_missing") return null;
+      throw error;
+    }
+  }
+  async prepareCodexAuth(id: string): Promise<void> {
+    await this.request(this.path(id, "/codex-auth"), "POST", {});
+  }
+  async putModelCredential(id: string, input: ModelCredentialInput, options: { ifAbsent?: boolean } = {}): Promise<ModelCredentialInfo> {
+    if (!CREDENTIAL_ID.test(id)) throw new EnvironmentError("invalid_credential_id", "Invalid model credential ID.");
+    const value = await (await this.request(`/v1/model-credentials/${encodeURIComponent(id)}`, "PUT", input, undefined, options.ifAbsent ? { "If-None-Match": "*" } : undefined)).json() as ModelCredentialInfo;
+    if (!value || value.id !== id || value.service !== input.service || value.mode !== input.mode)
+      throw new EnvironmentError("invalid_response", "Invalid model credential response.");
+    return value;
+  }
+  async deleteModelCredential(id: string): Promise<void> {
+    if (!CREDENTIAL_ID.test(id)) throw new EnvironmentError("invalid_credential_id", "Invalid model credential ID.");
+    try { await this.request(`/v1/model-credentials/${encodeURIComponent(id)}`, "DELETE"); }
+    catch (error) { if (!(error instanceof EnvironmentError && error.code === "model_credential_missing")) throw error; }
   }
   async pause(id: string) {
     if (this.hasUncertainExecution(id)) throw new EnvironmentError("execution_uncertain", "Reconcile execution before pausing.");
