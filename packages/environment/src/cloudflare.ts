@@ -44,7 +44,7 @@ class CloudflareProvider implements EnvironmentProvider {
     if (!UUID.test(id)) throw new EnvironmentError("invalid_id", "Invalid Cloudflare environment ID.");
     return `/v1/environments/${id}${suffix}`;
   }
-  private async request(path: string, method = "GET", data?: unknown, signal?: AbortSignal) {
+  private async request(path: string, method = "GET", data?: unknown, signal?: AbortSignal, headers?: Record<string, string>) {
     const controller = new AbortController();
     const abort = () => controller.abort(signal?.reason);
     if (signal?.aborted) abort();
@@ -53,7 +53,7 @@ class CloudflareProvider implements EnvironmentProvider {
     try {
       const res = await fetch(this.base + path, {
         method, redirect: "error", signal: controller.signal,
-        headers: { "X-Environment-Control": this.key, ...(data === undefined ? {} : { "Content-Type": "application/json" }) },
+        headers: { ...headers, "X-Environment-Control": this.key, ...(data === undefined ? {} : { "Content-Type": "application/json" }) },
         ...(data === undefined ? {} : { body: JSON.stringify(data) }),
       });
       if (!res.ok) {
@@ -96,11 +96,22 @@ class CloudflareProvider implements EnvironmentProvider {
     return values.map(x => this.project(x)).filter(x => Object.entries(metadata).every(([k, v]) => x.metadata[k] === v));
   }
   async resume(id: string, timeoutSeconds = 600, options: ResumeOptions = {}) {
-    return this.project(await (await this.request(this.path(id, "/resume"), "POST", { timeoutSeconds, modelServices: options.modelServices, modelAccounts: options.modelAccounts, modelCredentials: options.modelCredentials })).json());
+    return this.project(await (await this.request(this.path(id, "/resume"), "POST", { timeoutSeconds, modelServices: options.modelServices, modelAccounts: options.modelAccounts, modelCredentials: options.modelCredentials, codexAuthUsers: options.codexAuthUsers })).json());
   }
-  async putModelCredential(id: string, input: ModelCredentialInput): Promise<ModelCredentialInfo> {
+  async getModelCredential(id: string): Promise<ModelCredentialInfo | null> {
     if (!CREDENTIAL_ID.test(id)) throw new EnvironmentError("invalid_credential_id", "Invalid model credential ID.");
-    const value = await (await this.request(`/v1/model-credentials/${encodeURIComponent(id)}`, "PUT", input)).json() as ModelCredentialInfo;
+    try { return await (await this.request(`/v1/model-credentials/${encodeURIComponent(id)}`)).json() as ModelCredentialInfo; }
+    catch (error) {
+      if (error instanceof EnvironmentError && error.code === "model_credential_missing") return null;
+      throw error;
+    }
+  }
+  async prepareCodexAuth(id: string): Promise<void> {
+    await this.request(this.path(id, "/codex-auth"), "POST", {});
+  }
+  async putModelCredential(id: string, input: ModelCredentialInput, options: { ifAbsent?: boolean } = {}): Promise<ModelCredentialInfo> {
+    if (!CREDENTIAL_ID.test(id)) throw new EnvironmentError("invalid_credential_id", "Invalid model credential ID.");
+    const value = await (await this.request(`/v1/model-credentials/${encodeURIComponent(id)}`, "PUT", input, undefined, options.ifAbsent ? { "If-None-Match": "*" } : undefined)).json() as ModelCredentialInfo;
     if (!value || value.id !== id || value.service !== input.service || value.mode !== input.mode)
       throw new EnvironmentError("invalid_response", "Invalid model credential response.");
     return value;

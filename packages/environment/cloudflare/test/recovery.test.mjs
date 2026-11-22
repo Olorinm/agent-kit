@@ -356,6 +356,14 @@ test("gateway stores OpenAI credentials outside sandboxes, injects live headers,
     { url: "https://chatgpt.com/backend-api/codex/responses", auth: `Bearer ${tok2}`, acct: "account-1", body: '{"hello":"world"}' },
   ]);
 
+  // A second deployment still has the original import. An insert-only PUT must preserve the rotated token.
+  const repeated = await gateway.fetch(new Request("https://gateway.test/v1/model-credentials/codex-main", {
+    method: "PUT", headers: { "X-Environment-Control": control, "If-None-Match": "*" },
+    body: JSON.stringify({ service: "openai", mode: "chatgpt", accessToken: tok1, refreshToken: "rt_secret_1" }),
+  }), env);
+  assert.equal(repeated.status, 200);
+  assert.equal((await storeMap.get("cred:codex-main")).refreshToken, "rt_secret_2");
+
   // Environment create and resume persist modelCredentials and expose only IDs on /security.
   const f = fixture({ status: "paused" });
   f.records.set("backup", { version: 2, createdAt: Date.now() });
@@ -366,4 +374,30 @@ test("gateway stores OpenAI credentials outside sandboxes, injects live headers,
   assert.equal((await f.request({ modelCredentials: {} }, control, "resume")).status, 200);
   assert.deepEqual(f.egress[1], { props: { modelServices: ["openai"] } });
   assert.equal((await (await f.sandbox.fetch(new Request("https://internal/security"))).json()).modelCredentials, null);
+});
+
+test("a running guest must pause to change its credential binding; a restore scrubs before the entrypoint opens", async () => {
+  const running = fixture({}, true);
+  const selection = { modelCredentials: { openai: "managed" }, codexAuthUsers: ["user"] };
+  const refused = await running.request(selection, control, "resume");
+  assert.equal(refused.status, 409);
+  assert.equal((await refused.json()).error, "credential_migration_requires_pause");
+  assert.equal(running.records.get("record").modelCredentials, undefined);
+  const paused = fixture({ status: "paused" });
+  paused.sandbox.env.CATALOG.getByName = () => ({ contains: async () => true,
+    getCredential: async () => ({ mode: "chatgpt", accountId: "owner", accessToken: "must-never-be-in-guest" }) });
+  assert.equal((await paused.request(selection, control, "resume")).status, 200);
+  const scrub = paused.commands.findIndex(cmd => cmd.includes("user") && cmd[1] === "-e");
+  const release = paused.commands.findIndex(cmd => cmd.some(arg => arg.includes("touch /run/mau-network-ready-")));
+  assert.ok(scrub >= 0 && scrub < release);
+  assert.ok(!JSON.stringify(paused.commands).includes("must-never-be-in-guest"));
+  assert.equal(JSON.parse(paused.commands[scrub].at(-1)).tokens.account_id, "owner");
+  const bad = fixture({ status: "paused" });
+  bad.sandbox.env.CATALOG.getByName = paused.sandbox.env.CATALOG.getByName;
+  const exec = bad.container.exec.bind(bad.container);
+  bad.container.exec = args => args.includes("user") ? { output: async () => ({ exitCode: 1 }) } : exec(args);
+  assert.equal((await bad.request(selection, control, "resume")).status, 409);
+  assert.equal(bad.container.running, false);
+  assert.equal(bad.records.get("record").status, "paused");
+  assert.ok(!bad.commands.some(cmd => cmd.some(arg => arg.includes("touch /run/mau-network-ready-"))));
 });

@@ -5,6 +5,11 @@ tag publishes a GitHub Release whose notes are this file's section for that vers
 section in the version-bump commit before tagging. Changes up to the versions listed under
 0.8.0-alpha.1 are in each package's own `CHANGELOG.md`.
 
+## [0.11.0-alpha.12] - 2026-11-22
+
+- Hold OpenAI model credentials at the Cloudflare gateway, preserve rotated credentials across imports, and bind model requests to the selected account.
+- Install credential-free Codex login files under the guest user's permissions before restoring managed workloads.
+
 ## [0.11.0-alpha.11] - 2026-11-22
 
 - Upgrade Agent Host to Zod 4.6.7 and refresh the Hono dependencies used by Host and Connectors.

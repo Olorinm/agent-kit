@@ -36,7 +36,7 @@
 
 ```sh
 mkdir my-agent && cd my-agent && npm init -y
-npm install https://github.com/Olorinm/agent-kit/releases/download/v0.11.0-alpha.11/olorinm-agent-host-0.11.0-alpha.11.tgz
+npm install https://github.com/Olorinm/agent-kit/releases/download/v0.11.0-alpha.12/olorinm-agent-host-0.11.0-alpha.12.tgz
 
 npx agent-host init --kernel codex --cwd . --config host.json
 npx agent-host doctor --config host.json
@@ -86,9 +86,9 @@ npm test
 <summary>发布一个版本</summary>
 
 ```sh
-node scripts/set-version.mjs 0.11.0-alpha.11   # 改每个 package.json 和锁文件
-# 在 CHANGELOG.md 里加一节 "## [0.11.0-alpha.11]"，提交，等 CI 通过
-git tag v0.11.0-alpha.11 && git push origin v0.11.0-alpha.11
+node scripts/set-version.mjs 0.11.0-alpha.12   # 改每个 package.json 和锁文件
+# 在 CHANGELOG.md 里加一节 "## [0.11.0-alpha.12]"，提交，等 CI 通过
+git tag v0.11.0-alpha.12 && git push origin v0.11.0-alpha.12
 ```
 
 [发布工作流](.github/workflows/release.yml)在 Linux 上用固定版本的 Node.js 和 npm，在打标签的那个提交上构建每个包，

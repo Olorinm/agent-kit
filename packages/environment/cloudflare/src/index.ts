@@ -1,7 +1,7 @@
 import { DurableObject, WorkerEntrypoint } from "cloudflare:workers";
-import { UUID, equalSecret, signAccess, verifyAccess, createSpec, lifetime, strings } from "./security.mjs";
+import { UUID, equalSecret, signAccess, verifyAccess, createSpec, lifetime, strings, codexAuthUsers } from "./security.mjs";
 import { allowEgress, accountRefusal, modelServices, modelAccounts, modelCredentials, DEFAULT_MODEL_SERVICES } from "./egress.mjs";
-import { CREDENTIAL_ID, parseOpenAiCredential, credentialView, needsRefresh, refreshOpenAiToken, injectOpenAiAuth } from "./credentials.mjs";
+import { CREDENTIAL_ID, parseOpenAiCredential, credentialView, needsRefresh, refreshOpenAiToken, injectOpenAiAuth, placeholderAuth, installGuestAuth } from "./credentials.mjs";
 import { installAge, archiveAgent } from "./backup";
 
 interface Env {
@@ -33,6 +33,7 @@ interface RecordData {
   modelAccounts?: Record<string, string[]>;
   /** Per model service, the gateway-held credential ID injected on outbound requests. Absent means guest credentials. */
   modelCredentials?: Record<string, string>;
+  codexAuthUsers?: string[];
 }
 interface StoredModelCredential {
   service: "openai";
@@ -99,7 +100,7 @@ export default {
         if (request.method === "PUT") {
           let parsed;
           try { parsed = parseOpenAiCredential(await body(request)); } catch { throw new ApiError("invalid_model_credential", 400); }
-          return json(await credentials.putCredential(credId, parsed));
+          return json(await credentials.putCredential(credId, parsed, request.headers.get("If-None-Match") === "*"));
         }
         if (request.method === "GET") {
           const found = await credentials.getCredential(credId);
@@ -130,7 +131,7 @@ export default {
         }));
         return json(entries);
       }
-      const match = /^\/v1\/environments\/([^/]+)(?:\/(info|pause|resume|recover|timeout|exec|files|endpoint|security|backup))?$/.exec(url.pathname);
+      const match = /^\/v1\/environments\/([^/]+)(?:\/(info|pause|resume|recover|timeout|exec|files|endpoint|security|backup|codex-auth))?$/.exec(url.pathname);
       if (!match || !UUID.test(match[1])) return json({ error: "not_found" }, 404);
       const [, id, action = "info"] = match;
       if (!await catalog.contains(id)) return json({ error: "environment_missing" }, 404);
@@ -211,8 +212,12 @@ export class Catalog extends DurableObject<Env> {
   async contains(id: string) { return await this.ctx.storage.get(`id:${id}`) !== undefined; }
   async ids() { return [...(await this.ctx.storage.list({ prefix: "id:" })).keys()].map(k => k.slice(3)); }
   async remove(id: string) { await this.ctx.storage.delete(`id:${id}`); }
-  async putCredential(id: string, parsed: Omit<StoredModelCredential, "updatedAt">) {
+  async putCredential(id: string, parsed: Omit<StoredModelCredential, "updatedAt">, ifAbsent = false) {
     return this.ctx.blockConcurrencyWhile(async () => {
+      if (ifAbsent) {
+        const current = await this.ctx.storage.get<StoredModelCredential>(`cred:${id}`);
+        if (current) return credentialView(id, current);
+      }
       const stored: StoredModelCredential = { ...parsed, updatedAt: new Date().toISOString() };
       await this.ctx.storage.put(`cred:${id}`, stored);
       return credentialView(id, stored);
@@ -285,6 +290,18 @@ export class AgentSandbox extends DurableObject<Env> {
     this.changing = true;
     try { return await fn(); } finally { this.changing = false; }
   }
+  private async prepareGuestAuth(r: RecordData) {
+    if (!r.codexAuthUsers?.length) return;
+    const id = r.modelCredentials?.openai;
+    const metadata = id && await this.env.CATALOG.getByName("credentials").getCredential(id);
+    if (!metadata) throw new ApiError("model_credential_missing", 409);
+    const placeholder = placeholderAuth(metadata);
+    for (const user of r.codexAuthUsers) {
+      const result = await (await this.container.exec(["node", "-e", installGuestAuth, user, placeholder])).output();
+      if (result.exitCode === 75) throw new ApiError("codex_user_not_ready", 409);
+      if (result.exitCode !== 0) throw new ApiError("codex_auth_install_failed", 409);
+    }
+  }
   private async start(r: RecordData, restore: boolean, maintenance = false) {
     if (restore && !r.snapshot) throw new ApiError("snapshot_missing");
     const usage = await this.runtimeUsage();
@@ -310,6 +327,12 @@ export class AgentSandbox extends DurableObject<Env> {
       if(ca.exitCode!==0)throw new ApiError("bootstrap_trust_failed",502);
     }
     await installAge(this.container,this.env.BACKUPS,this.env.AGE_KEY,this.env.AGE_SHA256);
+    // On restore the original snapshot remains recoverable until the sanitized instance is running.
+    // The guest entrypoint is still waiting for readyFile, even if the snapshot has an old Host readiness marker.
+    if (restore && r.codexAuthUsers?.length) {
+      try { await this.prepareGuestAuth(r); }
+      catch (error) { await this.container.destroy(); throw error; }
+    }
     const trust=await(await this.container.exec(["sh","-c",`cp /etc/cloudflare/certs/cloudflare-containers-ca.crt /usr/local/share/ca-certificates/mau-cloudflare.crt && update-ca-certificates >/dev/null 2>&1 && touch ${readyFile}`])).output();
     if(trust.exitCode!==0)throw new ApiError("network_trust_failed",502);
     await this.ctx.storage.put("runtime", {...usage,startedAt:Date.now()});
@@ -433,6 +456,11 @@ export class AgentSandbox extends DurableObject<Env> {
         const r = await this.ctx.storage.get<RecordData>("record");
         return r ? json(info(r, this.container.running)) : json({ error: "environment_missing" }, 404);
       }
+      if (url.pathname === "/codex-auth" && request.method === "POST") {
+        await this.enter();
+        try { await this.prepareGuestAuth(await this.record()); return json({ ok: true }); }
+        finally { this.busy--; }
+      }
       if(url.pathname==="/security"&&request.method==="GET")return json({version:2,egress:"model-and-package-allowlist",...await this.ctx.storage.get<RecordData>("record").then(r=>({modelServices:r?.modelServices??DEFAULT_MODEL_SERVICES,modelAccounts:r?.modelAccounts??null,modelCredentials:r?.modelCredentials??null})),runtime:await this.runtimeUsage(),backup:await this.ctx.storage.get("backup")??null});
       if(url.pathname==="/backup"&&request.method==="POST")return this.change(async()=>{const r=await this.record();await this.backup(r);return json({ok:true});});
       if(url.pathname==="/maintenance"&&request.method==="POST")return this.change(async()=>{
@@ -459,6 +487,14 @@ export class AgentSandbox extends DurableObject<Env> {
           try { services = modelServices(b.modelServices); } catch { throw new ApiError("invalid_model_services", 400); }
           try { accounts = modelAccounts(b.modelAccounts); } catch { throw new ApiError("invalid_model_accounts", 400); }
           try { credentials = modelCredentials(b.modelCredentials); } catch { throw new ApiError("invalid_model_credentials", 400); }
+          let users;
+          try { users = codexAuthUsers(b.codexAuthUsers); } catch { throw new ApiError("invalid_codex_auth_users", 400); }
+          const nextUsers = users ?? r.codexAuthUsers ?? [], nextKey = (credentials ?? r.modelCredentials)?.openai;
+          if (nextUsers.length && !nextKey) throw new ApiError("model_credential_required", 400);
+          if (r.status === "running" && this.container.running &&
+              (nextKey !== r.modelCredentials?.openai || JSON.stringify(nextUsers) !== JSON.stringify(r.codexAuthUsers ?? [])))
+            throw new ApiError("credential_migration_requires_pause");
+          if (users) r.codexAuthUsers = users;
           r.expires = Date.now() + lifetime(b.timeoutSeconds ?? 600) * 1000;
           if (services) r.modelServices = services;
           if (accounts && Object.keys(accounts).length) r.modelAccounts = accounts;
@@ -472,7 +508,7 @@ export class AgentSandbox extends DurableObject<Env> {
           }
           if (r.status !== "paused") throw new ApiError("resume_requires_paused");
           // Commit the selection before the restored container starts.
-          if (services || accounts || credentials) await this.ctx.storage.put("record", r);
+          if (services || accounts || credentials || users) await this.ctx.storage.put("record", r);
           return json(await this.start(r, true));
         });
       }

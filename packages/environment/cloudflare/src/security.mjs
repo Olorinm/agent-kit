@@ -37,11 +37,21 @@ export function strings(value = {}) {
   }
   return /** @type {Record<string, string>} */ (value);
 }
+export function codexAuthUsers(value) {
+  if (value === undefined) return undefined;
+  if (!Array.isArray(value) || value.length > 32 || value.some(name =>
+    typeof name !== "string" || !/^[a-z_][a-z0-9_-]{0,31}$/.test(name) || name === "root") || new Set(value).size !== value.length)
+    throw new Error("invalid_codex_auth_users");
+  return [...value].sort();
+}
 export function createSpec(body) {
   if (body.template !== "node24") throw new Error("unknown_template");
   if (body.onTimeout !== undefined && !["kill", "pause"].includes(body.onTimeout)) throw new Error("invalid_timeout_policy");
   const services = modelServices(body.modelServices), accounts = modelAccounts(body.modelAccounts), credentials = modelCredentials(body.modelCredentials);
+  const users = codexAuthUsers(body.codexAuthUsers);
+  if (users?.length && !credentials?.openai) throw new Error("model_credential_required");
   return {
+    ...(users?.length ? { codexAuthUsers: users } : {}),
     template: body.template,
     timeoutSeconds: lifetime(body.timeoutSeconds ?? 600),
     onTimeout: body.onTimeout ?? "pause",

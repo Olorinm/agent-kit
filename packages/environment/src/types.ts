@@ -31,9 +31,11 @@ export interface CreateEnvironment {
   modelAccounts?: Record<string, string[]>;
   /** Per model service, the gateway-held credential ID injected on outbound requests, e.g. `{ openai: "codex-main" }`. */
   modelCredentials?: Record<string, string>;
+  /** Guest login names whose Codex configuration must be sanitized before restoring a snapshot. */
+  codexAuthUsers?: string[];
 }
 /** What a resume may change; an omitted field keeps what the provider has stored. An empty `modelAccounts` or `modelCredentials` removes it. */
-export type ResumeOptions = Pick<CreateEnvironment, "modelServices" | "modelAccounts" | "modelCredentials">;
+export type ResumeOptions = Pick<CreateEnvironment, "modelServices" | "modelAccounts" | "modelCredentials" | "codexAuthUsers">;
 export interface ExecOptions {
   cwd?: string;
   env?: Record<string, string>;
@@ -70,7 +72,9 @@ export interface EnvironmentProvider {
   removeFile(id: string, path: string): Promise<void>;
   listFiles(id: string, path: string, missingOk?: boolean): Promise<FileEntry[]>;
   /** Optional gateway-managed model credential store, keeping real tokens outside the sandbox. */
-  putModelCredential?(id: string, input: ModelCredentialInput): Promise<ModelCredentialInfo>;
+  getModelCredential?(id: string): Promise<ModelCredentialInfo | null>;
+  prepareCodexAuth?(id: string): Promise<void>;
+  putModelCredential?(id: string, input: ModelCredentialInput, options?: { ifAbsent?: boolean }): Promise<ModelCredentialInfo>;
   deleteModelCredential?(id: string): Promise<void>;
   hasUncertainExecution(id: string): boolean;
   resetExecutionUncertainty(id: string): void;
