@@ -139,14 +139,14 @@ HTTP callers select a configured `runtimeId`. They cannot supply executables, en
 | `opencode`, `kimi` | Optional `command`, `args`, `env`, `model`, `effort`, `config`; native ACP startup and login.                                                                                                                      |
 | `agy`              | Optional `command` (default `agy`), `args` (default `["acp"]`), `env`, `model`, `effort`, `config`; `config.mode` selects the native permission mode. Native Antigravity sign-in. See [kernel support](kernel-support.md#upgrade-boundaries). |
 | `dsh` | Optional `command` (default `dsh`), `args` (default `["acp"]`), `env`, `model`, `effort`, `config`. The official DeepSeek model provider reads `DEEPSEEK_API_KEY`. |
-| `pi`               | Required `model` in `provider/model` form, using Pi's built-in model catalog and native provider environment. Optional `thinkingLevel`, `toolApproval` and `shell`. Its durable storage lives under service state.                                             |
+| `pi`               | Required `model` in `provider/model` form, using Pi's built-in model catalog and native provider environment. Optional `thinkingLevel`, `toolApproval`, `shell` and `skillsDirectory`. Its durable storage lives under service state.                                             |
 | `hermes`           | Required Gateway `command`, with `args`, optional `env`, `model`, `provider`, `effort`. Configure/authenticate the profile's persistent `HERMES_HOME`; the profile is exclusively owned by this service. |
 | `openclaw`         | Required `gatewayUrl`, optional `gatewayTokenEnv` naming a server environment variable, optional `model`. Product tools require the existing [Gateway plugin](api.md#openclaw-product-tools).            |
 
 A Pi profile can enable the official native Bash tool, for example
-`{"id":"pi-worker","kernel":"pi","cwd":"/home/user/workspace","shell":true}`.
+`{"id":"pi-worker","kernel":"pi","cwd":"/home/user/workspace","shell":true,"skillsDirectory":"/home/user/.agents/skills"}`.
 Its child shell receives the runtime ID and durable conversation ID in
-`PI_DURABLE_CONVERSATION_ID`. Set a Pi model on the profile or per run.
+`PI_DURABLE_CONVERSATION_ID`. Set a Pi model on the profile or per run. The opt-in skills directory contains one subdirectory per installed skill. Pi includes each visible skill’s name, description and absolute file path in its prompt. Bash can read the full instructions on demand. The runtime caches its index, and resumed conversations retain their original index.
 
 `GET /v1/runtimes` and `POST /v1/runtimes/inspect` expose profile availability and implemented controls. Inspection checks the configured directory/executable and required model selection. It does not prove login, model access or native execution, and does not scan or install every Agent on the machine. Native request-time failures remain visible in the task outcome.
 

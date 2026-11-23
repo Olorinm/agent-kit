@@ -18,6 +18,8 @@ Integration versions were checked against the official release channels on **202
 
 `npm test` uses protocol/SDK/provider fixtures to exercise failure boundaries, concurrency, cancellation, event correlation, interactions and controls. `npm run test:package` installs the archive outside the repository and tests the same editor against all nine adapters, including native Pi persistence with deterministic provider output. These tests do not contact a model provider.
 
+For the November 23 refresh, a local model fixture drove actual tool calls through Claude Code, OpenCode, Kimi and both Hermes transports on macOS. Codex completed an app-server handshake and thread listing. The OpenClaw Gateway negotiated protocol 4 and returned a healthy status. Pi resumed a transcript written by 1.2.0, and two concurrent Pi stores ran the native Bash tool with distinct runtime-scoped IDs. These checks used local test data.
+
 The common interaction helper, selectable settings, native session API, CLI, controls and media paths are covered by these deterministic tests and by the independent archive consumer. OpenClaw's native command approvals reach the common callback with session/run correlation; Pi's native policy hook can be enabled by the HTTP owner.
 
 Model-backed runs against real native installations are separate from these tests. They need native credentials, are not part of CI, and their reports and transcripts are not distributed. A passing deterministic test does not certify a provider, model or platform.

@@ -16,6 +16,7 @@ import { CodexNativeBridge, type CodexNativeAccess } from "../codex/native-bridg
 import { AcpAgent, type AcpAgentOptions } from "../acp/session.js";
 import { AcpHostToolBridgeServer } from "../acp/tool-bridge.js";
 import { ClaudeAgent, type ClaudeAgentOptions } from "../claude/session.js";
+import { installedSkillExtension } from "../pi/skills.js";
 import { PiAgent, type PiAgentOptions } from "../pi/session.js";
 import { HermesAgent, type HermesAgentOptions } from "../hermes/session.js";
 import {
@@ -69,6 +70,7 @@ export type NativeRuntimeConfig = BaseConfig &
         kernel: "pi";
         options?: PiAgentOptions;
         shell?: boolean;
+        skillsDirectory?: string;
         toolApproval?: boolean;
         runOptions?: Pick<
           PiRunRequest,
@@ -332,17 +334,16 @@ export function createNativeRuntime(
         shellRuntimeId: config.id,
         bindings,
       });
-      const extensions = config.shell
-        ? [
-            defineExtension({ name: "agent-host-shell", tools: [createBashTool()] }),
-            ...(config.runOptions?.extensions ?? []),
-          ]
-        : config.runOptions?.extensions;
+      const extensions = [...(config.runOptions?.extensions ?? [])];
+      if (config.shell)
+        extensions.push(defineExtension({name: "agent-host-shell", tools: [createBashTool()]}));
+      if (config.skillsDirectory)
+        extensions.push(installedSkillExtension(resolve(cwd, config.skillsDirectory), !!config.shell));
       run = (request) =>
         agent.run({
           ...config.runOptions,
           ...request,
-          extensions,
+          extensions: extensions.length ? extensions : undefined,
           thinkingLevel: (request.settings?.thinkingLevel ??
             config.runOptions?.thinkingLevel) as PiRunRequest["thinkingLevel"],
           onRequest: config.toolApproval ? request.onRequest : undefined,

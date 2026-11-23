@@ -65,6 +65,7 @@ const profileSchema = z
       .optional(),
     toolApproval: z.boolean().optional(),
     shell: z.boolean().optional(),
+    skillsDirectory: z.string().min(1).optional(),
     thinkingLevel: z
       .enum(["off", "minimal", "low", "medium", "high", "xhigh"])
       .optional(),
@@ -79,7 +80,7 @@ const profileSchema = z
       kimi: ["command", "args", "env", "effort", "config"],
       agy: ["command", "args", "env", "effort", "config"],
       dsh: ["command", "args", "env", "effort", "config"],
-      pi: ["thinkingLevel", "toolApproval", "shell"],
+      pi: ["thinkingLevel", "toolApproval", "shell", "skillsDirectory"],
       hermes:
         profile.transport === "acp"
           ? ["command", "args", "env", "transport"]
@@ -221,6 +222,7 @@ export function createConfiguredRuntimes(
           kernel: "pi",
           toolApproval: profile.toolApproval,
           shell: profile.shell,
+          skillsDirectory: profile.skillsDirectory,
           runOptions: { thinkingLevel: profile.thinkingLevel },
         };
         break;

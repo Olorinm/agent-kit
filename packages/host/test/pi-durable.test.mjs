@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { mkdtemp } from "node:fs/promises";
+import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { model, fixture } from "./fixtures/pi-stream.mjs";
@@ -494,5 +494,33 @@ test("Pi shell binds local conversation IDs to their own runtime in parallel", a
     }
   } finally {
     await Promise.all(runtimes.map((runtime) => runtime.close()));
+  }
+});
+
+test("Pi lists metadata from an explicitly configured skills directory and leaves instructions on disk", async () => {
+  const cwd = await mkdtemp(join(tmpdir(), "agent-host-pi-skills-"));
+  for (const [name, metadata] of [
+    ["browser", 'description: "Browser <automation> & capture"'],
+    ["private", "description: Manual only\ndisable-model-invocation: true"],
+  ]) {
+    await mkdir(join(cwd, "skills", name), { recursive: true });
+    await writeFile(join(cwd, "skills", name, "SKILL.md"), `---\nname: ${name}\n${metadata}\n---\nprivate-document-body`);
+  }
+  for (const skillsDirectory of ["skills", undefined]) {
+    const seen = [];
+    const runtime = createNativeRuntime({id: skillsDirectory ?? "no-skills", kernel: "pi",
+      cwd, shell: true, skillsDirectory, options: {model, streamFn: fixture(seen)}}, cwd);
+    try {
+      const events = await Array.fromAsync(runtime.run({sessionId: "session", input: "hello"}));
+      assert.equal(events.at(-1).outcome.status, "completed");
+      const context = JSON.stringify(seen.at(-1));
+      assert.equal(context.includes("<available_skills>"), !!skillsDirectory);
+      if (skillsDirectory) {
+        assert.ok(context.includes("Browser &lt;automation&gt; &amp; capture"), context);
+        assert.ok(context.includes(join(cwd, "skills", "browser", "SKILL.md")));
+        assert.ok(!context.includes("Manual only"));
+        assert.ok(!context.includes("private-document-body"));
+      }
+    } finally { await runtime.close(); }
   }
 });

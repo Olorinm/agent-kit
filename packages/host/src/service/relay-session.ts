@@ -10,6 +10,10 @@ const sessionVariables = {
   hermes: "HERMES_SESSION_ID",
 } as const;
 
+/** Whether this Host can identify requests from the kernel's terminal. */
+export const supportsSessionRelay = (kernel: string | undefined) =>
+  kernel !== undefined && Object.hasOwn(sessionVariables, kernel);
+
 export function shellSession(env: NodeJS.ProcessEnv) {
   const sessions = Object.entries(sessionVariables).flatMap(([kernel, variable]) => {
     const threadId = env[variable];
