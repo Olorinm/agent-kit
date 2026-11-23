@@ -9,6 +9,7 @@ section in the version-bump commit before tagging. Changes up to the versions li
 
 - Fix duplicate Pi message-start events when the 1.6 harness delays persistence of an assistant message.
 - Restore the environment's selected skill groups after restart. Preserve the product addendum and locally edited guides when updating or pruning the official bundle.
+- Update the connector, router and Cloudflare dependencies. Resolve agent-browser 0.43.0 and its bundled guides from its platform package, and align the offline skill bundle with Lark CLI 1.0.100.
 
 ## [0.11.0-alpha.13] - 2026-11-23
 
