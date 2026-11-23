@@ -118,8 +118,8 @@ A new pairing has a new `linkId`, so a new binding. An agent that already has ru
   its `requestKey` and binds the run if the Host has it. It is never sent a second time. If the Host does not have
   it, the turn stays `unknown` until the owner closes it.
 - A message with attachments fails with a notice: a linked Host accepts text.
-- Input that no person wrote (delegated or scheduled work) reaches a linked Host as text with the fixed delivery
-  notice, never as a native tool output.
+- Input that no person wrote (delegated or scheduled work) reaches a linked Host as the text of its JSON object
+  (`{ from, message }`), never as a native tool output.
 - `context` of a linked run is `{ agentId, conversationId, source }`, where `source` names the channel sender or the
   admission that produced the input.
 

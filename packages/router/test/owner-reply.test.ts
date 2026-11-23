@@ -76,6 +76,23 @@ describe("the owner conversation as a work target", () => {
     expect(h.host.starts[0]!.tools).toHaveLength(1);
     expect(h.ledger.turn(h.sessions.get("after-reset").taskId)).toMatchObject({ sessionKey: sessionId, window: 2 });
   });
+  it("is reset by the product once it is idle, and the next turn opens a new Host session", async () => {
+    const h = await setup();
+    // A conversation that does not exist has nothing to reset.
+    expect(h.sessions.resetOwnerConversation()).toBeNull();
+    h.chat.say("m1", "a long task", OWNER_ON_CHAT);
+    await h.round();
+    // Nothing is cancelled for a reset the owner did not ask for: the product tries again later.
+    expect(() => h.sessions.resetOwnerConversation()).toThrow("session_busy");
+    h.host.finish(1, "Done.");
+    await h.round();
+    expect(h.sessions.resetOwnerConversation()).toEqual({ window: 2 });
+    expect(h.ledger.events(OWNER_CHAT).at(-1)).toMatchObject({ kind: "window", body: { window: 2, reason: "reset" } });
+    h.chat.say("m2", "and now?", OWNER_ON_CHAT);
+    await h.round();
+    expect(h.host.starts).toHaveLength(2);
+    expect(h.host.starts[1]!.sessionId).not.toBe(h.host.starts[0]!.sessionId);
+  });
 });
 
 describe("a submitted turn that answers the owner", () => {

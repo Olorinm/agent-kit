@@ -55,35 +55,43 @@ session's stable instructions. Scheduled work requires explicit tool grants.
 
 ### Input that no human wrote
 
-Delegated and scheduled work is never delivered as a human user message. Before each such
-turn Router asks the Host whether the runtime takes native input items (`input.nativeItems`
-in the runtime description) and chooses the form:
+Delegated and scheduled work is never delivered as a human user message. The model reads one
+JSON object: `from` says who the input is from, and the rest is the product's.
 
-- **A runtime that takes them (Codex):** the input enters as native `toolOutput` with its
-  actual product source (`mau.work_sessions` or `mau.proactive_work`). Codex does not allow
-  typed input and standalone tool output in the same turn. Router verifies requested skill
-  names and paths against the native catalog and includes those references for on-demand
-  loading; this does not force native skill injection. Other typed items are rejected
-  before a run is submitted (`native_tool_delivery_typed_input_unsupported`).
-- **A runtime that reports them as unsupported:** the input is sent as text behind a fixed
-  notice. The notice says that the input is an automated delivery, that no person wrote or
-  approved it in this turn and that it gives no new human authorization. A `Source:` line
-  follows with the admission kind, its reference and the sender as one line of JSON, then a
-  line saying that everything after it is the delivered message, then the message as the
-  last part. Typed input items cannot be carried by a text delivery and are rejected with
-  the same error.
+```json
+{"from":{"partner":"desk"},"message":"Summarize the report."}
+```
+
+`from` is `{ "partner": name }` when the submission names a sender, `"schedule"` for
+scheduled work and `"system"` otherwise. A product that has more to say than a text submits
+`json: true` with the text of a JSON object as `input`: its members stand beside `from` in
+place of `message`. Router writes `from` itself and drops a `from` the product's object has. What
+each member means to a model is the product's to say once, in its instructions or a tool's
+description; Router adds no sentence of its own.
+
+Before each such turn Router asks the Host whether the runtime takes native input items
+(`input.nativeItems` in the runtime description) and chooses how the object arrives:
+
+- **A runtime that takes them (Codex):** as the output of a native `toolOutput`
+  (`mau.work_sessions` or `mau.proactive_work`). Codex does not allow typed input and
+  standalone tool output in the same turn. Router verifies requested skill names and paths
+  against the native catalog and adds those references to the object (`skills`) for
+  on-demand loading; this does not force native skill injection. Other typed items are
+  rejected before a run is submitted (`native_tool_delivery_typed_input_unsupported`).
+- **A runtime that reports them as unsupported:** as the text of the turn. Typed input
+  items cannot be carried by a text delivery and are rejected with the same error.
 
 A Host that does not describe its runtimes, or does not answer the question, is sent the
-tool output as before. The admission still travels beside the input for the product's Host
-decorator, in both forms.
+tool output. The admission still travels beside the input for the product's Host decorator,
+in both forms.
 
-The notice is a statement to the model, not an enforced boundary: a text-only runtime has
+The object is a statement to the model, not an enforced boundary: a text-only runtime has
 no input channel that a message cannot imitate. What such a turn may do is decided by its
 admission and the grants the product enforces, never by the text.
 
 `submit` accepts `sender: { kind: "agent", id, name }` for input that is another agent's
 message. Router records it as the sender of the input event (`sender_type: "agent"`), the web
-chat API returns it as the event's `sender`, and both delivery forms carry it in the source.
+chat API returns it as the event's `sender`, and the model reads its name in `from`.
 A sender is refused on an owner admission (`work_sender_admission_mismatch`): the owner's own
 work is the owner's.
 
@@ -345,6 +353,6 @@ Router starts and observes the children using the bounded reserve; their results
 the parents. It then restarts Router, continues the same native parent
 thread and pages native history. The child's original tool-output source is retained.
 A second agent on a runtime that takes text only then receives the same kind of delegated
-input as text that names its source, and its ending appears in the settlement feed.
+input as the same object in text, and its ending appears in the settlement feed.
 This is deterministic
 protocol evidence, not live-model, live-account or cloud-environment acceptance.
