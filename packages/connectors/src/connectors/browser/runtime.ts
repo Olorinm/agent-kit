@@ -4,6 +4,7 @@ import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
 import { ConnectorError } from "../../connector.js";
 
+const require = createRequire(import.meta.url);
 const API = "https://api.cloudflare.com/client/v4";
 
 export interface BrowserRunAccount { accountId: string; token: string }
@@ -70,21 +71,19 @@ export interface CliResult { code: number; stdout: string; stderr: string }
 export interface CliOptions { cwd: string; env: NodeJS.ProcessEnv; timeout: number; signal: AbortSignal; input?: string }
 export type AgentBrowserRunner = (args: string[], options: CliOptions) => Promise<CliResult>;
 
-/**
- * The pinned agent-browser package ships every platform's native binary in its tarball, without the executable bit.
- * Its install script only sets that bit (and rewrites a global npm link if one exists), so it is not run: the binary
- * is used directly when executable, otherwise copied once into this service's private directory with mode 0700.
- */
+/** Use the pinned CLI's platform and libc detection. Optional binary packages work with npm install scripts disabled. */
 export function agentBrowserBinary(privateDirectory: string): string {
-  const require = createRequire(import.meta.url);
-  let root: string;
-  try { root = dirname(require.resolve("agent-browser/package.json")); } catch { throw new ConnectorError("agent_browser_not_installed"); }
-  const arch = { x64: "x64", arm64: "arm64" }[process.arch as string];
-  const report = process.platform === "linux" ? process.report?.getReport() as { header?: { glibcVersionRuntime?: string } } | undefined : undefined;
-  const os = process.platform === "linux" ? (report?.header?.glibcVersionRuntime ? "linux" : "linux-musl") : process.platform;
-  if (!arch || !["linux", "linux-musl", "darwin", "win32"].includes(os)) throw new ConnectorError("agent_browser_not_installed");
-  const name = `agent-browser-${os}-${arch}${process.platform === "win32" ? ".exe" : ""}`, packaged = join(root, "bin", name);
-  if (!existsSync(packaged)) throw new ConnectorError("agent_browser_not_installed");
+  let packaged: string | null = null;
+  let name: string;
+  try {
+    const root = dirname(require.resolve("agent-browser/package.json"));
+    const native = require("agent-browser/scripts/native.js");
+    const target = native.nativeTarget();
+    if (!target) throw new Error("unsupported_platform");
+    packaged = native.platformPackageBinary(root, target) ?? native.findNativeBinary(root, target);
+    name = target.binaryName;
+  } catch { throw new ConnectorError("agent_browser_not_installed"); }
+  if (!packaged) throw new ConnectorError("agent_browser_not_installed");
   try { accessSync(packaged, constants.X_OK); return packaged; } catch { /* copied below */ }
   const copy = join(privateDirectory, name);
   if (!existsSync(copy) || statSync(copy).size !== statSync(packaged).size) {
@@ -98,7 +97,9 @@ const MAX_OUTPUT = 32_000_000;
 
 /** Runs the binary with an argument array: no shell, no user-wide configuration, stdin only when given. */
 export const runAgentBrowser = (binary: () => string): AgentBrowserRunner => (args, options) => new Promise((resolve, reject) => {
-  const child = spawn(binary(), args, { cwd: options.cwd, env: options.env, signal: options.signal,
+  // Platform packages contain only the executable. The published guides live in the main package.
+  const skills = join(dirname(require.resolve("agent-browser/package.json")), "skill-data");
+  const child = spawn(binary(), args, { cwd: options.cwd, env: { ...options.env, AGENT_BROWSER_SKILLS_DIR: skills }, signal: options.signal,
     timeout: options.timeout, stdio: ["pipe", "pipe", "pipe"], windowsHide: true });
   const out: Buffer[] = [], err: Buffer[] = [];
   let size = 0, overflow = false;
