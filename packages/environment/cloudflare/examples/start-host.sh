@@ -118,7 +118,7 @@ if uses_kernel dsh; then
   fi
 fi
 # Mau supplies the pinned offline skill bundle before publishing this start script.
-skills_digest=c97578e84b5e06e6f2e53028a97f5e395d8fc075ea8b03b8d3cd009b3fe81b27
+skills_digest=09c3d39cd7091881f1cc3dd9d2a2175a3a545847bb7f542f57e5c16b18c84d19
 skills_store=/opt/agent-environment-skills
 skills_path="$skills_store/$skills_digest"
 if [ -f "$base/official-skills.tgz" ] && [ ! -d "$skills_path" ]; then
@@ -132,6 +132,9 @@ fi
 chown -R user:user /home/user
 if [ -d "$skills_path" ]; then
   ln -sfnT "$skills_path" "$skills_store/current"
+  # What Mau asks the installer for later: only the skill groups this environment has connections for.
+  printf '%s\n' "$skills_digest" > "$skills_store/digest"
+  chmod 644 "$skills_store/digest"
   runuser -u user -- sh "$skills_path/install.sh" /home/user "$skills_digest" "$skills_path"/skills/*
   if [ -f "$base/mau-sandbox/SKILL.md" ]; then
     install -d -m 755 "$skills_store/mau-sandbox"

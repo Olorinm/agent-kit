@@ -39,3 +39,28 @@ test("the verified offline bundle installs complete upstream skills beside user-
   execFileSync("sh", [installer, home, "two", extra]);
   assert.equal(await readFile(join(home, ".claude/skills/mau-sandbox/SKILL.md"), "utf8"), "version two");
 });
+
+test("a caller that knows the environment's connections asks for their groups and prunes the rest", async t => {
+  const directory = await mkdtemp(join(tmpdir(), "agent-environment-skills-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const archive = fileURLToPath(new URL("../examples/official-skills.tgz", import.meta.url));
+  const digest = createHash("sha256").update(await readFile(archive)).digest("hex");
+  execFileSync("tar", ["xzf", archive, "-C", directory]);
+  const home = join(directory, "home"), installer = join(directory, "install.sh");
+  const own = join(home, ".claude/skills/lark-doc");
+  await mkdir(own, { recursive: true });
+  await writeFile(join(own, "SKILL.md"), "owner's own guide");
+  // Everything first, as the start script does before Mau knows the connections.
+  execFileSync("sh", [installer, home, digest, ...(await readdir(join(directory, "skills"))).map(name => join(directory, "skills", name))]);
+  assert.ok((await readdir(join(home, ".claude/skills"))).includes("gws-gmail"));
+  // No Google connection: the gws skills go, the lark ones stay, and the owner's own guide is untouched.
+  execFileSync("sh", [installer, home, digest, "--prune", "--only", "agent-browser", "lark"]);
+  const installed = await readdir(join(home, ".claude/skills"));
+  assert.ok(installed.includes("lark-shared") && installed.includes("agent-browser") && installed.includes("lark-doc"));
+  assert.ok(!installed.some(name => name.startsWith("gws-")));
+  assert.equal(await readFile(join(own, "SKILL.md"), "utf8"), "owner's own guide");
+  for (const root of [".agents/skills", ".gemini/config/skills", ".hermes/skills"]) {
+    const names = await readdir(join(home, root));
+    assert.ok(names.includes("lark-shared") && !names.some(name => name.startsWith("gws-")), root);
+  }
+});
