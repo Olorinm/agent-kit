@@ -85,7 +85,6 @@ describe("reset (ADR 0005 16.3)", () => {
     await t.send({ idempotencyKey: ik(), text: "第二轮" });
     await until(t.events, (items) => items.some((event) => event.kind === "message" && event.text === "回答-2"));
     const sessionKey = legacySession(t.agent.id, "owner-main");
-    expect((t.host.starts[1]!.context as any).conversationId).toBe(`${sessionKey}.w2`);
     expect(t.host.starts[1]!.sessionId).not.toBe(t.host.starts[0]!.sessionId);
     expect(t.ledger.session(sessionKey)!.window).toBe(2);
     expect(t.ledger.contextFor(sessionKey)).toBe(`${sessionKey}.w2`);
@@ -150,7 +149,8 @@ describe("purge (ADR 0005 16.4)", () => {
     await t.send({ idempotencyKey: ik(), text: "重新开始" });
     const after = await until(t.events, (items) => items.some((event) => event.text === "回答-3"));
     expect(after.map((event) => event.seq)).toEqual(after.map((_event, index) => index + 1));
-    expect((t.host.starts[2]!.context as any).conversationId).toBe(`${legacySession(t.agent.id, "owner-main")}.w2`);
+    expect(t.ledger.contextFor(legacySession(t.agent.id, "owner-main"))).toBe(`${legacySession(t.agent.id, "owner-main")}.w2`);
+    expect(t.host.starts[2]!.sessionId).not.toBe(t.host.starts[0]!.sessionId);
     expect((await t.api(`${root}/web/chats/${enc(t.chatId)}`)).data).toMatchObject({ generation: 2, readSeq: 0 });
   }, 30_000);
 });

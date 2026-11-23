@@ -333,7 +333,7 @@ describe("work for a linked Host", () => {
     expect(phases()).toMatchObject({ error: HOST_OFFLINE, runs: [] });
     const machine = connect(port, credential); await machine.ready;
     await until(() => machine.host.starts.length, (count) => count === 1);
-    // A message and its source; none of the cloud's instructions or tools.
+    // A message and its source; none of the cloud's instructions or tools. A linked Host is told who is asking.
     expect(machine.host.starts[0]).toEqual({ sessionId: expect.any(String), runtimeId: "local", instructions: "", input: "Hello from the cloud.", requestKey: expect.any(String),
       context: { agentId: expect.any(String), conversationId: expect.any(String), source: { kind: "owner", reference: "first" } } });
     machine.host.finish(1, "Hello from the machine.");

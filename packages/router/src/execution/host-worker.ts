@@ -237,7 +237,7 @@ export class HostWorker {
             this.store.set("execution_sessions", claim.contextId, { ...savedSession, channelTools: withTools });
           const admission = authored?.admission ?? this.options.admission?.(claim.contextId, claim.id);
           const delivered = admission && admission.kind !== "owner" && authored?.mode !== "compact"
-            ? await this.deliveryInput(runtimeId, input, admission, authored?.inputItems, authored?.sender) : undefined;
+            ? await this.deliveryInput(runtimeId, input, admission, authored?.inputItems, authored?.sender, authored?.notice) : undefined;
           // The agent's default settings apply to every turn; a turn's own selection wins. Compaction takes none.
           const defaults = authored?.mode === "compact" ? undefined : this.store.get<Record<string, unknown>>(DEFAULT_SETTINGS, "default");
           const settings = defaults || authored?.settings ? { ...defaults, ...authored?.settings } : undefined;
@@ -254,7 +254,10 @@ export class HostWorker {
             // A restricted Host is told who is asking and nothing else.
             context: restricted ? { agentId: this.agentId, conversationId: claim.contextId, source: authored?.admission
                 ? { kind: authored.admission.kind, reference: authored.admission.reference, ...(authored.sender ? { sender: authored.sender } : {}) } : { kind: "channel", sender: claim.from } }
-              : { ...(authored?.context && typeof authored.context === "object" ? authored.context : { data: authored?.context }), agentId: this.agentId, conversationId: claim.contextId, source: authored?.admission ?? { kind: "channel", sender: claim.from } } });
+              // The model sees the product's per-turn context only. Agent, conversation and source are routing facts,
+              // recorded on the run and its ledger input; repeating them every turn is input the model cannot use.
+              : authored?.context && typeof authored.context === "object" ? authored.context
+              : authored?.context !== undefined ? { data: authored.context } : undefined });
           if (started.sessionId !== sessionId || started.runtimeId !== runtimeId) throw new Error("host_run_scope_mismatch");
           binding = { ...binding, phase: "running", runId: started.id };
           this.store.set("communication_runs", claim.claimId, binding);
@@ -350,11 +353,11 @@ export class HostWorker {
    * one; any other runtime gets the text with a fixed notice and its source (`textDelivery`).
    */
   private async deliveryInput(runtimeId: string, input: string, admission: HostAdmission, items?: Record<string, unknown>[],
-    sender?: WorkSender): Promise<{ input: string; toolOutput?: Record<string, unknown> }> {
+    sender?: WorkSender, notice?: boolean): Promise<{ input: string; toolOutput?: Record<string, unknown> }> {
     if (!(await this.acceptsToolOutput(runtimeId))) {
       // Typed items are a native input form too; a text delivery cannot carry them.
       if (items?.length) throw new WorkError("native_tool_delivery_typed_input_unsupported", 422);
-      return { input: textDelivery(admission, input, sender) };
+      return { input: textDelivery(admission, input, sender, notice !== false) };
     }
     let skills: Array<{ name: string; path: string }> | undefined;
     if (items?.length) {

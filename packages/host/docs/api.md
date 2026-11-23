@@ -51,7 +51,7 @@ try {
 }
 ```
 
-`instructions` are stable; `context` is the current product state, supplied on every turn. A product can also supply native text/image/skill/mention input items. Native `thread` and `turn` options preserve controls such as model, effort, sandbox policy, output schema and collaboration mode without inventing equivalent features for other Kernels. Passing an option does not establish that it has been verified in every environment.
+`instructions` are stable; `context` is the current product state, supplied on every turn. An ACP kernel has no separate instruction field, so the instructions precede the first prompt this process sends to a session and the first one after a compaction; later prompts carry the context only. A product can also supply native text/image/skill/mention input items. Native `thread` and `turn` options preserve controls such as model, effort, sandbox policy, output schema and collaboration mode without inventing equivalent features for other Kernels. Passing an option does not establish that it has been verified in every environment.
 
 `createAgent({ kernel, options })` selects any of the nine adapters. TypeScript retains the selected adapter's native options and methods; existing direct imports still work. Hermes defaults to its configured TUI Gateway command; select `transport: 'acp'` for the official canonical `hermes acp` viewer. OpenClaw requires its Gateway connection. The [capability API](capabilities.md) describes common operations and limits without starting a process. Native request formats remain available; `onInteraction` handles common approvals and questions while retaining the native request.
 

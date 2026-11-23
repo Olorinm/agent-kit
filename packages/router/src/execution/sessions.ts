@@ -45,6 +45,13 @@ export interface WorkSessionSubmission {
    */
   sender?: WorkSender | undefined;
   /**
+   * Whether Router states the provenance of a delivered input itself. The default notice says that no person wrote the
+   * input and that it grants nothing; a product whose own text already says who sent it and where the answer goes sets
+   * this to `false`, so the model reads one statement instead of two that can disagree. Only meaningful together with
+   * `sender`, and only for a runtime that takes text rather than a native tool output.
+   */
+  notice?: boolean | undefined;
+  /**
    * What to show for this input: a JSON object the product defines, at most 64,000 bytes serialized. For example the
    * message as its sender wrote it, when `input` is the text written for the model. It is recorded on the input event
    * and returned by the web chat API as the event's `display`. Router does not interpret it, and it never reaches the
@@ -249,6 +256,7 @@ export class WorkSessions {
         ...(input.inputItems ? { inputItems: input.inputItems } : {}),
         ...(input.settings ? { settings: input.settings } : {}), ...(input.mode ? { mode: input.mode } : {}),
         ...(sender ? { sender } : {}),
+        ...(input.notice === undefined ? {} : { notice: input.notice }),
       } satisfies WorkInput);
       this.store.set("work_session_events", input.eventId, { eventId: input.eventId, sessionId, taskId: task.id, hash,
         ...(route ? { reply: routeFacts(route, reply!.connectionId) } : {}) } satisfies WorkEvent);

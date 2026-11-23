@@ -90,6 +90,11 @@ export class AcpAgent {
     StdioJsonRpcClient,
     Set<string>
   >();
+  /** Native sessions in this process that already received the stable instructions. */
+  private readonly instructedSessions = new WeakMap<
+    StdioJsonRpcClient,
+    Set<string>
+  >();
   private readonly capabilities = new WeakMap<StdioJsonRpcClient, JsonObject>();
   private readonly initialization = new WeakMap<
     StdioJsonRpcClient,
@@ -236,6 +241,7 @@ export class AcpAgent {
       });
       this.client = client;
       this.openedSessions.set(client, new Set());
+      this.instructedSessions.set(client, new Set());
       // Configuration/commands may arrive before session/new returns or while idle.
       client.addNotificationHandler((notification) => {
         const params = object(notification.params);
@@ -518,6 +524,8 @@ export class AcpAgent {
         toolBinding.activate(bridge);
       }
       const opened = this.openedSessions.get(client)!;
+      // Native sessions in this process that already received the stable instructions.
+      const instructed = this.instructedSessions.get(client) ?? new Set<string>();
       let threadId = binding?.threadId;
       if (
         request.additionalDirectories?.length &&
@@ -697,7 +705,8 @@ export class AcpAgent {
               });
         outcome =
           result.ok && result.compacted
-            ? { status: "completed" }
+            ? // The summary replaces the conversation: the next turn states the instructions again.
+              (instructed.delete(threadId), { status: "completed" })
             : {
                 status: "failed",
                 error: result.error ?? "compaction_not_confirmed",
@@ -721,7 +730,12 @@ export class AcpAgent {
         signal.removeEventListener("abort", cancel);
         if (grace) clearTimeout(grace);
       });
-      const prefix = [request.instructions, request.context]
+      // ACP keeps the conversation: the stable instructions reach the native session once, when this process opens
+      // it — a new session, or a resume after a Host restart. Per-turn context still precedes every prompt.
+      const prefix = [
+        instructed.has(threadId) ? undefined : request.instructions,
+        request.context,
+      ]
         .filter(Boolean)
         .join("\n\n");
       const input =
@@ -782,6 +796,8 @@ export class AcpAgent {
         },
       );
       queue.push({ type: "native.response", runId, response });
+      // The prompt reached the native session: from here the instructions are part of its conversation.
+      instructed.add(threadId);
       const usage = object(object(response).usage);
       if (Object.keys(usage).length) {
         const counts = Object.fromEntries(

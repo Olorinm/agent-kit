@@ -7,13 +7,13 @@
     "38ee3e3af4755685067c5480d6043758964a08b055b8c419359053e7a45aec6c"
   ],
   "turns": [
-    "931ae11573fa3676467cbf157f80244e732dc3e98c6408d5ea93fc364e313a2a",
-    "c839e824874d7bb944cc0630f34f049e3fd99f3df204d5899fd804bde2e4f3bc",
-    "08fbff7a0169590d1945d1a68c4b4a2df6356ef7bd2d93acc377dc854244142c",
-    "bd9c3f5af6ae3ef461a3256b76ef5d86a40bbf3902713552e656a659ce53b158"
+    "cab2a4eefb913cb5f2640d1e6e278d7c85baddcb70edcfa2d5b48fb81c5303a5",
+    "358c12bd502a47cab9d2d15ef20796a3590fbcfcfc43632f088aaa6f128e5023",
+    "2514bcbe35c42c04a4e2ea09be95f35f921c30fbd0fa91fa54176887eb971755",
+    "7a162849c39ec8625ccdaeca790be1de4264b1f2de5408c5b709891708d383be"
   ],
   "delivered": [
-    "hello\nChannel context (provider routing IDs): {\"channel\":\"chat\",\"connectionId\":\"chat\",\"scope\":\"direct\",\"conversationId\":\"private\",\"messageId\":\"m1\",\"senderId\":\"@alice:example.test\"}",
+    "hello",
     "{\"namespace\":\"mau\",\"name\":\"proactive_work\",\"retain\":false,\"output\":\"{\\\"source\\\":{\\\"kind\\\":\\\"schedule\\\",\\\"reference\\\":\\\"rule-1\\\"},\\\"message\\\":\\\"Check the inbox.\\\"}\"}",
     "{\"namespace\":\"mau\",\"name\":\"work_sessions\",\"retain\":false,\"output\":\"{\\\"source\\\":{\\\"kind\\\":\\\"delegation\\\",\\\"reference\\\":\\\"call-1\\\"},\\\"message\\\":\\\"Summarize the report.\\\"}\"}",
     "Write the notes."
