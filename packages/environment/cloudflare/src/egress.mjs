@@ -15,6 +15,27 @@ const rules=new Map([
   if(u.hostname!=='api.anthropic.com')return false;
   return method==='POST'&&['/v1/messages','/v1/messages/count_tokens'].includes(u.pathname)||method==='GET'&&/^\/v1\/models(?:\/[^/]+)?$/.test(u.pathname);
  }],
+ ['google',(u,method,held)=>{
+  if(u.hostname!=='generativelanguage.googleapis.com')return false;
+  // The gateway holds the key (`modelCredentials.google`): the whole Gemini API on this host, any path and method.
+  // Every request leaves under the owner's key and the guest's own credentials are removed, so whatever it sends,
+  // uploaded files included, stays in the owner's own project.
+  if(held)return true;
+  // The guest holds the key: streamed inference only, the one request Antigravity (`agy`) makes for a turn with a
+  // Gemini API key (`modelProvider: "gemini"`). The gateway cannot tell whose key a request carries, so a guest that
+  // is talked into it could use someone else's key; with files, caches or tuning admitted it could put the owner's
+  // files into that person's project. Model listing and every other method stay closed for the same reason.
+  // In both cases its Google sign-in (the Cloud Code backend, OAuth) needs a desktop keyring and is not admitted, nor
+  // is any other Google host.
+  return method==='POST'&&/^\/v1beta\/models\/[A-Za-z0-9][A-Za-z0-9._-]{0,127}:streamGenerateContent$/.test(u.pathname);
+ }],
+ ['deepseek',(u,method,held)=>{
+  if (!held || u.hostname !== 'api.deepseek.com') return false;
+  if (u.pathname === '/models') return method === 'GET';
+  if (u.pathname === '/anthropic/v1/messages') return method === 'POST';
+  if (u.pathname === '/anthropic/v1/files') return method === 'GET' || method === 'POST';
+  return (method === 'GET' || method === 'DELETE') && /^\/anthropic\/v1\/files\/[A-Za-z0-9_-]+$/.test(u.pathname);
+ }],
 ]);
 export const MODEL_SERVICES=Object.freeze([...rules.keys()]);
 export const DEFAULT_MODEL_SERVICES=Object.freeze(['openai']);
@@ -27,7 +48,18 @@ export function modelServices(value) {
 /** Services whose requests name their account, so an environment can be held to its own. */
 export const ACCOUNT_SERVICES=Object.freeze(['openai']);
 /** Services whose real credentials can be held and injected by the gateway outside the sandbox. */
-export const CREDENTIAL_SERVICES=Object.freeze(['openai']);
+export const CREDENTIAL_SERVICES=Object.freeze(['openai','anthropic','google','deepseek','github']);
+
+/** Authenticated Git smart HTTP and the official gh API, enabled by a credential selection in this environment. */
+export function githubDestination(u, method) {
+ if (u.protocol !== 'https:' || u.username || u.password || u.port || /%2f|%5c|%2e|\\/i.test(u.pathname)) return false;
+ if (u.hostname === 'api.github.com') return ['GET','HEAD','POST','PATCH','PUT','DELETE'].includes(method);
+ if (u.hostname === 'uploads.github.com') return method === 'POST' && /^\/repos\/[\w.-]+\/[\w.-]+\/releases\/\d+\/assets$/.test(u.pathname);
+ if (u.hostname !== 'github.com') return false;
+ const endpoint = /^\/[\w.-]+\/[\w.-]+\/(info\/refs|git-upload-pack|git-receive-pack)$/.exec(u.pathname)?.[1];
+ if (endpoint === 'info/refs') return method === 'GET' && /^\?service=git-(upload|receive)-pack$/.test(u.search);
+ return Boolean(endpoint) && method === 'POST' && !u.search;
+}
 /** @returns {Record<string,string[]> | undefined} An empty object removes a stored selection. */
 export function modelAccounts(value) {
  if(value===undefined)return undefined;
@@ -86,10 +118,14 @@ export function allowEgress(url, method, services = DEFAULT_MODEL_SERVICES, cred
  const u=new URL(url);
  if(['deb.debian.org','security.debian.org'].includes(u.hostname)&&['http:','https:'].includes(u.protocol)&&!u.username&&!u.password&&!u.port&&!u.search&&['GET','HEAD'].includes(method)&&/^\/(debian|debian-security)\//.test(u.pathname)&&!/%2f|%5c|%2e|\\/i.test(u.pathname))return true;
  if(u.protocol!=='https:'||u.username||u.password||u.port&&u.port!=='443'||/%2f|%5c|%2e|\\/i.test(u.pathname))return false;
+ if(credentials && Object.hasOwn(credentials, 'github') && githubDestination(u, method)) return true;
  // When the gateway holds and refreshes OpenAI credentials itself, the guest has no reason to call auth.openai.com.
  if(credentials&&Object.hasOwn(credentials,'openai')&&u.hostname==='auth.openai.com')return false;
- if(services.some(name=>rules.get(name)?.(u,method)))return true;
+ if(services.some(name=>rules.get(name)?.(u,method,Boolean(credentials&&Object.hasOwn(credentials,name)))))return true;
  // Bootstrap package fetches. Publishing and arbitrary destinations remain denied.
+ if (u.hostname === 'storage.googleapis.com' && ['GET', 'HEAD'].includes(method) && !u.search)
+  return ['/antigravity-public/antigravity-cli/1.5.15-5514532022517760/linux-x64/cli_linux_x64.tar.gz',
+   '/antigravity-public/antigravity-cli/1.5.15-5514532022517760/linux-arm/cli_linux_arm64.tar.gz'].includes(u.pathname);
  if(u.hostname==='registry.npmjs.org')return ['GET','HEAD'].includes(method)&&!u.search;
  return false;
 }

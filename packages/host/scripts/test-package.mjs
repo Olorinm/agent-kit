@@ -161,7 +161,7 @@ await server.close();
 }
 
 // A second protocol uses the very same installed editor and product tool.
-for (const kernel of ["opencode", "kimi"]) {
+for (const kernel of ["opencode", "kimi", "agy", "dsh"]) {
   const directory = join(consumer, `${kernel}-workspace`);
   const command = resolve("test/fixtures/acp-server.mjs");
   let editor = await createEditor({

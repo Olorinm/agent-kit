@@ -31,3 +31,15 @@ test("relay client forwards a command's arguments, falling back to the write too
   const { CODEX_THREAD_ID: _t, CODEX_TOOL_CALL_ID: _c, ...outside } = env;
   await assert.rejects(run(process.execPath, [cli, "gws", "gmail", "+triage"], { env: outside }), (error) => error.code === 2 && /Agent's shell/.test(error.stderr));
 });
+
+test("native session ID is enough and conflicting identities fail closed", async () => {
+  const { relayIdentity, supportsSessionRelay } = await import("@olorinm/agent-host/relay-session");
+  for (const [kernel, name] of Object.entries({ codex: "CODEX_THREAD_ID", claude: "CLAUDE_CODE_SESSION_ID", agy: "ANTIGRAVITY_CONVERSATION_ID",
+    dsh: "DSH_SESSION_ID", opencode: "OPENCODE_SESSION_ID", pi: "PI_DURABLE_CONVERSATION_ID", kimi: "KIMI_CODE_SESSION_ID", hermes: "HERMES_SESSION_ID" })) {
+    assert.equal(supportsSessionRelay(kernel), true);
+    assert.deepEqual(relayIdentity({ [name]: "native-42" }), { kernel, threadId: "native-42" });
+  }
+  assert.equal(supportsSessionRelay("openclaw"), false);
+  assert.equal(relayIdentity({}), undefined);
+  assert.throws(() => relayIdentity({ DSH_SESSION_ID: "a", CLAUDE_CODE_SESSION_ID: "b" }), /ambiguous_shell_session/);
+});

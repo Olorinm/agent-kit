@@ -11,7 +11,7 @@ export const model = {
   contextWindow: 128000,
   maxTokens: 4096,
 };
-export function fixture(observed, toolName = "edit") {
+export function fixture(observed, toolName = "edit", args = { text: "CEDAR" }) {
   return (_, context) => {
     observed.push(context);
     const tool = context.messages.at(-1)?.role === "toolResult";
@@ -25,7 +25,7 @@ export function fixture(observed, toolName = "edit") {
               type: "toolCall",
               id: "edit-1",
               name: toolName,
-              arguments: { text: "CEDAR" },
+              arguments: args,
             },
           ]
         : [

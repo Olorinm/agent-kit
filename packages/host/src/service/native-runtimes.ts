@@ -1,3 +1,5 @@
+import { defineExtension } from "@earendil-works/pi-durable";
+import { createBashTool } from "@earendil-works/pi-durable/tools";
 import type { SessionManager } from "../sessions.js";
 import { validateSettings, type AllowedSettings } from "../settings.js";
 import type { CodexRunRequest } from "../codex/session.js";
@@ -14,6 +16,7 @@ import { CodexNativeBridge, type CodexNativeAccess } from "../codex/native-bridg
 import { AcpAgent, type AcpAgentOptions } from "../acp/session.js";
 import { AcpHostToolBridgeServer } from "../acp/tool-bridge.js";
 import { ClaudeAgent, type ClaudeAgentOptions } from "../claude/session.js";
+import { installedSkillExtension } from "../pi/skills.js";
 import { PiAgent, type PiAgentOptions } from "../pi/session.js";
 import { HermesAgent, type HermesAgentOptions } from "../hermes/session.js";
 import {
@@ -55,7 +58,7 @@ export type NativeRuntimeConfig = BaseConfig &
         runOptions?: Pick<ClaudeRunRequest, "native">;
       }
     | {
-        kernel: "opencode" | "kimi";
+        kernel: "opencode" | "kimi" | "agy" | "dsh";
         options?: Omit<AcpAgentOptions, "command"> & { command?: string };
         effort?: string;
         runOptions?: Pick<
@@ -66,6 +69,8 @@ export type NativeRuntimeConfig = BaseConfig &
     | {
         kernel: "pi";
         options?: PiAgentOptions;
+        shell?: boolean;
+        skillsDirectory?: string;
         toolApproval?: boolean;
         runOptions?: Pick<
           PiRunRequest,
@@ -123,6 +128,8 @@ export function createNativeRuntime(
   if (
     (config.kernel === "opencode" ||
       config.kernel === "kimi" ||
+      config.kernel === "agy" ||
+      config.kernel === "dsh" ||
       (config.kernel === "hermes" && config.transport === "acp")) &&
     config.options
   )
@@ -295,14 +302,17 @@ export function createNativeRuntime(
       break;
     }
     case "opencode":
-    case "kimi": {
+    case "kimi":
+    case "agy":
+    case "dsh": {
       command = config.options?.command ?? config.kernel;
       env = config.options?.env;
+      const compaction = config.kernel === "kimi" || config.kernel === "opencode" ? config.kernel : undefined;
       const agent = new AcpAgent({
         elicitation: { form: {} },
         ...config.options,
         command,
-        compaction: config.kernel,
+        compaction,
         cwd,
         bindings,
       });
@@ -313,7 +323,7 @@ export function createNativeRuntime(
         runOptions: config.runOptions,
         capabilities: () => getKernelCapabilities(config.kernel, "http"),
       }));
-      nativeCompaction = true;
+      nativeCompaction = compaction !== undefined;
       break;
     }
     case "pi": {
@@ -321,12 +331,19 @@ export function createNativeRuntime(
         ...config.options,
         cwd,
         sessionRoot: config.options?.sessionRoot ?? join(root, "native"),
+        shellRuntimeId: config.id,
         bindings,
       });
+      const extensions = [...(config.runOptions?.extensions ?? [])];
+      if (config.shell)
+        extensions.push(defineExtension({name: "agent-host-shell", tools: [createBashTool()]}));
+      if (config.skillsDirectory)
+        extensions.push(installedSkillExtension(resolve(cwd, config.skillsDirectory), !!config.shell));
       run = (request) =>
         agent.run({
           ...config.runOptions,
           ...request,
+          extensions: extensions.length ? extensions : undefined,
           thinkingLevel: (request.settings?.thinkingLevel ??
             config.runOptions?.thinkingLevel) as PiRunRequest["thinkingLevel"],
           onRequest: config.toolApproval ? request.onRequest : undefined,
@@ -548,7 +565,7 @@ export function createNativeRuntime(
                 config.kernel,
               )
             ? "native"
-            : ["opencode", "kimi"].includes(config.kernel)
+            : ["opencode", "kimi", "agy", "dsh"].includes(config.kernel)
               ? "negotiated"
               : "workspace",
     },

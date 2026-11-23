@@ -17,6 +17,70 @@ const worker = compile(await readFile(new URL("../src/index.ts", import.meta.url
   .replace('from "./egress.mjs"', `from "${new URL("../src/egress.mjs", import.meta.url)}"`)
   .replace('from "./credentials.mjs"', `from "${new URL("../src/credentials.mjs", import.meta.url)}"`);
 const { default: gateway, AgentSandbox, AgentEgress, Catalog } = await import(moduleUrl(worker));
+
+test("Git, gh, DSH and Claude use the credential of their respective upstream service", async t => {
+  const entries = new Map();
+  const catalog = new Catalog({ storage: { get: key => entries.get(key), put: (key,value) => entries.set(key,value) },
+    blockConcurrencyWhile: body => body() }, {});
+  const env = { CONTROL_TOKEN: "control", CATALOG: { getByName: () => catalog } };
+  for (const [service, credential] of [
+    ["anthropic", { mode: "api_key", apiKey: "anthropic-fixture" }],
+    ["github", { mode: "token", accessToken: "github-fixture" }], ["deepseek", { mode: "api_key", apiKey: "deepseek-fixture" }],
+  ]) {
+    const result = await gateway.fetch(new Request("https://gateway.test/v1/model-credentials/" + service, {
+      method: "PUT", headers: { "X-Environment-Control": "control" }, body: JSON.stringify({ service, ...credential }),
+    }), env);
+    assert.equal(result.status, 200);
+    assert.equal((await result.text()).includes("-fixture"), false);
+  }
+  const requests = [];
+  t.mock.method(globalThis, "fetch", async (request, options) => {
+    requests.push({ request, options, body: await request.text() });
+    return new Response("ok");
+  });
+  const credentials = { github: "github", deepseek: "deepseek", anthropic: "anthropic" };
+  const dispatch = (url, method, selection = credentials) => Object.assign(new AgentEgress(),
+    { ctx: { props: { modelServices: ["deepseek", "anthropic"], modelCredentials: selection } }, env }).fetch(new Request(url, {
+      method, headers: { Authorization: "Bearer gateway-managed", Cookie: "should-not-travel", "X-Api-Key": "gateway-managed" },
+      ...(method === "POST" ? { body: "test body" } : {}),
+    }));
+  for (const [url, method, expected] of [
+    ["https://github.com/team/project.git/info/refs?service=git-upload-pack", "GET", "Basic " + btoa("x-access-token:github-fixture")],
+    ["https://github.com/team/project/git-receive-pack", "POST", "Basic " + btoa("x-access-token:github-fixture")],
+    ["https://api.github.com/repos/team/project/pulls", "POST", "Bearer github-fixture"],
+    ["https://api.github.com/graphql", "POST", "Bearer github-fixture"],
+    ["https://api.github.com/repos/team/project/actions/caches?key=release", "GET", "Bearer github-fixture"],
+    ["https://uploads.github.com/repos/team/project/releases/52/assets?name=a.tgz", "POST", "Bearer github-fixture"],
+    ["https://api.anthropic.com/v1/messages?beta=true", "POST", "anthropic-fixture"],
+    ["https://api.deepseek.com/models", "GET", "deepseek-fixture"],
+    ["https://api.deepseek.com/anthropic/v1/messages", "POST", "deepseek-fixture"],
+    ["https://api.deepseek.com/anthropic/v1/files/file_1", "DELETE", "deepseek-fixture"],
+  ]) {
+    assert.equal((await dispatch(url, method)).status, 200, url);
+    const { request, options, body } = requests.at(-1);
+    assert.equal(options.redirect, "manual");
+    const github = ["github.com", "api.github.com", "uploads.github.com"].includes(new URL(url).hostname);
+    assert.equal(request.headers.get("authorization"), github ? expected : null);
+    assert.equal(request.headers.get("x-api-key"), github ? null : expected);
+    assert.equal(request.headers.get("cookie"), null);
+    assert.equal(request.url, url);
+    assert.equal(body, method === "POST" ? "test body" : "");
+  }
+  const before = requests.length;
+  for (const [url, method, selection] of [
+    ["https://github.com/team/project/issues", "POST", credentials],
+    ["https://github.com/team/project/info/refs?service=unexpected", "GET", credentials],
+    ["https://api.github.com/repos/team/project", "GET", {}],
+    ["https://api.github.com/repos/team/project", "GET", { github: "deepseek" }],
+    ["https://api.deepseek.com/anthropic/v1/messages", "POST", { deepseek: "github" }],
+    ["https://api.anthropic.com/v1/messages", "POST", { anthropic: "deepseek" }],
+    ["https://api.anthropic.com/v1/files", "POST", credentials],
+    ["https://api.deepseek.com/unrelated", "POST", credentials],
+    ["https://github.io/team/project.git/git-upload-pack", "POST", credentials],
+    ["http://api.github.com/graphql", "POST", credentials],
+  ]) assert.equal((await dispatch(url, method, selection)).status, 403, url);
+  assert.equal(requests.length, before);
+});
 const id = "33333333-3333-4333-8333-333333333333";
 const control = "fixture-operator-control";
 
@@ -38,7 +102,7 @@ function fixture(overrides = {}, running = false) {
     async put(key, value) { records.set(key, structuredClone(value)); }, async setAlarm() {}, async deleteAlarm() {} };
   const ctx = { container, storage, exports: { AgentEgress: options => { egress.push(options); return { policy: "existing-egress" }; } },
     blockConcurrencyWhile: work => work() };
-  const env = { CONTROL_TOKEN: control, DAILY_RUNTIME_MINUTES: "240", CATALOG: { getByName: () => ({ contains: async value => value === id }) } };
+  const env = { CONTROL_TOKEN: control, DAILY_RUNTIME_MINUTES: "240", CATALOG: { getByName: () => ({ contains: async value => value === id, getCredential: async () => null }) } };
   const sandbox = new AgentSandbox(ctx, env);
   env.SANDBOXES = { getByName(value) { assert.equal(value, id); return sandbox; } };
   const request = (body = { fromLatestSnapshot: true }, key = control, action = "recover") => gateway.fetch(
@@ -376,6 +440,95 @@ test("gateway stores OpenAI credentials outside sandboxes, injects live headers,
   assert.equal((await (await f.sandbox.fetch(new Request("https://internal/security"))).json()).modelCredentials, null);
 });
 
+test("the gateway holds a Gemini API key, sends it in place of whatever the guest sent, and refuses a credential of the wrong service", async t => {
+  const storeMap = new Map();
+  const storage = {
+    async get(key) { return structuredClone(storeMap.get(key)); },
+    async put(key, value) { storeMap.set(key, structuredClone(value)); },
+    async delete(key) { return storeMap.delete(key); },
+    async list({ prefix = "" } = {}) { return new Map([...storeMap.entries()].filter(([k]) => k.startsWith(prefix))); },
+  };
+  const catalog = new Catalog({ storage, blockConcurrencyWhile: fn => fn() }, { MAX_ENVIRONMENTS: "3" });
+  const env = { CONTROL_TOKEN: control, CATALOG: { getByName: () => catalog } };
+  const put = (id, body) => gateway.fetch(new Request("https://gateway.test/v1/model-credentials/" + id, {
+    method: "PUT", headers: { "X-Environment-Control": control }, body: JSON.stringify(body) }), env);
+  const stored = await put("gemini-main", { service: "google", mode: "api_key", apiKey: "AIza-owner-key" });
+  assert.equal(stored.status, 200);
+  assert.deepEqual({ ...await stored.json(), updatedAt: "" }, { id: "gemini-main", service: "google", mode: "api_key", renewable: false, updatedAt: "" });
+  assert.equal((await put("gemini-bad", { service: "google", mode: "chatgpt", accessToken: "x" })).status, 400);
+  assert.equal((await put("openai-key", { service: "openai", mode: "api_key", apiKey: "sk-owner-key" })).status, 200);
+  const listed = await (await gateway.fetch(new Request("https://gateway.test/v1/model-credentials", { headers: { "X-Environment-Control": control } }), env)).text();
+  assert.ok(listed.includes("gemini-main") && !listed.includes("AIza-owner-key") && !listed.includes("sk-owner-key"));
+
+  const upstream = [];
+  t.mock.method(globalThis, "fetch", async (input, init) => {
+    const req = input instanceof Request ? input : new Request(input, init);
+    upstream.push({ url: req.url, method: req.method, key: req.headers.get("x-goog-api-key"), auth: req.headers.get("authorization"), body: await req.text() });
+    return new Response("upstream");
+  });
+  const egress = selection => Object.assign(new AgentEgress(), { ctx: { props: { modelServices: ["openai", "google"], modelCredentials: selection } }, env });
+  const api = "https://generativelanguage.googleapis.com", turn = api + "/v1beta/models/gemini-fixture:streamGenerateContent?alt=sse";
+  const held = egress({ google: "gemini-main" });
+  // What agy sends from a managed guest, then each credential a guest could try to send instead.
+  for (const [url, headers] of [
+    [turn, { "X-Goog-Api-Key": "gateway-managed" }],
+    [turn, { "X-Goog-Api-Key": "AIza-someone-else" }],
+    [turn, { Authorization: "Bearer ya29.someone-else" }],
+    [turn + "&key=AIza-someone-else", {}],
+    [turn + "&key=AIza-someone-else", { "X-Goog-Api-Key": "AIza-someone-else", Authorization: "Bearer ya29.someone-else" }],
+  ]) {
+    upstream.length = 0;
+    const response = await held.fetch(new Request(url, { method: "POST", headers, body: "owner data" }));
+    assert.equal(await response.text(), "upstream");
+    assert.deepEqual(upstream, [{ url: turn, method: "POST", key: "AIza-owner-key", auth: null, body: "owner data" }]);
+  }
+  // The rest of the API is open to a held key and leaves under it as well.
+  upstream.length = 0;
+  await held.fetch(new Request(api + "/upload/v1beta/files?key=AIza-someone-else&uploadType=multipart", { method: "POST", body: "file" }));
+  await held.fetch(new Request(api + "/v1beta/models", { headers: { "X-Goog-Api-Key": "AIza-someone-else" } }));
+  assert.deepEqual(upstream, [
+    { url: api + "/upload/v1beta/files?uploadType=multipart", method: "POST", key: "AIza-owner-key", auth: null, body: "file" },
+    { url: api + "/v1beta/models", method: "GET", key: "AIza-owner-key", auth: null, body: "" },
+  ]);
+
+  // Refused before anything is sent: a credential that is missing, and one that belongs to the other service.
+  const refused = async (selection, url, headers, error) => {
+    upstream.length = 0;
+    const response = await egress(selection).fetch(new Request(url, { method: "POST", headers, body: "owner data" }));
+    assert.equal(response.status, 403); assert.deepEqual(await response.json(), { error }); assert.deepEqual(upstream, []);
+  };
+  await refused({ google: "gemini-absent" }, turn, { "X-Goog-Api-Key": "AIza-someone-else" }, "model_credential_missing");
+  await refused({ google: "openai-key" }, turn, { "X-Goog-Api-Key": "AIza-someone-else" }, "model_credential_service_mismatch");
+  await refused({ openai: "gemini-main" }, "https://api.openai.com/v1/responses", { Authorization: "Bearer sk-placeholder" }, "model_credential_service_mismatch");
+  await refused({ openai: "gemini-main" }, "https://chatgpt.com/backend-api/codex/responses", { Authorization: "Bearer placeholder" }, "model_credential_service_mismatch");
+  assert.deepEqual(await catalog.resolveOpenAiCredential("gemini-main"), { service: "google", mode: "api_key", renewable: false });
+  assert.deepEqual(await catalog.resolveServiceCredential("openai-key", "google"), { service: "openai", mode: "api_key", renewable: false });
+  // Without a held Google key the guest's own key passes on the one admitted request, and nothing else is open.
+  upstream.length = 0;
+  await egress({ openai: "openai-key" }).fetch(new Request(turn, { method: "POST", headers: { "X-Goog-Api-Key": "AIza-guest-own" }, body: "b" }));
+  assert.deepEqual(upstream, [{ url: turn, method: "POST", key: "AIza-guest-own", auth: null, body: "b" }]);
+  await refused({ openai: "openai-key" }, api + "/upload/v1beta/files", { "X-Goog-Api-Key": "AIza-guest-own" }, "destination_not_allowed");
+
+  // An environment is not created or resumed with an ID of the wrong service; the right ones are stored and shown.
+  const create = body => gateway.fetch(new Request("https://gateway.test/v1/environments", {
+    method: "POST", headers: { "X-Environment-Control": control }, body: JSON.stringify({ template: "node24", ...body }) }), env);
+  for (const selection of [{ google: "openai-key" }, { openai: "gemini-main" }, { openai: "openai-key", google: "openai-key" }]) {
+    const response = await create({ modelCredentials: selection });
+    assert.equal(response.status, 400); assert.deepEqual(await response.json(), { error: "model_credential_service_mismatch" });
+  }
+  assert.deepEqual(await catalog.ids(), []);
+  const f = fixture({ status: "paused" });
+  f.sandbox.env.CATALOG.getByName = () => catalog;
+  storeMap.set("id:" + f.record.id, {});
+  const wrong = await f.request({ timeoutSeconds: 600, modelCredentials: { google: "openai-key" } }, control, "resume");
+  assert.equal(wrong.status, 400); assert.deepEqual(await wrong.json(), { error: "model_credential_service_mismatch" });
+  assert.equal(f.records.get("record").modelCredentials, undefined); assert.equal(f.starts.length, 0);
+  const selection = { openai: "openai-key", google: "gemini-main" };
+  assert.equal((await f.request({ timeoutSeconds: 600, modelServices: ["openai", "google"], modelCredentials: selection }, control, "resume")).status, 200);
+  assert.deepEqual(f.egress[0], { props: { modelServices: ["openai", "google"], modelCredentials: selection } });
+  assert.deepEqual((await (await f.sandbox.fetch(new Request("https://internal/security"))).json()).modelCredentials, selection);
+});
+
 test("a running guest must pause to change its credential binding; a restore scrubs before the entrypoint opens", async () => {
   const running = fixture({}, true);
   const selection = { modelCredentials: { openai: "managed" }, codexAuthUsers: ["user"] };
@@ -385,7 +538,7 @@ test("a running guest must pause to change its credential binding; a restore scr
   assert.equal(running.records.get("record").modelCredentials, undefined);
   const paused = fixture({ status: "paused" });
   paused.sandbox.env.CATALOG.getByName = () => ({ contains: async () => true,
-    getCredential: async () => ({ mode: "chatgpt", accountId: "owner", accessToken: "must-never-be-in-guest" }) });
+    getCredential: async () => ({ service: "openai", mode: "chatgpt", accountId: "owner", accessToken: "must-never-be-in-guest" }) });
   assert.equal((await paused.request(selection, control, "resume")).status, 200);
   const scrub = paused.commands.findIndex(cmd => cmd.includes("user") && cmd[1] === "-e");
   const release = paused.commands.findIndex(cmd => cmd.some(arg => arg.includes("touch /run/mau-network-ready-")));

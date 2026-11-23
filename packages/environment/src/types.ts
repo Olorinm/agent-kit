@@ -8,11 +8,13 @@ export interface EnvironmentInfo extends EnvironmentRef {
 }
 export type ModelCredentialInput =
   | { service: "openai"; mode: "chatgpt"; accessToken: string; refreshToken?: string; accountId?: string; clientId?: string }
-  | { service: "openai"; mode: "api_key"; apiKey: string };
+  | { service: "openai"; mode: "api_key"; apiKey: string }
+  | { service: "google" | "deepseek" | "anthropic"; mode: "api_key"; apiKey: string }
+  | { service: "github"; mode: "token"; accessToken: string };
 export interface ModelCredentialInfo {
   id: string;
-  service: "openai";
-  mode: "chatgpt" | "api_key";
+  service: ModelCredentialInput["service"];
+  mode: ModelCredentialInput["mode"];
   accountId?: string;
   expiresAt?: string;
   renewable: boolean;
@@ -29,7 +31,10 @@ export interface CreateEnvironment {
   modelServices?: string[];
   /** Per model service, the accounts the environment's requests must belong to, e.g. `{ openai: ["<account id>"] }`. */
   modelAccounts?: Record<string, string[]>;
-  /** Per model service, the gateway-held credential ID injected on outbound requests, e.g. `{ openai: "codex-main" }`. */
+  /**
+   * Per service, the gateway-held credential ID injected on outbound requests, e.g.
+   * `{ openai: "codex-main", google: "gemini-main" }`. An ID of another service's credential is refused.
+   */
   modelCredentials?: Record<string, string>;
   /** Guest login names whose Codex configuration must be sanitized before restoring a snapshot. */
   codexAuthUsers?: string[];

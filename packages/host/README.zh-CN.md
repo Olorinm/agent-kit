@@ -4,7 +4,7 @@
 
 Agent Host 是面向各类产品和个人使用场景的开源 Agent 接入层。产品提供自己的上下文、工具和用户交互，Agent Host 负责连接原生 Agent，返回执行过程和结果。
 
-**七个内核，两种接入方式：**支持 Codex、Claude Agent、Pi、OpenCode、Kimi Code、Hermes 和 OpenClaw。可以嵌入产品后台，也可以作为独立 HTTP 服务运行，两种方式共用同一套内核适配。
+**九个内核，两种接入方式：**支持 Codex、Claude Agent、Pi、OpenCode、Kimi Code、Antigravity、DeepSeek Harness、Hermes 和 OpenClaw。可以嵌入产品后台，也可以作为独立 HTTP 服务运行，两种方式共用同一套内核适配。
 
 **当前为 alpha 版本。** 可直接安装 [GitHub Release 包](https://github.com/Olorinm/agent-kit/releases)，不必克隆源码；尚未发布到 npm。实际验证版本与能力范围见[内核支持清单](docs/kernel-support.md)。
 
@@ -49,7 +49,7 @@ HTTP 服务保留附件的实际字节、内核支持的原生图片输入与图
 - [终端文件编辑器](examples/file-editor)：批准或拒绝修改、保存文档、取消执行，以及重启后继续原生会话。
 - [浏览器文件编辑器](examples/http-editor/README.md)：作为独立产品连接 HTTP 服务，通过自己的界面处理文件修改。
 
-示例使用同一套公开接口。安装包测试会在仓库外安装构建包，并覆盖七个内核适配。自动化模拟测试与真实模型测试的范围分别记录在[内核支持清单](docs/kernel-support.md)中。
+示例使用同一套公开接口。安装包测试会在仓库外安装构建包，并覆盖各内核适配。自动化模拟测试与真实模型测试的范围分别记录在[内核支持清单](docs/kernel-support.md)中。
 
 ## 设计和范围
 

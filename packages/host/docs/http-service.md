@@ -2,7 +2,7 @@
 
 ## Codex native management and extensions
 
-The Codex 0.165.0 integration (current pin 0.166.0) adds native metadata, paginated turns/items,
+The Codex 0.165.0 integration (current pin 0.171.0) adds native metadata, paginated turns/items,
 rename, archive/unarchive and explicit adoption through `/v1/native-sessions`.
 Read operations can inspect a running thread without resuming it. A fork accepts
 either `entryId` (inclusive last native turn) or `beforeEntryId` (exclusive).
@@ -137,9 +137,16 @@ HTTP callers select a configured `runtimeId`. They cannot supply executables, en
 | `codex`            | Optional `command`, `args`, `env`, `model`, native `thread` and `turn` options. Defaults to `codex` and a read-only native sandbox.                                                                      |
 | `claude`           | Optional `command`, `env`, `model`, SDK `native` settings; otherwise uses the bundled Claude SDK engine and native authentication.                                                                                              |
 | `opencode`, `kimi` | Optional `command`, `args`, `env`, `model`, `effort`, `config`; native ACP startup and login.                                                                                                                      |
-| `pi`               | Required `model` in `provider/model` form, using Pi's built-in model catalog and native provider environment. Optional `thinkingLevel` and `toolApproval`. Its durable storage lives under service state.                                             |
+| `agy`              | Optional `command` (default `agy`), `args` (default `["acp"]`), `env`, `model`, `effort`, `config`; `config.mode` selects the native permission mode. Native Antigravity sign-in. See [kernel support](kernel-support.md#upgrade-boundaries). |
+| `dsh` | Optional `command` (default `dsh`), `args` (default `["acp"]`), `env`, `model`, `effort`, `config`. The official DeepSeek model provider reads `DEEPSEEK_API_KEY`. |
+| `pi`               | Required `model` in `provider/model` form, using Pi's built-in model catalog and native provider environment. Optional `thinkingLevel`, `toolApproval`, `shell` and `skillsDirectory`. Its durable storage lives under service state.                                             |
 | `hermes`           | Required Gateway `command`, with `args`, optional `env`, `model`, `provider`, `effort`. Configure/authenticate the profile's persistent `HERMES_HOME`; the profile is exclusively owned by this service. |
 | `openclaw`         | Required `gatewayUrl`, optional `gatewayTokenEnv` naming a server environment variable, optional `model`. Product tools require the existing [Gateway plugin](api.md#openclaw-product-tools).            |
+
+A Pi profile can enable the official native Bash tool, for example
+`{"id":"pi-worker","kernel":"pi","cwd":"/home/user/workspace","shell":true,"skillsDirectory":"/home/user/.agents/skills"}`.
+Its child shell receives the runtime ID and durable conversation ID in
+`PI_DURABLE_CONVERSATION_ID`. Set a Pi model on the profile or per run. The opt-in skills directory contains one subdirectory per installed skill. Pi includes each visible skill’s name, description and absolute file path in its prompt. Bash can read the full instructions on demand. The runtime caches its index, and resumed conversations retain their original index.
 
 `GET /v1/runtimes` and `POST /v1/runtimes/inspect` expose profile availability and implemented controls. Inspection checks the configured directory/executable and required model selection. It does not prove login, model access or native execution, and does not scan or install every Agent on the machine. Native request-time failures remain visible in the task outcome.
 
@@ -266,7 +273,7 @@ Every operation requires `Authorization: Bearer <token>` and JSON bodies for POS
 | `GET /v1/sessions/:id/files?list=true&path=...` | List one directory, when enabled.                                                                                              |
 | `POST /v1/sessions/:id/files`                   | Write `{ path, content, encoding?: "utf8" | "base64", expectedRevision? }`, when enabled.                                                                    |
 
-`session.compact()` submits `mode: 'compact'` through the same task machinery for all seven Kernels. It uses the native binding, including Hermes continuation after restart. OpenCode/Kimi reject custom reasons and use their native summarize/compact operation; OpenClaw's compact API also has no reason parameter. OpenCode 2 uses its ACP operation and completion receipt. Hermes canonical ACP has no confirmed compact/delete/steer path. Acknowledgement alone is not completion. Pi may return a confirmed native no-op. Native uncertainty remains explicit. HTTP steering is implemented for Codex, Claude, Pi, Hermes TUI and OpenClaw; OpenClaw preserves native interrupt-and-replace semantics. Unsupported controls fail explicitly. See [controls](common-api.md#controls).
+`session.compact()` submits `mode: 'compact'` through the same task machinery for every Kernel with a native compaction path (all but Antigravity, which answers `compaction_unsupported`). It uses the native binding, including Hermes continuation after restart. OpenCode/Kimi reject custom reasons and use their native summarize/compact operation; OpenClaw's compact API also has no reason parameter. OpenCode 2 uses its ACP operation and completion receipt. Hermes canonical ACP has no confirmed compact/delete/steer path. Acknowledgement alone is not completion. Pi may return a confirmed native no-op. Native uncertainty remains explicit. HTTP steering is implemented for Codex, Claude, Pi, Hermes TUI and OpenClaw; OpenClaw preserves native interrupt-and-replace semantics. Unsupported controls fail explicitly. See [controls](common-api.md#controls).
 
 Workspace file access is opt-in via `workspaceFiles: true`. Paths stay under the selected profile's workspace; symlinks are rejected. `expectedRevision: null` requires a new file; a prior revision prevents overwriting a change already observed by this process. This is an optimistic check, not a transaction with unrelated filesystem writers or an OS sandbox for native tools. The client exposes `readFile`, `writeFile`, `readBinaryFile`, `writeBinaryFile`, and `listFiles`. Text files are limited to 1 MB; binary files to 30 MiB. Binary content is canonical base64 and revisions hash the decoded bytes.
 
@@ -274,15 +281,8 @@ Workspace file access is opt-in via `workspaceFiles: true`. Paths stay under the
 
 - Disconnecting HTTP or aborting `task.wait()` stops observation, not the native task. Call `task.cancel()` to request cancellation.
 - Reattach with `host.task(runId, productTools).wait(...)`. The SDK polls at 250 ms by default and reports network errors to the caller. It does not automatically resubmit a task after a failed request.
-- `POST /v1/relay` lets a connector CLI started from the Agent's own shell reach the run's product tools. Codex exports
-  `CODEX_THREAD_ID` and `CODEX_TOOL_CALL_ID` to each command; the request `{threadId, callId, tool, input}` is
-  accepted only while that exact commandExecution item is running in an active run, and only for a tool the run
-  already has. It needs no owner token and runs through the same CallBroker as a model-issued call, so admission,
-  grants and owner approvals apply unchanged; the call is recorded as `tool.started`/`tool.finished` events.
-  `agent-host-relay` (installed in the sandbox under a CLI's name, e.g. `gws`, `lark-cli`) is the client: it finds the
-  connector's `<connection>__<prefix>_read`/`_write` tools through `connected_apps`, tries the read tool, and uses
-  the write tool when the connector reports `*_command_requires_write_tool`. Set `AGENT_HOST_RELAY_URL` when the
-  Host does not listen on `http://127.0.0.1:37420`.
+- `POST /v1/relay` connects a terminal command to a product tool offered by the running session. By default Codex supplies a running command receipt in `{threadId, callId, tool, input}`. Hosts can enable session-based routing for specific tools with `"sessionRelayTools": ["connected_apps"]`. For those tools a loopback client supplies `{kernel, threadId, tool, input}`. The Host requires a unique active binding registered by the corresponding runtime. It refuses unknown sessions, ambiguity and unoffered tools. The existing broker delivers approvals and records the call and result. Configure this mode only on a trusted shared guest where local processes may act on one another's behalf. Keep the relay endpoint inaccessible through public preview proxies.
+- `agent-host-relay` supplies the identity for `gws` and `lark-cli`. Shells on Codex, Claude, AGY, DSH, OpenCode, Kimi and Hermes expose their native session IDs. Pi with its native Bash tool enabled scopes the numeric conversation ID to its runtime. Applications implementing another CLI can use the package export `@olorinm/agent-host/relay-session` to produce the same identity. The default relay address is `http://127.0.0.1:37420`; override it with `AGENT_HOST_RELAY_URL`. Commands first try the connector's read operation and retry on its write operation only when the connector returns a command classification error.
 - Progress keeps completed native items, tool events and outcomes for the whole run (safety cap `durableEventLimit`, default 50,000). Codex streaming fragments (`item/*/delta`, `item/*/outputDelta` and their `assistant.delta`/`reasoning.delta` projections, marked `transient: true`) are live-only, as in Codex rollouts: the latest `eventLimit` (default 2,000) stay readable while the run is active, and all are dropped when it finishes because each item's `item/completed` carries the full text/output.
 - Event pages report `historyTruncated` only when durable events before the cursor were lost; this requires explicit acknowledgement through `onHistoryGap`. `liveGap` means superseded fragments before the cursor are gone; rebuild from completed items or the stored final answer.
 - Product-tool call deadlines default to 120 seconds (`timeoutMs` of a tool). Native approvals and questions wait for `interactionTimeoutMs` of `host.json` (default `120000`, at most `86400000`). Cancellation/deadline aborts pending handlers and rejects late replies. It cannot undo an effect already committed by a product.
@@ -304,6 +304,7 @@ Custom runtimes must explicitly enable attachment delivery through `inputs.attac
 | Claude | Native SDK image blocks (PNG/JPEG/GIF/WebP) | Native PDF document blocks; other files keep workspace paths |
 | Pi 1.2 | Native image content | Workspace file paths |
 | OpenCode / Kimi ACP | Image blocks, subject to negotiated capability | Negotiated audio and embedded text resources; OpenCode also accepts embedded blobs, while Kimi 2.2 explicitly rejects them. Original files remain in the workspace |
+| Antigravity ACP | Image blocks, subject to negotiated capability | Negotiated embedded resources; no audio prompt capability in 1.5.15 |
 | Hermes TUI | Native `image.attach_bytes` | Native `pdf.attach` and `file.attach`, plus workspace files |
 | Hermes canonical ACP | Negotiated native image blocks | Workspace file paths; no audio/embedded-resource prompt capability |
 | OpenClaw | Native Gateway attachment payload | Workspace file paths and Gateway payload |
@@ -321,7 +322,7 @@ npm run test:package
 AGENT_HOST_HTTP_NATIVE=1 npm run test:package
 ```
 
-Tests distinguish deterministic Agent/provider fixtures from native model-backed probes. The HTTP fixture matrix covers all seven existing adapters, approve/reject and native binding continuation across Host restart. Additional tests cover native interaction response shapes, observation disconnects, deadlines, duplicate results, authentication, file revisions and hard-process-crash recovery. The package test installs the archive in an independent consumer, starts its CLI and exercises the copied product example. Existing embedded consumer tests remain required.
+Tests distinguish deterministic Agent/provider fixtures from native model-backed probes. The HTTP fixture matrix covers all nine existing adapters, approve/reject and native binding continuation across Host restart. Additional tests cover native interaction response shapes, observation disconnects, deadlines, duplicate results, authentication, file revisions and hard-process-crash recovery. The package test installs the archive in an independent consumer, starts its CLI and exercises the copied product example. Existing embedded consumer tests remain required.
 
 Products own their domain models, workflows, knowledge management, accounts and application distribution. These are not runtime dependencies of the service. Skills and MCP integrations remain native capabilities; the opt-in native extension carries their original administration protocol while the product retains authorization and distribution policy.
 

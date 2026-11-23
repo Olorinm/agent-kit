@@ -50,8 +50,12 @@ agent-browser snapshot -i                # refs change when the page changes; ta
 - Files: `screenshot`, `pdf` and `download` save into `browser_downloads/` in your working directory and print
   the saved path. `download <element> <name>` clicks the element and captures what it downloads: a link (also on
   another site), a form that posts a download, or a file a script generates.
-- Local and private addresses (`localhost`, `10.x`, `192.168.x`, metadata endpoints) and non-http(s) URLs are
-  refused, also when a click, a new tab or a redirect leads there (the page shows "blocked").
+- The owner's browser does not reach local and private addresses (`10.x`, `192.168.x`, metadata endpoints) or
+  non-http(s) URLs: they are refused, also when a click, a new tab or a redirect leads there (the page shows
+  "blocked").
+- A page your own environment serves is the exception when you run `agent-browser` in your shell there:
+  `agent-browser open http://localhost:3000` opens it in a browser inside the environment, and `snapshot`, `click`
+  and the rest follow as usual until you open another site.
 - `close` disconnects and keeps the sign-ins; the next command reconnects.
 
 ## When the owner must take over

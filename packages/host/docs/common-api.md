@@ -50,7 +50,7 @@ try {
 } finally { await agent.close(); }
 ```
 
-For HTTP, pass the same `onInteraction` to `task.wait({onInteraction})`. No seven-way constructor or response-format switch is needed for ordinary interactions. The terminal CLI and browser editor both use these helpers.
+For HTTP, pass the same `onInteraction` to `task.wait({onInteraction})`. No per-Kernel constructor or response-format switch is needed for ordinary interactions. The terminal CLI and browser editor both use these helpers.
 
 | Request kind | Product reply | Preserved detail |
 | --- | --- | --- |
@@ -118,6 +118,6 @@ Trusted programmatic `runOptions` retain Codex thread/turn/beforeTurn; Claude SD
 
 HTTP `task.steer(text)` is wired for Codex, Claude, Pi, Hermes TUI and OpenClaw. Hermes canonical ACP has no equivalent advertised control. Native scheduling still applies: acceptance does not mean the current tool stops immediately. OpenClaw uses native `chat.send` with `queueMode: "interrupt"`, which interrupts and replaces the native run; Host follows the returned run ID and buffers early events. No Host transcript replay is involved.
 
-`client.session(...).compact()` is wired for all seven Kernels through their supported transport; Hermes canonical ACP lacks a verifiable completion receipt and reports unsupported. Native completion is required: Codex correlated events, Claude `compact_boundary`, Pi settled durable task/submission, OpenCode 2 ACP compaction receipt, Kimi completion receipt, Hermes compressed result, OpenClaw compacted result. Pi can explicitly finish with nothing to compact; the `control.result` reports `compacted:false` and the operation completes successfully. Kimi completion remains valid if the summary happens to grow. Missing receipts and uncertain cancellations remain failures with native uncertainty, not false success.
+`client.session(...).compact()` is wired for every Kernel except Antigravity through their supported transport; Hermes canonical ACP and Antigravity lack a verifiable completion receipt and report unsupported. Native completion is required: Codex correlated events, Claude `compact_boundary`, Pi settled durable task/submission, OpenCode 2 ACP compaction receipt, Kimi completion receipt, Hermes compressed result, OpenClaw compacted result. Pi can explicitly finish with nothing to compact; the `control.result` reports `compacted:false` and the operation completes successfully. Kimi completion remains valid if the summary happens to grow. Missing receipts and uncertain cancellations remain failures with native uncertainty, not false success.
 
 See [kernel support](kernel-support.md) for tested versions, what the tests establish and upgrade boundaries.

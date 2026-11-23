@@ -4,7 +4,7 @@
 
 Agent Host is an open-source integration layer that makes native coding Agents easier to use in any product or personal workflow. Products supply context, tools and interaction handlers; Agent Host connects to the selected Agent and returns progress and results.
 
-**Seven native integrations, two deployment modes:** Codex, Claude Agent, Pi, OpenCode, Kimi Code, Hermes and OpenClaw. Embed the package in your backend or run a standalone HTTP service. Both modes use the same adapters.
+**Nine native integrations, two deployment modes:** Codex, Claude Agent, Pi, OpenCode, Kimi Code, Antigravity, DeepSeek Harness, Hermes and OpenClaw. Embed the package in your backend or run a standalone HTTP service. Both modes use the same adapters.
 
 **Status: alpha.** Install the tested archive from [GitHub Releases](https://github.com/Olorinm/agent-kit/releases); no source checkout is needed. It is not yet published to npm. See the [tested versions and verification limits](docs/kernel-support.md).
 
@@ -49,7 +49,7 @@ See [capability discovery](docs/capabilities.md) to distinguish implemented oper
 - [Terminal file editor](examples/file-editor): approve or reject an edit, save a document, cancel work and continue the native conversation after restarting the product.
 - [Browser file editor](examples/http-editor/README.md): connect a separate product to the HTTP service and handle edits through its own UI.
 
-The examples consume the public package API. Archive tests install the package outside this repository and exercise all seven adapters. Deterministic tests and live model-backed probes are documented separately in the [support matrix](docs/kernel-support.md).
+The examples consume the public package API. Archive tests install the package outside this repository and exercise the adapters. Deterministic tests and live model-backed probes are documented separately in the [support matrix](docs/kernel-support.md).
 
 ## Design and scope
 

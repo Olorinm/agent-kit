@@ -8,7 +8,7 @@ try{
   const result=JSON.parse(execFileSync('npm',['pack','--json','--pack-destination',temp],{cwd:root,encoding:'utf8'}));
   const files=result[0].files.map(f=>f.path);
   for(const file of files)assert.ok(!/^(state|src|test|node_modules)\//.test(file),file);
-  for(const file of ['dist/index.js','dist/cli.js','README.md','README.zh-CN.md','LICENSE'])assert.ok(files.includes(file),file);
+  for(const file of ['dist/index.js','dist/cli.js','README.md','README.zh-CN.md','LICENSE','cloudflare/examples/official-skills.tgz','cloudflare/examples/start-host.sh'])assert.ok(files.includes(file),file);
   await writeFile(join(temp,'package.json'),JSON.stringify({private:true,type:'module'}));
   execFileSync('npm',['install','--ignore-scripts','--no-audit','--no-fund','typescript@5.9.3','@types/node@24.10.1',join(temp,result[0].filename)],{cwd:temp,stdio:'pipe'});
   execFileSync(process.execPath,['--input-type=module','-e',`import {EnvironmentManager,createCloudflareProvider,loadConfiguration} from '@olorinm/agent-environment';if(typeof EnvironmentManager!=='function'||typeof createCloudflareProvider!=='function'||typeof loadConfiguration!=='function')process.exit(1);`],{cwd:temp,stdio:'pipe'});

@@ -4,11 +4,12 @@
  * Installed in the sandbox under the CLI's own name. Credentials and approvals stay with the
  * product: this client only forwards the arguments of the shell command that invoked it.
  */
+import { relayIdentity } from "./relay-session.js";
 import { basename } from "node:path";
 
 // The connector exposes `<connection>__<prefix>_read` and `<connection>__<prefix>_write`.
 const prefixes: Record<string, string> = { gws: "gws", "lark-cli": "cli" };
-const writeRequired = /_command_requires_write_tool\b/;
+
 
 type Json = null | boolean | number | string | Json[] | { [key: string]: Json };
 const fail = (message: string, code = 2): never => {
@@ -19,10 +20,11 @@ const fail = (message: string, code = 2): never => {
 async function relay(url: string, tool: string, input: Json): Promise<unknown> {
   const response = await fetch(new URL("/v1/relay", url), {
     method: "POST", headers: { "content-type": "application/json" },
-    body: JSON.stringify({ threadId: process.env.CODEX_THREAD_ID, callId: process.env.CODEX_TOOL_CALL_ID, tool, input }),
+    body: JSON.stringify({ ...relayIdentity(process.env), tool, input }),
   });
   const body = await response.json().catch(() => ({})) as { result?: { success?: boolean; contentItems?: Array<{ text?: string }> }; error?: string };
   if (!response.ok) fail(`relay refused: ${body.error ?? response.status}`);
+  if (!body.result?.success) fail(body.result?.contentItems?.map(item => item.text).join(" ") || "connector call failed", 1);
   const text = body.result?.contentItems?.map((item) => item.text ?? "").join("") ?? "";
   try { return JSON.parse(text); } catch { return text; }
 }
@@ -48,7 +50,7 @@ async function main() {
   const command = prefixes[invoked] ? invoked : argv.shift() ?? "";
   const prefix = prefixes[command];
   if (!prefix) fail(`usage: agent-host-relay <${Object.keys(prefixes).join("|")}> [args...]`);
-  if (!process.env.CODEX_THREAD_ID || !process.env.CODEX_TOOL_CALL_ID)
+  if (!relayIdentity(process.env))
     fail(`${command} runs through the product's connector; call it from the Agent's shell.`);
   const url = process.env.AGENT_HOST_RELAY_URL ?? "http://127.0.0.1:37420";
   const catalog = JSON.stringify(await relay(url, "connected_apps", { action: "tools" }));
@@ -58,7 +60,8 @@ async function main() {
   const call = (mode: "read" | "write") => relay(url, "connected_apps", { action: "call", name: `${names[0]}_${mode}`, arguments: { args: argv } });
   let outcome = await call("read");
   // A command the connector classifies as a write is retried on the write tool, which asks the owner.
-  if (writeRequired.test(JSON.stringify(outcome))) outcome = await call("write");
+  if (typeof outcome === "object" && outcome && "status" in outcome && outcome.status === "failed" &&
+      "error" in outcome && typeof outcome.error === "string" && outcome.error.endsWith("_command_requires_write_tool")) outcome = await call("write");
   process.exitCode = print(outcome);
 }
 

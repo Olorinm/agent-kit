@@ -13,7 +13,6 @@ import {
   type Model,
   type Models,
   type ModelThinkingLevel,
-  type TSchema,
   type AssistantMessage,
   type Context as ModelContext,
 } from "@earendil-works/pi-ai";
@@ -23,7 +22,6 @@ import {
   MemoryStorage,
   createRegistry,
   defineExtension,
-  watchEvents,
   ToolTask,
   GenerationTask,
   hook,
@@ -34,11 +32,11 @@ import {
   type Extension,
   type HarnessSettings,
   type Storage,
-  type AgentEvent as PiEvent,
   type ToolHookCall,
   type ToolHooks,
   type NestedToolExecutionResult,
 } from "@earendil-works/pi-durable";
+import { observeEvents, type AgentEvent as PiEvent } from "./events.js";
 import { openNodeJsonlStorage } from "@earendil-works/pi-durable/storage/jsonl/node";
 import { NodeExecutionEnv } from "@earendil-works/pi-durable/env/node";
 import {
@@ -54,9 +52,17 @@ import { FileBindingStore } from "../file-bindings.js";
 import { AsyncEventQueue } from "../async-event-queue.js";
 import type { JsonValue } from "../types.js";
 
+function piToolSchema(schema: JsonValue): object {
+  if (!schema || typeof schema !== "object" || Array.isArray(schema))
+    throw new Error("pi_tool_schema_must_be_an_object");
+  return schema;
+}
+
 export interface PiAgentOptions {
   cwd?: string;
   sessionRoot?: string;
+  /** Runtime owning the durable store; conversation IDs are local to that store. */
+  shellRuntimeId?: string;
   models?: Models;
   model?: Model<Api> | ((id?: string) => Model<Api>);
   streamFn?: Models["streamSimple"];
@@ -233,6 +239,11 @@ export class PiAgent {
             ((target) =>
               new NodeExecutionEnv({
                 cwd: target.cwd ?? this.options.cwd ?? process.cwd(),
+                shellEnv: {
+                  PI_DURABLE_CONVERSATION_ID: this.options.shellRuntimeId
+                    ? `${this.options.shellRuntimeId}:${target.conversationId}`
+                    : String(target.conversationId),
+                },
               })),
         },
         background,
@@ -394,7 +405,8 @@ export class PiAgent {
     let nativeError = "";
     let registered = false;
     let started = false;
-    let stream: Awaited<ReturnType<typeof watchEvents>> | undefined;
+    let detach: (() => Promise<void>) | undefined;
+    let nativeListener = request.onNativeEvent;
     let cleanupAbort: (() => void) | undefined;
     let abortTask: Promise<void> | undefined;
     let abortError: unknown;
@@ -463,7 +475,7 @@ export class PiAgent {
         tools: (request.tools ?? []).map((tool) => ({
           name: tool.name,
           description: tool.description,
-          parameters: tool.inputSchema as unknown as TSchema,
+          parameters: piToolSchema(tool.inputSchema),
           ...(tool.deferLoading ? { deferred: true as const } : {}),
           replay: "unsafe" as const,
           execute: async (input, api, nativeContext) => {
@@ -578,10 +590,14 @@ export class PiAgent {
           }),
         controller.signal,
       );
-      stream = await watchEvents(harness, conversation.id, background);
-      stream.start(async (events) => {
+      detach = await observeEvents(harness, conversation.id, background, (events) => {
         for (const event of events) {
-          request.onNativeEvent?.(event);
+          try {
+            nativeListener?.(event);
+          } catch {
+            // As with a native Pi observer, a listener that throws is detached.
+            nativeListener = undefined;
+          }
           queue.push({
             type: "native.notification",
             runId,
@@ -693,6 +709,8 @@ export class PiAgent {
       const receipt = await submission.wait(
         withAbortSignal(waitController.signal, background),
       );
+      await detach();
+      detach = undefined;
       if (receipt.status === "done" && receipt.type === "input") {
         const answer = await conversation.commit(
           (tx) => tx.entry(AssistantEntry, receipt.answer),
@@ -725,7 +743,7 @@ export class PiAgent {
       if (timer) clearTimeout(timer);
       if (waitController.signal.aborted) this.retired = true;
       if (abortTask && !waitController.signal.aborted) await abortTask;
-      await stream?.stop();
+      await detach?.().catch(() => {}); // Preserve the turn’s original failure during cleanup.
       if (registered) this.active.delete(request.sessionId);
       if (this.retired && this.active.size === 0 && !this.closing) {
         const opening = this.opening;

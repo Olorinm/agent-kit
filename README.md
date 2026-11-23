@@ -24,7 +24,7 @@ Each package works on its own. Use one, or all four together.
 | | Package | What it does |
 | --- | --- | --- |
 | 🔀 | [**Router**](packages/router) | A message router for agents. Owner accounts, chat channel connections (Feishu, Weixin, Telegram, email, web, push), one conversation ledger across them, delivery to a running agent and replies back to where each message came from. |
-| 🧠 | [**Host**](packages/host) | One interface to seven native harnesses: Codex, Claude Agent, Pi, OpenCode, Kimi Code, Hermes and OpenClaw. Sessions, tools and approvals stay as each harness defines them. Embed it or run it as an HTTP service. |
+| 🧠 | [**Host**](packages/host) | One interface to nine native harnesses: Codex, Claude Agent, Pi, OpenCode, Kimi Code, Antigravity, DeepSeek Harness, Hermes and OpenClaw. Sessions, tools and approvals stay as each harness defines them. Embed it or run it as an HTTP service. |
 | 🔌 | [**Connectors**](packages/connectors) | Google Workspace, GitHub, Notion, Feishu and a browser, exposed to agents as tools. Credentials and write approvals stay outside the agent's environment. |
 | 📦 | [**Environment**](packages/environment) | Create, pause, resume and remove execution environments through one TypeScript API and CLI. Cloudflare containers in production, Docker on your own machine. |
 
@@ -37,7 +37,7 @@ The fastest way to see something work is Host with an agent you already have ins
 
 ```sh
 mkdir my-agent && cd my-agent && npm init -y
-npm install https://github.com/Olorinm/agent-kit/releases/download/v0.11.0-alpha.12/olorinm-agent-host-0.11.0-alpha.12.tgz
+npm install https://github.com/Olorinm/agent-kit/releases/download/v0.11.0-alpha.14/olorinm-agent-host-0.11.0-alpha.14.tgz
 
 npx agent-host init --kernel codex --cwd . --config host.json
 npx agent-host doctor --config host.json
@@ -87,9 +87,9 @@ CI runs one workflow per package (`.github/workflows/ci-<package>.yml`) when tha
 <summary>Cutting a release</summary>
 
 ```sh
-node scripts/set-version.mjs 0.11.0-alpha.12   # every package.json and lockfile
-# add a "## [0.11.0-alpha.12]" section to CHANGELOG.md, commit, wait for CI
-git tag v0.11.0-alpha.12 && git push origin v0.11.0-alpha.12
+node scripts/set-version.mjs 0.11.0-alpha.14   # every package.json and lockfile
+# add a "## [0.11.0-alpha.14]" section to CHANGELOG.md, commit, wait for CI
+git tag v0.11.0-alpha.14 && git push origin v0.11.0-alpha.14
 ```
 
 The [release workflow](.github/workflows/release.yml) builds every package at the tagged commit on Linux with a

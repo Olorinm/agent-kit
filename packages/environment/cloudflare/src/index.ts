@@ -1,7 +1,7 @@
 import { DurableObject, WorkerEntrypoint } from "cloudflare:workers";
 import { UUID, equalSecret, signAccess, verifyAccess, createSpec, lifetime, strings, codexAuthUsers } from "./security.mjs";
-import { allowEgress, accountRefusal, modelServices, modelAccounts, modelCredentials, DEFAULT_MODEL_SERVICES } from "./egress.mjs";
-import { CREDENTIAL_ID, parseOpenAiCredential, credentialView, needsRefresh, refreshOpenAiToken, injectOpenAiAuth, placeholderAuth, installGuestAuth } from "./credentials.mjs";
+import { allowEgress, githubDestination, accountRefusal, modelServices, modelAccounts, modelCredentials, DEFAULT_MODEL_SERVICES } from "./egress.mjs";
+import { CREDENTIAL_ID, GOOGLE_API_HOST, parseModelCredential, credentialView, needsRefresh, refreshOpenAiToken, injectOpenAiAuth, injectGoogleAuth, injectServiceAuth, placeholderAuth, installGuestAuth } from "./credentials.mjs";
 import { installAge, archiveAgent } from "./backup";
 
 interface Env {
@@ -36,8 +36,8 @@ interface RecordData {
   codexAuthUsers?: string[];
 }
 interface StoredModelCredential {
-  service: "openai";
-  mode: "chatgpt" | "api_key";
+  service: "openai" | "google" | "deepseek" | "github" | "anthropic";
+  mode: "chatgpt" | "api_key" | "token";
   accessToken?: string;
   refreshToken?: string;
   accountId?: string;
@@ -45,6 +45,37 @@ interface StoredModelCredential {
   apiKey?: string;
   expiresAt?: number;
   updatedAt: string;
+}
+/** What a credential lookup hands to the egress policy. A credential of another service comes without its secret. */
+interface ResolvedModelCredential {
+  service: StoredModelCredential["service"];
+  mode: StoredModelCredential["mode"];
+  accessToken?: string;
+  apiKey?: string;
+  accountId?: string;
+  renewable: boolean;
+}
+/** Public metadata of a stored credential, as `credentialView` builds it. */
+interface ModelCredentialView {
+  id: string;
+  service: StoredModelCredential["service"];
+  mode: StoredModelCredential["mode"];
+  accountId?: string;
+  expiresAt?: string;
+  planType?: string;
+  renewable: boolean;
+  updatedAt: string;
+}
+/**
+ * Whether a selection names a stored credential of another service than the one it is selected for. Checked when an
+ * environment is created or resumed; the egress policy checks again on every request, since a credential can be replaced.
+ */
+async function credentialMismatch(store: { getCredential(id: string): Promise<ModelCredentialView | null> }, selection: Record<string, string>) {
+  for (const [service, id] of Object.entries(selection)) {
+    const view = await store.getCredential(id);
+    if (view && view.service !== service) return true;
+  }
+  return false;
 }
 class ApiError extends Error {
   constructor(readonly code: string, readonly status = 409) { super(code); }
@@ -99,7 +130,7 @@ export default {
         if (!CREDENTIAL_ID.test(credId)) throw new ApiError("invalid_credential_id", 400);
         if (request.method === "PUT") {
           let parsed;
-          try { parsed = parseOpenAiCredential(await body(request)); } catch { throw new ApiError("invalid_model_credential", 400); }
+          try { parsed = parseModelCredential(await body(request)); } catch { throw new ApiError("invalid_model_credential", 400); }
           return json(await credentials.putCredential(credId, parsed, request.headers.get("If-None-Match") === "*"));
         }
         if (request.method === "GET") {
@@ -115,6 +146,9 @@ export default {
       if (url.pathname === "/v1/environments" && request.method === "POST") {
         let spec;
         try { spec = createSpec(await body(request)); } catch { throw new ApiError("invalid_create", 400); }
+        // Before anything is reserved.
+        if (spec.modelCredentials && await credentialMismatch(credentials, spec.modelCredentials))
+          throw new ApiError("model_credential_service_mismatch", 400);
         const id = await catalog.reserve(spec.metadata);
         // Reserve before provisioning: a lost response can be reconciled via list.
         const result = await env.SANDBOXES.getByName(id).fetch(new Request("https://internal/create", {
@@ -192,6 +226,16 @@ export class AgentEgress extends WorkerEntrypoint<Env, { modelServices?: readonl
       }
       return response;
     }
+    const service = host === GOOGLE_API_HOST ? "google" : host === "api.anthropic.com" ? "anthropic" : host === "api.deepseek.com" ? "deepseek" :
+      githubDestination(new URL(request.url), request.method) ? "github" : undefined;
+    if (service && credentials && Object.hasOwn(credentials, service)) {
+      const resolved = await this.env.CATALOG.getByName("credentials").resolveServiceCredential(credentials[service], service);
+      if (!resolved) return json({ error: "model_credential_missing" }, 403);
+      const injected = service === "google" ? injectGoogleAuth(request.url, request.headers, resolved) :
+        injectServiceAuth(request, service, resolved);
+      if (injected.error || !injected.headers) return json({ error: injected.error ?? "model_credential_invalid" }, 403);
+      return fetch(new Request(new Request(injected.url, request), { headers: injected.headers }), { redirect: "manual" });
+    }
     const refusal = accountRefusal(request.url, request.headers, this.ctx.props.modelAccounts);
     if (refusal) return json({error:refusal},403);
     return fetch(request, {redirect:"manual"});
@@ -223,7 +267,7 @@ export class Catalog extends DurableObject<Env> {
       return credentialView(id, stored);
     });
   }
-  async getCredential(id: string) {
+  async getCredential(id: string): Promise<ModelCredentialView | null> {
     const stored = await this.ctx.storage.get<StoredModelCredential>(`cred:${id}`);
     return stored ? credentialView(id, stored) : null;
   }
@@ -232,11 +276,13 @@ export class Catalog extends DurableObject<Env> {
     return [...entries.entries()].map(([key, value]) => credentialView(key.slice(5), value));
   }
   async deleteCredential(id: string) { return this.ctx.storage.delete(`cred:${id}`); }
-  async resolveOpenAiCredential(id: string, options: { forceRefresh?: boolean; priorToken?: string } = {}) {
+  async resolveOpenAiCredential(id: string, options: { forceRefresh?: boolean; priorToken?: string } = {}): Promise<ResolvedModelCredential | null> {
     return this.ctx.blockConcurrencyWhile(async () => {
       const found = await this.ctx.storage.get<StoredModelCredential>(`cred:${id}`);
       if (!found) return null;
-      let stored: StoredModelCredential = found;
+      // Another service's credential: name the service and hand out no secret. The caller refuses the request.
+      if (found.service !== "openai") return { service: found.service, mode: found.mode, renewable: false };
+      let stored = found as StoredModelCredential & { service: "openai"; mode: "chatgpt" | "api_key" };
       const now = Date.now();
       const shouldForce = Boolean(options.forceRefresh && stored.mode === "chatgpt" && stored.refreshToken &&
         (!options.priorToken || stored.accessToken === options.priorToken));
@@ -250,6 +296,7 @@ export class Catalog extends DurableObject<Env> {
         }
       }
       return {
+        service: stored.service,
         mode: stored.mode,
         ...(stored.accessToken ? { accessToken: stored.accessToken } : {}),
         ...(stored.apiKey ? { apiKey: stored.apiKey } : {}),
@@ -257,6 +304,14 @@ export class Catalog extends DurableObject<Env> {
         renewable: Boolean(stored.refreshToken),
       };
     });
+  }
+  /** Return only the requested service's secret. A service mismatch carries public metadata alone. */
+  async resolveServiceCredential(id: string, service: "google" | "deepseek" | "github" | "anthropic"): Promise<ResolvedModelCredential | null> {
+    const found = await this.ctx.storage.get<StoredModelCredential>(`cred:${id}`);
+    if (!found) return null;
+    const metadata = { service: found.service, mode: found.mode, renewable: false };
+    if (found.service !== service) return metadata;
+    return service === "github" ? { ...metadata, accessToken: found.accessToken } : { ...metadata, apiKey: found.apiKey };
   }
 }
 
@@ -295,6 +350,8 @@ export class AgentSandbox extends DurableObject<Env> {
     const id = r.modelCredentials?.openai;
     const metadata = id && await this.env.CATALOG.getByName("credentials").getCredential(id);
     if (!metadata) throw new ApiError("model_credential_missing", 409);
+    // A credential of another service is never turned into a Codex login file.
+    if (metadata.service !== "openai") throw new ApiError("model_credential_service_mismatch", 409);
     const placeholder = placeholderAuth(metadata);
     for (const user of r.codexAuthUsers) {
       const result = await (await this.container.exec(["node", "-e", installGuestAuth, user, placeholder])).output();
@@ -314,7 +371,11 @@ export class AgentSandbox extends DurableObject<Env> {
         : ["sh", "-c", `while [ ! -f ${readyFile} ] || [ ! -f /opt/agent-environment/start.sh ]; do sleep 1; done; exec sh /opt/agent-environment/start.sh`],
       enableInternet: false,
       instance: { vcpu: 2, memoryMib: 6144, diskMb: 10000 },
-      env: {...r.env, NODE_EXTRA_CA_CERTS:"/etc/cloudflare/certs/cloudflare-containers-ca.crt"},
+      env: {...r.env,
+        ...(r.modelCredentials?.anthropic ? { ANTHROPIC_API_KEY: "gateway-managed" } : {}),
+        ...(r.modelCredentials?.github ? { GH_TOKEN: "gateway-managed" } : {}),
+        ...(r.modelCredentials?.deepseek ? { DEEPSEEK_API_KEY: "gateway-managed" } : {}),
+        NODE_EXTRA_CA_CERTS:"/etc/cloudflare/certs/cloudflare-containers-ca.crt"},
     });
     const egress = this.ctx.exports.AgentEgress({props:{modelServices:r.modelServices??DEFAULT_MODEL_SERVICES,...(r.modelAccounts?{modelAccounts:r.modelAccounts}:{}),...(r.modelCredentials?{modelCredentials:r.modelCredentials}:{})}});
     await this.container.interceptAllOutboundHttp(egress);
@@ -487,12 +548,15 @@ export class AgentSandbox extends DurableObject<Env> {
           try { services = modelServices(b.modelServices); } catch { throw new ApiError("invalid_model_services", 400); }
           try { accounts = modelAccounts(b.modelAccounts); } catch { throw new ApiError("invalid_model_accounts", 400); }
           try { credentials = modelCredentials(b.modelCredentials); } catch { throw new ApiError("invalid_model_credentials", 400); }
+          if (credentials && await credentialMismatch(this.env.CATALOG.getByName("credentials"), credentials))
+            throw new ApiError("model_credential_service_mismatch", 400);
           let users;
           try { users = codexAuthUsers(b.codexAuthUsers); } catch { throw new ApiError("invalid_codex_auth_users", 400); }
           const nextUsers = users ?? r.codexAuthUsers ?? [], nextKey = (credentials ?? r.modelCredentials)?.openai;
           if (nextUsers.length && !nextKey) throw new ApiError("model_credential_required", 400);
           if (r.status === "running" && this.container.running &&
-              (nextKey !== r.modelCredentials?.openai || JSON.stringify(nextUsers) !== JSON.stringify(r.codexAuthUsers ?? [])))
+              (nextKey !== r.modelCredentials?.openai || JSON.stringify(nextUsers) !== JSON.stringify(r.codexAuthUsers ?? []) ||
+              (credentials && ["github", "deepseek", "anthropic"].some(service => credentials![service] !== r.modelCredentials?.[service]))))
             throw new ApiError("credential_migration_requires_pause");
           if (users) r.codexAuthUsers = users;
           r.expires = Date.now() + lifetime(b.timeoutSeconds ?? 600) * 1000;

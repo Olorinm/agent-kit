@@ -2,6 +2,7 @@ node_modules/
 dist/
 state/
 *.tgz
+!cloudflare/examples/official-skills.tgz
 .env
 .env.*
 coverage/

@@ -5,6 +5,8 @@ export const kernels = [
   "pi",
   "opencode",
   "kimi",
+  "agy",
+  "dsh",
   "hermes",
   "openclaw",
 ] as const;
@@ -70,6 +72,8 @@ const missing = (details?: string): Capability => ({
   reason: "host_not_integrated",
   ...(details ? { details } : {}),
 });
+/** Kernels that Host drives through the shared ACP adapter with their own negotiated capabilities. */
+const acpKernels: readonly Kernel[] = ["opencode", "kimi", "agy", "dsh"];
 const conditional = (
   reason: Capability["reason"],
   details: string,
@@ -187,7 +191,7 @@ export function getKernelCapabilities(
       "configuration_required",
       "Pi beforeTool policy callback; HTTP profiles opt in with toolApproval. No built-in permission dialog is invented.",
     );
-  } else if (kernel === "opencode" || kernel === "kimi") {
+  } else if (acpKernels.includes(kernel)) {
     if (kernel === "opencode")
       f["tools.product"] = conditional(
         "native_negotiation_required",
@@ -212,12 +216,21 @@ export function getKernelCapabilities(
         "configuration_required",
         "Requires a native elicitation request and a configured product handler; embedded clients must advertise supported elicitation modes.",
       );
-    f["controls.compact"] = conditional(
-      "configuration_required",
-      kernel === "kimi"
-        ? "Configure compaction: 'kimi'; requires an existing binding and a confirmed native /compact receipt."
-        : "Configure compaction: 'opencode'; OpenCode 2 uses native ACP /compact with a completion receipt.",
-    );
+    if (kernel === "opencode" || kernel === "kimi")
+      f["controls.compact"] = conditional(
+        "configuration_required",
+        kernel === "kimi"
+          ? "Configure compaction: 'kimi'; requires an existing binding and a confirmed native /compact receipt."
+          : "Configure compaction: 'opencode'; OpenCode 2 uses native ACP /compact with a completion receipt.",
+      );
+    if (kernel === "agy")
+      f["controls.compact"] = missing(
+        "Antigravity lists a native /compact command, but Host has no verified completion receipt for it.",
+      );
+    if (kernel === "agy")
+      f["interactions.approval"] = supported(
+        "Native ACP permission options and response IDs are preserved. The native mode (config.mode) and --dangerously-skip-permissions decide what Antigravity asks.",
+      );
   } else if (kernel === "hermes") {
     f["input.images"] = conditional(
       "configuration_required",
@@ -258,7 +271,7 @@ export function getKernelCapabilities(
         "The tested Gateway has no structured question request/response API. Product tools can ask their own questions.",
     };
   }
-  if (kernel === "opencode" || kernel === "kimi")
+  if (acpKernels.includes(kernel))
     for (const name of [
       "sessions.list",
       "sessions.fork",
@@ -298,7 +311,7 @@ export function getKernelCapabilities(
       "configuration_required",
       "Native pdf.attach renders pages with Hermes dependencies; file.attach preserves other files and its native file references.",
     );
-  if (kernel === "opencode" || kernel === "kimi") {
+  if (acpKernels.includes(kernel)) {
     f["input.audio"] = conditional(
       "native_negotiation_required",
       "ACP promptCapabilities.audio; otherwise the original file remains available.",
@@ -330,6 +343,12 @@ export function getKernelCapabilities(
     pi: ["interactions.questions", "interactions.elicitation"],
     opencode: ["controls.steer"],
     kimi: ["controls.steer"],
+    agy: ["controls.steer"],
+    dsh: [
+      "controls.steer", "controls.compact", "sessions.history", "sessions.fork",
+      "sessions.delete", "interactions.questions", "interactions.elicitation",
+      "input.audio", "input.documents",
+    ],
     hermes: ["interactions.elicitation"],
     openclaw: ["interactions.elicitation"],
   };

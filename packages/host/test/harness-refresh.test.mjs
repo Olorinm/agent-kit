@@ -24,7 +24,7 @@ async function workspace(t) {
   return root;
 }
 
-for (const kernel of ["opencode", "kimi", "hermes"])
+for (const kernel of ["opencode", "kimi", "agy", "hermes"])
   test(`ACP ${kernel} runtime fingerprints exclude live bridge state and retain owner configuration`, async (t) => {
     const cwd = await workspace(t);
     const provider = new AcpHostToolBridgeServer();

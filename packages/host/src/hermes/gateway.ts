@@ -51,7 +51,7 @@ export function getHermesGatewayCapabilities(
     f[name] = {
       status: "unsupported",
       reason: "native_not_supported",
-      details: "Hermes 0.22.1 ACP does not expose this native operation.",
+      details: "Hermes ACP does not expose this native operation.",
     };
   f["controls.compact"] = {
     status: "unsupported",
@@ -70,7 +70,7 @@ export function getHermesGatewayCapabilities(
       status: "unsupported",
       reason: "native_not_supported",
       details:
-        "Hermes 0.22.1 ACP advertises image input, but no audio or embedded-resource prompt capability. Files remain available in the workspace.",
+        "Hermes ACP advertises image input, but no audio or embedded-resource prompt capability. Files remain available in the workspace.",
     };
   f["extensions.nativeOptions"] = {
     status: "supported",

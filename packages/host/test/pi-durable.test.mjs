@@ -1,10 +1,11 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { mkdtemp } from "node:fs/promises";
+import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { model, fixture } from "./fixtures/pi-stream.mjs";
 import { PiAgent } from "../dist/pi/index.js";
+import { createNativeRuntime } from "../dist/service/native-runtimes.js";
 import { FileBindingStore } from "../dist/index.js";
 import { defineExtension, MemoryStorage } from "@earendil-works/pi-durable";
 import { createToolSearchExtension } from "@earendil-works/pi-durable/tool-search";
@@ -78,7 +79,55 @@ test("Pi durable: native JSONL survives restart, tools execute through product p
   }
 });
 
-test("Pi 1.2 nested tools preserve native parent identity, receipts, policy and failed image output", async () => {
+test("Pi emits one assistant start and one end when progress reaches the view before storage", { timeout: 10_000 }, async () => {
+  const started = Promise.withResolvers();
+  const updated = Promise.withResolvers();
+  const template = await fixture([])(model, { messages: [{ role: "user", content: "hello" }] }).result();
+  const message = (text) => ({ ...template, content: [{ type: "text", text }] });
+  const agent = new PiAgent({
+    model,
+    settings: { progress: { partialIntervalMs: 1, persistWithinMs: 60_000 } },
+    streamFn() {
+      const stream = createAssistantMessageEventStream();
+      void (async () => {
+        stream.push({ type: "start", partial: message("first") });
+        await started.promise;
+        stream.push({ type: "text_delta", contentIndex: 0, delta: " next", partial: message("first next") });
+        await updated.promise;
+        stream.push({ type: "done", reason: "stop", message: message("first next") });
+        stream.end();
+      })();
+      return stream;
+    },
+  });
+  const timeline = [];
+  try {
+    const events = await Array.fromAsync(agent.run({
+      ...base,
+      onNativeEvent(event) {
+        if (event.type === "message_start" && event.message.role === "assistant") {
+          timeline.push("start");
+          started.resolve();
+        }
+        if (event.type === "message_update") {
+          timeline.push(...event.changes.filter((c) => c.type === "text_delta").map((c) => c.delta));
+          updated.resolve();
+        }
+        if (event.type === "message_end" && event.entry.model?.[0]?.role === "assistant")
+          timeline.push("end");
+      },
+    }));
+    assert.equal(events.at(-1).outcome.status, "completed");
+    assert.deepEqual(timeline, ["start", " next", "end"]);
+    assert.equal(events.find((e) => e.type === "model.response").text, "first next");
+  } finally {
+    started.resolve();
+    updated.resolve();
+    await agent.close();
+  }
+});
+
+test("Pi durable nested tools preserve native parent identity, receipts, policy and failed image output", async () => {
   const observed = [],
     calls = [],
     policies = [];
@@ -179,7 +228,7 @@ test("Pi 1.2 nested tools preserve native parent identity, receipts, policy and 
   }
 });
 
-test("Pi 1.2 nested native tools retain structured results and may be blocked before execution", async () => {
+test("Pi durable nested native tools retain structured results and may be blocked before execution", async () => {
   for (const denied of [false, true]) {
     let executions = 0;
     const extension = defineExtension({
@@ -260,7 +309,7 @@ test("Pi 1.2 nested native tools retain structured results and may be blocked be
   }
 });
 
-test("Pi 1.2 uses native tool search for deferred product tools and preserves policy argument changes", async () => {
+test("Pi durable uses native tool search for deferred product tools and preserves policy argument changes", async () => {
   const observed = [],
     inputs = [],
     approvals = [];
@@ -367,7 +416,7 @@ test("Pi 1.2 uses native tool search for deferred product tools and preserves po
 });
 
 test(
-  "Pi 1.2 fatal storage reads close the native session without retrying work",
+  "Pi durable fatal storage reads close the native session without retrying work",
   { timeout: 2000 },
   async () => {
     const storage = new MemoryStorage();
@@ -471,3 +520,58 @@ test(
     }
   },
 );
+
+test("Pi shell binds local conversation IDs to their own runtime in parallel", async () => {
+  const cwd = await mkdtemp(join(tmpdir(), "agent-host-pi-relay-"));
+  const command = 'printf %s "$PI_DURABLE_CONVERSATION_ID"';
+  const runtimes = ["lead", "reviewer"].map((id) => createNativeRuntime({
+    id, cwd, kernel: "pi", shell: true,
+    options: { model, streamFn: fixture([], "bash", { command }) },
+  }, cwd));
+  try {
+    const runs = await Promise.all(runtimes.map((runtime) => Array.fromAsync(runtime.run({
+      sessionId: "same-product-session", input: "call edit", instructions: "",
+    }))));
+    const ids = runs.map((events) => events.find((e) => e.type === "session.bound").threadId);
+    assert.equal(ids[0], ids[1]);
+    for (const [index, events] of runs.entries()) {
+      assert.equal(events.at(-1).outcome.status, "completed", JSON.stringify(events.at(-1)));
+      const output = events.find((e) => e.type === "tool.finished").result;
+      assert.equal(output.success, true);
+      assert.equal(output.contentItems[0].text.trim(), `${runtimes[index].id}:${ids[index]}`);
+    }
+  } finally {
+    await Promise.all(runtimes.map((runtime) => runtime.close()));
+  }
+});
+
+test("Pi lists metadata from an explicitly configured skills directory and leaves instructions on disk", async () => {
+  const cwd = await mkdtemp(join(tmpdir(), "agent-host-pi-skills-"));
+  for (const [name, metadata] of [
+    ["browser", 'description: "Browser <automation> & capture"'],
+    ["private", "description: Manual only\ndisable-model-invocation: true"],
+    ["oversized", "description: Overlarge YAML\n#" + "x".repeat(33 * 1024)],
+  ]) {
+    await mkdir(join(cwd, "skills", name), { recursive: true });
+    await writeFile(join(cwd, "skills", name, "SKILL.md"), `---\nname: ${name}\n${metadata}\n---\nprivate-document-body`);
+  }
+  await mkdir(join(cwd, "skills", "directory", "SKILL.md"), { recursive: true });
+  for (const skillsDirectory of ["skills", "not-installed", undefined]) {
+    const seen = [];
+    const runtime = createNativeRuntime({id: skillsDirectory ?? "no-skills", kernel: "pi",
+      cwd, shell: true, skillsDirectory, options: {model, streamFn: fixture(seen)}}, cwd);
+    try {
+      const events = await Array.fromAsync(runtime.run({sessionId: "session", input: "hello"}));
+      assert.equal(events.at(-1).outcome.status, "completed");
+      const context = JSON.stringify(seen.at(-1));
+      assert.equal(context.includes("<available_skills>"), skillsDirectory === "skills");
+      if (skillsDirectory === "skills") {
+        assert.ok(context.includes("Browser &lt;automation&gt; &amp; capture"), context);
+        assert.ok(context.includes(JSON.stringify(join(cwd, "skills", "browser", "SKILL.md")).slice(1, -1)));
+        assert.ok(!context.includes("Manual only"));
+        assert.ok(!context.includes("Overlarge YAML"));
+        assert.ok(!context.includes("private-document-body"));
+      }
+    } finally { await runtime.close(); }
+  }
+});

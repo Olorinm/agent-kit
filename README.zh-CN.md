@@ -24,7 +24,7 @@
 | | 包 | 做什么 |
 | --- | --- | --- |
 | 🔀 | [**Router**](packages/router/README.zh-CN.md) | Agent 的消息路由。管理所有者账号和聊天渠道连接（飞书、微信、Telegram、邮件、网页、推送），各渠道共用一份对话账本；把收到的消息投递给运行中的 Agent，再把回复送回消息来的地方。 |
-| 🧠 | [**Host**](packages/host/README.zh-CN.md) | 用同一个接口对接七种原生内核：Codex、Claude Agent、Pi、OpenCode、Kimi Code、Hermes 和 OpenClaw。会话、工具和审批都保持各内核自己的定义。可以嵌入你的后端，也可以作为 HTTP 服务运行。 |
+| 🧠 | [**Host**](packages/host/README.zh-CN.md) | 用同一个接口对接九种原生内核：Codex、Claude Agent、Pi、OpenCode、Kimi Code、Antigravity、DeepSeek Harness、Hermes 和 OpenClaw。会话、工具和审批都保持各内核自己的定义。可以嵌入你的后端，也可以作为 HTTP 服务运行。 |
 | 🔌 | [**Connectors**](packages/connectors/README.zh-CN.md) | 把 Google Workspace、GitHub、Notion、飞书和浏览器作为工具提供给 Agent。凭证和写操作的审批都留在 Agent 的环境之外。 |
 | 📦 | [**Environment**](packages/environment/README.zh-CN.md) | 用一套 TypeScript 接口和命令行创建、暂停、恢复、删除执行环境。线上用 Cloudflare 容器，本机用 Docker。 |
 
@@ -36,7 +36,7 @@
 
 ```sh
 mkdir my-agent && cd my-agent && npm init -y
-npm install https://github.com/Olorinm/agent-kit/releases/download/v0.11.0-alpha.12/olorinm-agent-host-0.11.0-alpha.12.tgz
+npm install https://github.com/Olorinm/agent-kit/releases/download/v0.11.0-alpha.14/olorinm-agent-host-0.11.0-alpha.14.tgz
 
 npx agent-host init --kernel codex --cwd . --config host.json
 npx agent-host doctor --config host.json
@@ -86,9 +86,9 @@ npm test
 <summary>发布一个版本</summary>
 
 ```sh
-node scripts/set-version.mjs 0.11.0-alpha.12   # 改每个 package.json 和锁文件
-# 在 CHANGELOG.md 里加一节 "## [0.11.0-alpha.12]"，提交，等 CI 通过
-git tag v0.11.0-alpha.12 && git push origin v0.11.0-alpha.12
+node scripts/set-version.mjs 0.11.0-alpha.14   # 改每个 package.json 和锁文件
+# 在 CHANGELOG.md 里加一节 "## [0.11.0-alpha.14]"，提交，等 CI 通过
+git tag v0.11.0-alpha.14 && git push origin v0.11.0-alpha.14
 ```
 
 [发布工作流](.github/workflows/release.yml)在 Linux 上用固定版本的 Node.js 和 npm，在打标签的那个提交上构建每个包，

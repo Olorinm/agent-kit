@@ -388,6 +388,8 @@ for (const kernel of [
   "pi",
   "opencode",
   "kimi",
+  "agy",
+  "dsh",
   "hermes",
   "openclaw",
 ]) {
@@ -405,7 +407,7 @@ for (const kernel of [
             args: [],
           },
         };
-      if (["kimi", "opencode"].includes(kernel))
+      if (["kimi", "opencode", "agy", "dsh"].includes(kernel))
         return {
           ...base,
           options: {
@@ -439,6 +441,8 @@ for (const kernel of [
       pi: "call edit",
       opencode: "tool",
       kimi: "tool",
+      agy: "tool",
+      dsh: "tool",
       hermes: "CALL_TOOL",
       openclaw: "TOOL",
     }[kernel];
@@ -1000,4 +1004,42 @@ test("a Codex turn without a selected model returns to the runtime's configured 
   assert.deepEqual(await turn(), { model: "first-model", effort: "high" });
   assert.deepEqual(await turn({ model: "second-model", effort: "low" }), { model: "second-model", effort: "low" });
   assert.deepEqual(await turn(), { model: "first-model", effort: "high" });
+});
+
+test("a local session can relay only its enabled tool to its own active runtime", async (t) => {
+  const release = new Map();
+  const { api, host } = await fixture(t, { sessionRelayTools: ["connected_apps"],
+    configure: (cwd) => ["claude", "dsh", "agy"].map(kernel => ({
+      id: kernel, kernel, cwd, configurationKey: kernel, close() {},
+      async *run({ runId, sessionId, signal }) {
+        const done = new Promise(resolve => { release.set(sessionId, resolve); signal.addEventListener("abort", resolve, { once: true }); });
+        yield { type: "session.bound", runId, threadId: "same-native-id", resumed: false };
+        await done;
+        yield { type: "turn.finished", runId, outcome: { status: "completed" } };
+      },
+    })),
+  });
+  const apps = { name: "connected_apps", description: "Apps", inputSchema: { type: "object" } };
+  const start = async (runtimeId, sessionId, tools) => {
+    const run = await api("/runs", { runtimeId, sessionId, input: "hello", tools }, 202);
+    await until(() => api(`/runs/${run.id}/events`), page => page.events.some(e => e.event.type === "session.bound"));
+    return run.id;
+  };
+  const relay = (kernel, threadId = "same-native-id", tool = "connected_apps") => fetch(`${host.url}/v1/relay`, { method: "POST",
+    headers: { "content-type": "application/json" }, body: JSON.stringify({ kernel, threadId, tool, input: { action: "tools" } }) });
+  const lead = await start("claude", "lead", [apps]), backend = await start("dsh", "backend", [apps]);
+  assert.equal((await relay("claude", "unknown")).status, 403);
+  assert.equal((await relay("claude", "same-native-id", "other")).status, 403);
+  await start("agy", "advisor", []);
+  assert.equal((await relay("agy")).status, 404);
+  const pending = relay("dsh");
+  const { calls } = await until(() => api(`/runs/${backend}/calls`), data => data.calls.length);
+  assert.equal((await api(`/runs/${lead}/calls`)).calls.length, 0);
+  await api(`/runs/${backend}/calls/${calls[0].id}/result`, { result: { success: true, contentItems: [{ type: "inputText", text: "ok" }] } });
+  assert.equal((await pending).status, 200);
+  await start("claude", "second", [apps]);
+  assert.equal((await relay("claude")).status, 403); // Duplicate native binding is ambiguous.
+  for (const resolve of release.values()) resolve();
+  await until(() => api(`/runs/${backend}`), data => data.status !== "running");
+  assert.equal((await relay("dsh")).status, 403);
 });

@@ -1,13 +1,13 @@
 # First task
 
-Use Node.js 24 or later and an installed, authenticated native Kernel. Agent Host keeps that Kernel's login, configuration, tools and model execution. It does not install or log into all seven Kernels for you.
+Use Node.js 24 or later and an installed, authenticated native Kernel. Agent Host keeps that Kernel's login, configuration, tools and model execution. It does not install or log into the Kernels for you.
 
 ## Install a release without cloning the repository
 
 ```sh
 mkdir my-agent && cd my-agent
 npm init -y
-npm install https://github.com/Olorinm/agent-kit/releases/download/v0.11.0-alpha.12/olorinm-agent-host-0.11.0-alpha.12.tgz
+npm install https://github.com/Olorinm/agent-kit/releases/download/v0.11.0-alpha.14/olorinm-agent-host-0.11.0-alpha.14.tgz
 ```
 
 Agent Host is released together with the other Agent Kit packages on [GitHub Releases](https://github.com/Olorinm/agent-kit/releases). The package is not on the npm registry yet. Native binaries other than Claude's SDK engine are separate prerequisites. The release has the same contents tested by the independent archive consumer.
@@ -46,6 +46,8 @@ A handshake can discover capabilities without proving model access. Pi has no se
 | Pi | `init --kernel pi --model provider/model` | Pi provider credentials in its native environment; the durable engine is included. |
 | OpenCode | `init --kernel opencode --model provider/model` | OpenCode 2 `opencode` executable from `@opencode/cli`, native V2 provider configuration and state. Existing V1 uses the explicit compatibility path. |
 | Kimi | `init --kernel kimi` | Existing `kimi` executable and native login. |
+| Antigravity | `init --kernel agy` | Existing `agy` executable (Antigravity CLI) signed in with `agy acp --login` or its own `/login`. |
+| DeepSeek Harness | `init --kernel dsh` | Install `@deepseek-ai/dsh@0.2.2-rc.5` and set `DEEPSEEK_API_KEY`. |
 | Hermes | `init --kernel hermes --command /path/to/python --args '["-m","tui_gateway.entry"]'` | Python environment containing the pinned Hermes TUI Gateway. Configure its native bootstrap/launch arguments for that installation and a dedicated persistent `HERMES_HOME`. |
 | OpenClaw | `init --kernel openclaw` | Existing local Gateway at the configured URL. Set `gatewayTokenEnv` to your token environment variable; product tools also need the [bundled plugin](api.md#openclaw-product-tools). |
 
