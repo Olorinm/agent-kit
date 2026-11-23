@@ -1,6 +1,7 @@
-// Host's Pi event contract comes from pi-durable v1.2.0 (MIT, see NOTICE).
-// Pi 1.6 publishes views and stored commits separately. Views deliver deferred
-// streaming progress immediately; the same stored commit carries tool and entry receipts.
+// Compatibility for the Pi events exposed by Host before pi-durable 1.5 removed watchEvents().
+// Event shapes and translation are adapted from v1.2.0 (MIT, see NOTICE). Pi 1.6
+// exposes live conversation views and stored commits through separate public observers.
+import { AsyncEventQueue } from "../async-event-queue.js";
 import type { Context } from "@earendil-works/chord/context";
 import type { JsonValue } from "@earendil-works/chord/json";
 import type { Op, Path } from "@earendil-works/chord/delta";
@@ -9,7 +10,7 @@ import {
     AgentDoc, NestedCallDoc, UsageDoc,
     type AgentState, type CommitChange, type CommitPublication, type CompactionFailure,
     type CompactionReason, type CompactionStatus, type ConversationId, type ConversationView,
-    type EntryRecord, type Harness, type InboxItem, type InboxState, type JsonObject,
+    type DocumentId, type EntryRecord, type Harness, type InboxItem, type InboxState, type JsonObject,
     type LiveState, type NestedCallState, type NestedToolExecutionResult, type NestedToolSlot,
     type SubmissionId, type SubmissionRecord, type TaskId, type ToolDiagnostic,
     type ToolSlot, type UsageState,
@@ -41,16 +42,16 @@ export type SnapshotEvent = {
 	/** `pi.live.nestedTools`: nested calls of running tool calls. */
 	nestedTools: readonly NestedToolSlot[];
 	/** `pi.live.compactions`: live compactions with their attempt and retry backoff. */
-	compactions: readonly CompactionStatus[];
+	compactions: readonly (Omit<CompactionStatus, "trigger"> & { reason: CompactionReason })[];
 	/** `pi.live.compactionFailure`: the newest compaction failure since a compaction last produced a summary. */
-	compactionFailure?: CompactionFailure;
+	compactionFailure?: Omit<CompactionFailure, "trigger"> & { reason: CompactionReason };
 	inbox: readonly QueuedItem[];
 	/** `pi.agent`; `{}` when absent. */
 	agent: AgentState;
 	usage: UsageState;
 };
 
-/** Experimental agent event, shaped like the coding agent's session events (spec §9.4). */
+/** Host callback and native notification payloads retained from the v1.2.0 event API. */
 export type AgentEvent =
 	| SnapshotEvent
 	| { type: "run_start"; inputs: readonly SubmissionId[] }
@@ -127,38 +128,74 @@ function queued(inbox: InboxState | undefined): QueuedItem[] {
 }
 
 
+type Change =
+  | { kind: "view"; value: ConversationView; ops: readonly Op[] }
+  | { kind: "commit"; publication: CommitPublication };
+
 export async function observeEvents(
-    harness: Harness, id: ConversationId, context: Context,
-    deliver: (events: readonly AgentEvent[]) => void,
-): Promise<() => void> {
-    let current: ConversationView | undefined;
-    const view = await harness.observeConversation(id, {
-        advance(call) {
-            if (call.kind !== "value") return;
-            if (current) deliver(progress(parts(current), parts(call.value), call.ops));
-            current = call.value;
-        },
-        end() {},
-    }, context);
-    current ??= view.value;
-    let stored = current;
+  harness: Harness, id: ConversationId, context: Context,
+  deliver: (events: readonly AgentEvent[]) => void,
+): Promise<() => Promise<void>> {
+  // Pi observers may only record changes. Project events and invoke user code outside
+  // the Session's adoption path, in observation order, including progress before storage.
+  const pending = new AsyncEventQueue<Change>();
+  const view = await harness.observeConversation(id, {
+    advance(call) {
+      if (call.kind === "value") pending.push({ kind: "view", value: call.value, ops: call.ops });
+    },
+    end() {},
+  }, context);
+  const commits = harness.observeCommits({
+    advance(publication) { pending.push({ kind: "commit", publication }); },
+    end() {},
+  });
+  const drain = (async () => {
+    let current = view.value;
+    let stored = view.value;
+    let assistantStartSeen = false;
     const held = new Set<TaskId>();
-    const commits = harness.observeCommits({
-        advance(publication) {
-            const docs = { ...stored.docs };
-            for (const change of publication.changes) {
-                if (change.type !== "document" || change.conversationId !== id ||
-                    change.record.key !== undefined || change.record.scope.kind !== "conversation") continue;
-                if (change.kind === "retire") delete docs[change.record.kind];
-                else docs[change.record.kind] = change.value;
-            }
-            const previous = stored;
-            stored = { ...previous, docs };
-            deliver(translate(id, previous, stored, publication, held));
-        },
-        end() {},
-    });
-    return () => { view.detach(); commits.detach(); };
+    const incarnations = new Map<string, DocumentId>();
+    for await (const change of pending) {
+      if (change.kind === "view") {
+        const events = progress(parts(current), parts(change.value), change.ops);
+        if (events.some((event) => event.type === "message_start")) assistantStartSeen = true;
+        deliver(events);
+        current = change.value;
+        continue;
+      }
+      const docs = { ...stored.docs };
+      for (const item of change.publication.changes) {
+        if (item.type !== "document" || item.conversationId !== id || item.record.key !== undefined ||
+            item.record.scope.kind !== "conversation") continue;
+        const { kind } = item.record;
+        if (item.kind === "change") {
+          docs[kind] = item.value;
+          incarnations.set(kind, item.record.id);
+        } else if (!incarnations.has(kind) || incarnations.get(kind) === item.record.id) {
+          delete docs[kind];
+          incarnations.delete(kind);
+        }
+      }
+      const previous = stored;
+      stored = { ...previous, docs };
+      const events = translate(id, previous, stored, change.publication, held);
+      // The terminal commit may coalesce all pending writes to pi.live. Only the
+      // observed view tells us whether this assistant entry already had a start.
+      deliver(events.filter((event) => {
+        if (event.type === "message_start" && event.message.role === "assistant" && assistantStartSeen) return false;
+        if (event.type === "message_end" && event.entry.model?.[0]?.role === "assistant") assistantStartSeen = false;
+        return true;
+      }));
+    }
+  })();
+  // The turn awaits drain on detach. Stop buffering if projection fails before then.
+  void drain.catch(() => pending.close());
+  return async () => {
+    view.detach();
+    commits.detach();
+    pending.close();
+    await drain;
+  };
 }
 
 type TaskChange = Extract<CommitChange, { type: "task" }>;
@@ -171,7 +208,7 @@ function resultOf(entries: readonly EntryRecord[], callId: string): EntryRecord 
 	});
 }
 
-/** Every event one publication causes, in the order of spec §9.4. */
+/** Project settled state and receipts from one stored commit in the legacy event order. */
 function translate(
 	conversationId: ConversationId,
 	before: ConversationView,
@@ -204,13 +241,14 @@ function translate(
 		}
 	}
 
-	// Entries are appended in ID order; submission records are published in the order the commit first touched them.
+	// CommitPublication does not promise ordering. Replay transcript entries and submissions by ID.
+	entries.sort((a, b) => a.id - b.id);
 	submissions.sort((a, b) => a.id - b.id);
 	const was = parts(before);
 	const now = parts(after);
 	const events: AgentEvent[] = [];
 
-	// Progress: tool starts, the in-flight message, tool updates, retry and deferred state.
+	// Tool intents, retry state and deferred requests come from stored commits.
 	const slotsBefore = new Map((was.live.tools ?? []).map((slot) => [slot.callId, slot]));
 	const slots = now.live.tools ?? [];
 	const nestedBefore = new Map((was.live.nestedTools ?? []).map((slot) => [slot.taskId, slot]));
@@ -226,7 +264,6 @@ function translate(
 				: ((checkpoint as { arguments?: JsonObject } | undefined)?.arguments ?? {});
 		events.push({ type: "tool_execution_start", ...callOf(slot), args });
 	}
-	const partialBefore = was.live.generation?.message;
 	const generation = now.live.generation;
 	const generationBefore = was.live.generation;
 	if (generation?.retry !== undefined && generationBefore?.retry === undefined) {
@@ -274,7 +311,6 @@ function translate(
 	}
 
 	// Entries in append order; a tool's end directly precedes its result's message, as in the coding agent.
-	let assistantAppended = false;
 	for (const entry of entries) {
 		events.push(...toolEnds.filter((end) => end.entry === entry));
 		const message = entry.model?.[0];
@@ -282,10 +318,7 @@ function translate(
 			events.push({ type: "entry_appended", entry });
 			continue;
 		}
-		// A streamed answer already started with its first partial.
-		const streamed = message.role === "assistant" && partialBefore !== undefined && !assistantAppended;
-		if (message.role === "assistant") assistantAppended = true;
-		if (!streamed) events.push({ type: "message_start", message });
+		events.push({ type: "message_start", message });
 		events.push({ type: "message_end", entry });
 	}
 	// Ends without a result entry: a faulted or orphaned tool, or one whose run ended.
@@ -376,7 +409,7 @@ function progress(was: Parts, now: Parts, viewOps: readonly Op[]): AgentEvent[] 
 
 const PARTIAL_PATH = ["docs", "pi.live", "generation", "message"];
 
-/** Translate the view operations on the in-flight message into message changes (spec §9.4). */
+/** Translate the view operations on the in-flight message into message changes (v1.2.0 event format). */
 function messageChanges(viewOps: readonly Op[], message: AssistantMessage): MessageChange[] {
 	const changes: MessageChange[] = [];
 	// A block sent whole already holds every later change to it in this batch.

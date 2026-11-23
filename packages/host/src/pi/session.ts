@@ -405,7 +405,8 @@ export class PiAgent {
     let nativeError = "";
     let registered = false;
     let started = false;
-    let detach: (() => void) | undefined;
+    let detach: (() => Promise<void>) | undefined;
+    let nativeListener = request.onNativeEvent;
     let cleanupAbort: (() => void) | undefined;
     let abortTask: Promise<void> | undefined;
     let abortError: unknown;
@@ -591,7 +592,12 @@ export class PiAgent {
       );
       detach = await observeEvents(harness, conversation.id, background, (events) => {
         for (const event of events) {
-          request.onNativeEvent?.(event);
+          try {
+            nativeListener?.(event);
+          } catch {
+            // As with a native Pi observer, a listener that throws is detached.
+            nativeListener = undefined;
+          }
           queue.push({
             type: "native.notification",
             runId,
@@ -703,6 +709,8 @@ export class PiAgent {
       const receipt = await submission.wait(
         withAbortSignal(waitController.signal, background),
       );
+      await detach();
+      detach = undefined;
       if (receipt.status === "done" && receipt.type === "input") {
         const answer = await conversation.commit(
           (tx) => tx.entry(AssistantEntry, receipt.answer),
@@ -735,7 +743,7 @@ export class PiAgent {
       if (timer) clearTimeout(timer);
       if (waitController.signal.aborted) this.retired = true;
       if (abortTask && !waitController.signal.aborted) await abortTask;
-      detach?.();
+      await detach?.().catch(() => {}); // Preserve the turn’s original failure during cleanup.
       if (registered) this.active.delete(request.sessionId);
       if (this.retired && this.active.size === 0 && !this.closing) {
         const opening = this.opening;

@@ -79,6 +79,54 @@ test("Pi durable: native JSONL survives restart, tools execute through product p
   }
 });
 
+test("Pi emits one assistant start and one end when progress reaches the view before storage", { timeout: 10_000 }, async () => {
+  const started = Promise.withResolvers();
+  const updated = Promise.withResolvers();
+  const template = await fixture([])(model, { messages: [{ role: "user", content: "hello" }] }).result();
+  const message = (text) => ({ ...template, content: [{ type: "text", text }] });
+  const agent = new PiAgent({
+    model,
+    settings: { progress: { partialIntervalMs: 1, persistWithinMs: 60_000 } },
+    streamFn() {
+      const stream = createAssistantMessageEventStream();
+      void (async () => {
+        stream.push({ type: "start", partial: message("first") });
+        await started.promise;
+        stream.push({ type: "text_delta", contentIndex: 0, delta: " next", partial: message("first next") });
+        await updated.promise;
+        stream.push({ type: "done", reason: "stop", message: message("first next") });
+        stream.end();
+      })();
+      return stream;
+    },
+  });
+  const timeline = [];
+  try {
+    const events = await Array.fromAsync(agent.run({
+      ...base,
+      onNativeEvent(event) {
+        if (event.type === "message_start" && event.message.role === "assistant") {
+          timeline.push("start");
+          started.resolve();
+        }
+        if (event.type === "message_update") {
+          timeline.push(...event.changes.filter((c) => c.type === "text_delta").map((c) => c.delta));
+          updated.resolve();
+        }
+        if (event.type === "message_end" && event.entry.model?.[0]?.role === "assistant")
+          timeline.push("end");
+      },
+    }));
+    assert.equal(events.at(-1).outcome.status, "completed");
+    assert.deepEqual(timeline, ["start", " next", "end"]);
+    assert.equal(events.find((e) => e.type === "model.response").text, "first next");
+  } finally {
+    started.resolve();
+    updated.resolve();
+    await agent.close();
+  }
+});
+
 test("Pi durable nested tools preserve native parent identity, receipts, policy and failed image output", async () => {
   const observed = [],
     calls = [],

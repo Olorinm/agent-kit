@@ -125,7 +125,11 @@ The factory selects the matching native compaction path for `opencode` and `kimi
 
 ### Pi durable sessions
 
-Provide `model` and a persistent `sessionRoot`. The native 1.2 harness owns conversations and tool/model execution. `conversation`, `listSessions`, `forkSession`, `steer` and `compact` expose supported native operations. `deleteSession` explicitly reports `pi_durable_native_delete_unsupported`. Use the `pi` entry; the retired Pi 0.85 adapter is no longer shipped.
+Provide `model` and a persistent `sessionRoot`. The native 1.6 harness owns conversations and tool/model execution. `conversation`, `listSessions`, `forkSession`, `steer` and `compact` expose supported native operations. `deleteSession` explicitly reports `pi_durable_native_delete_unsupported`. Use the `pi` entry; the retired Pi 0.85 adapter is no longer shipped.
+
+`onNativeEvent` and the `pi/` notifications retain Host's Pi 1.2 event shapes.
+Pi removed `watchEvents()` in 1.5. Host derives streaming progress from the public conversation view and final entries, nested tool results and task outcomes from stored commits. The callback is attached before Host submits the turn. See the [1.2 event definitions](https://github.com/earendil-works/pi/blob/v1.2.0/packages/durable/src/harness/events.ts) and [upstream migration notes](https://github.com/earendil-works/pi/blob/v1.6.0/packages/durable/CHANGELOG.md#150---2026-11-02).
+
 
 ### Hermes profile and interactions
 
