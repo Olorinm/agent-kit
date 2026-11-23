@@ -1,16 +1,33 @@
+import { execFileSync } from "node:child_process";
+import { createRequire } from "node:module";
 import assert from "node:assert/strict";
 import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import test from "node:test";
 import { ConnectorError, ConnectorService, Sealer, Store, browserConnector } from "../dist/index.js";
 import { parseCommand } from "../dist/connectors/browser/command.js";
-import { allowedUrl, siteOf } from "../dist/connectors/browser/runtime.js";
+import { agentBrowserBinary, allowedUrl, siteOf } from "../dist/connectors/browser/runtime.js";
 
 const ACCOUNT = "0123456789abcdef0123456789abcdef";
 const TOKEN = "cf_token_0123456789abcdefghij";
 const alice = { agentId: "agent-a", owner: "@alice", connections: ["web"], tokenId: "t" };
 const PNG = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3]);
+
+test("the connector runs the native agent-browser supplied by its optional platform package", t => {
+  const require = createRequire(import.meta.url);
+  const manifest = require.resolve("agent-browser/package.json");
+  const { nativeTarget, platformPackageBinary } = require("agent-browser/scripts/native.js");
+  const target = nativeTarget();
+  if (!target) return t.skip("agent-browser does not publish for this platform");
+  const executable = platformPackageBinary(dirname(manifest), target);
+  assert.ok(executable, "expected the pinned optional platform package");
+  const directory = mkdtempSync(join(tmpdir(), "agent-browser-native-"));
+  t.after(() => rmSync(directory, { recursive: true, force: true }));
+  const binary = agentBrowserBinary(directory);
+  assert.ok(binary === executable || dirname(binary) === directory);
+  assert.equal(execFileSync(binary, ["--version"], { encoding: "utf8" }).trim(), "agent-browser " + require(manifest).version);
+});
 
 /** Fake agent-browser: one remote page per session, recording every invocation with its environment. */
 function fakeCli() {
