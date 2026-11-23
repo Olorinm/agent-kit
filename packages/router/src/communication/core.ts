@@ -383,16 +383,17 @@ export class CommunicationCore {
           value.source.event ? JSON.stringify(value.source.event) : "",
           ...(value.source.attachments ?? []).map((item) => `附件：${item.name} (${item.mediaType})`)].filter(Boolean).join("\n");
         if (Buffer.byteLength(text) > 24_000) text = Buffer.from(text).subarray(0, 23_500).toString("utf8") + "\n[消息上下文已截短；原始消息可通过 channel message 工具读取。]";
-        // Execution tools need provider IDs; the internal session ID cannot fetch channel history.
-        // Select routing facts explicitly: raw events and reply data may contain provider secrets.
-        const channelContext = { channel: this.connection(value.connectionId).adapter.kind, connectionId: value.connectionId,
+        // Routing facts reach the model only where it needs them: a group, where who spoke and which room matter,
+        // and a quoted message, whose ID the channel tool reads history with. A direct chat's IDs repeat its session.
+        const needsRouting = value.source.scope === "group" || Boolean(value.source.quoted?.messageId);
+        const channelContext = needsRouting ? { channel: this.connection(value.connectionId).adapter.kind, connectionId: value.connectionId,
           scope: value.source.scope, conversationId: value.replyRoute.target, messageId: value.replyRoute.messageId,
-          senderId: value.source.sender, ...(value.source.quoted?.messageId ? { quotedMessageId: value.source.quoted.messageId } : {}) };
+          senderId: value.source.sender, ...(value.source.quoted?.messageId ? { quotedMessageId: value.source.quoted.messageId } : {}) } : undefined;
         // The window's context id (window 1 is the session key), so a reset starts a new Host session.
         const contextId = ledger.contextFor(value.conversationId);
         const request = SendMessageRequest.fromJSON({ message: { messageId: `channel-${id}`, contextId,
           ...(resume ? { taskId: previous!.id } : {}), role: "ROLE_USER",
-          parts: [{ text }, { text: `Channel context (provider routing IDs): ${JSON.stringify(channelContext)}` }] }, configuration: { returnImmediately: true } });
+          parts: [{ text }, ...(channelContext ? [{ text: `Channel context (provider routing IDs): ${JSON.stringify(channelContext)}` }] : [])] }, configuration: { returnImmediately: true } });
         // A reset or purge that ran during the awaits above dropped this input; it must not start now.
         if (!["queued", "starting"].includes(String(ledger.input(id)?.state))) continue;
         // Both steps are independently durable. The stable message ID closes the restart window: after a crash between

@@ -44,6 +44,8 @@ export interface WorkSessionSubmission {
    * is the owner's.
    */
   sender?: WorkSender | undefined;
+  /** Request a shorter Router provenance notice for a delegated text delivery with a named agent sender. */
+  notice?: "brief" | undefined;
   /**
    * What to show for this input: a JSON object the product defines, at most 64,000 bytes serialized. For example the
    * message as its sender wrote it, when `input` is the text written for the model. It is recorded on the input event
@@ -249,6 +251,7 @@ export class WorkSessions {
         ...(input.inputItems ? { inputItems: input.inputItems } : {}),
         ...(input.settings ? { settings: input.settings } : {}), ...(input.mode ? { mode: input.mode } : {}),
         ...(sender ? { sender } : {}),
+        ...(input.notice === undefined ? {} : { notice: input.notice }),
       } satisfies WorkInput);
       this.store.set("work_session_events", input.eventId, { eventId: input.eventId, sessionId, taskId: task.id, hash,
         ...(route ? { reply: routeFacts(route, reply!.connectionId) } : {}) } satisfies WorkEvent);

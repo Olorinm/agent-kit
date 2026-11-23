@@ -47,7 +47,8 @@ async function turn(runtime, input, options = {}) {
     sessionId: options.sessionId ?? "product",
     runId: `run-${Math.random()}`,
     input,
-    instructions: "",
+    instructions: options.instructions ?? "",
+    context: options.context,
     tools: options.tools ?? [],
     settings: options.settings,
     mode: options.mode ?? "turn",
@@ -72,6 +73,20 @@ const calls = async (log, method) =>
     .split("\n")
     .map((line) => JSON.parse(line))
     .filter((entry) => entry.method === method);
+
+test("the stable instructions reach an ACP session once; per-turn context precedes every prompt", async () => {
+  const root = await workspace(), log = join(root, "acp.log"), runtime = configured(root, {}, log);
+  try {
+    await turn(runtime, "first", { instructions: "You advise the lead.", context: "roster: one" });
+    await turn(runtime, "second", { instructions: "You advise the lead.", context: "roster: two" });
+    const prompts = (await calls(log, "session/prompt")).map((entry) =>
+      entry.params.prompt.map((item) => item.text ?? "").join("\n"));
+    assert.equal(prompts.length, 2);
+    assert.match(prompts[0], /You advise the lead\./);
+    assert.doesNotMatch(prompts[1], /You advise the lead\./);
+    assert.match(prompts[1], /roster: two/);
+  } finally { await cleanup(root, runtime); }
+});
 
 test("agy is a Host kernel with ACP profile fields and caller-selectable model, effort and config", () => {
   assert.ok(kernels.includes("agy"));
