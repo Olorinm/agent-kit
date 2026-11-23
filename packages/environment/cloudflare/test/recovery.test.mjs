@@ -58,7 +58,7 @@ test("Git, gh, DSH and Claude use the credential of their respective upstream se
     assert.equal((await dispatch(url, method)).status, 200, url);
     const { request, options, body } = requests.at(-1);
     assert.equal(options.redirect, "manual");
-    const github = new URL(url).hostname.endsWith("github.com");
+    const github = ["github.com", "api.github.com", "uploads.github.com"].includes(new URL(url).hostname);
     assert.equal(request.headers.get("authorization"), github ? expected : null);
     assert.equal(request.headers.get("x-api-key"), github ? null : expected);
     assert.equal(request.headers.get("cookie"), null);
