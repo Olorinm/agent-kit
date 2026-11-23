@@ -22,8 +22,8 @@
     "docs"
   ],
   "allowScripts": {
-    "@larksuite/cli@1.0.97": true,
-    "agent-browser@0.41.2": false
+    "@larksuite/cli@1.0.100": true,
+    "agent-browser@0.43.0": false
   },
   "exports": {
     "./guides": {

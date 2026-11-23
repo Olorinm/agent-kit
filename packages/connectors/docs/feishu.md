@@ -1,6 +1,6 @@
 # Feishu connector
 
-Feishu/Lark through the official [lark-cli](https://github.com/larksuite/cli) (pinned `@larksuite/cli@1.0.97`),
+Feishu/Lark through the official [lark-cli](https://github.com/larksuite/cli) (pinned `@larksuite/cli@1.0.100`),
 acting as the linked owner's user identity.
 
 ## Tools
