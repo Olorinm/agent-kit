@@ -8,14 +8,14 @@
   ],
   "turns": [
     "cab2a4eefb913cb5f2640d1e6e278d7c85baddcb70edcfa2d5b48fb81c5303a5",
-    "358c12bd502a47cab9d2d15ef20796a3590fbcfcfc43632f088aaa6f128e5023",
-    "2514bcbe35c42c04a4e2ea09be95f35f921c30fbd0fa91fa54176887eb971755",
+    "6cd5f2ecd48aa8f9c95f1a4a9da916f1822616474555121d3428bdd28d924ba2",
+    "1ac1bf6a15c97e916b533cea79640169025b6d2ed8a7e1695487c05d55368922",
     "7a162849c39ec8625ccdaeca790be1de4264b1f2de5408c5b709891708d383be"
   ],
   "delivered": [
     "hello",
-    "{\"namespace\":\"mau\",\"name\":\"proactive_work\",\"retain\":false,\"output\":\"{\\\"source\\\":{\\\"kind\\\":\\\"schedule\\\",\\\"reference\\\":\\\"rule-1\\\"},\\\"message\\\":\\\"Check the inbox.\\\"}\"}",
-    "{\"namespace\":\"mau\",\"name\":\"work_sessions\",\"retain\":false,\"output\":\"{\\\"source\\\":{\\\"kind\\\":\\\"delegation\\\",\\\"reference\\\":\\\"call-1\\\"},\\\"message\\\":\\\"Summarize the report.\\\"}\"}",
+    "{\"namespace\":\"mau\",\"name\":\"proactive_work\",\"retain\":false,\"output\":\"{\\\"from\\\":\\\"schedule\\\",\\\"message\\\":\\\"Check the inbox.\\\"}\"}",
+    "{\"namespace\":\"mau\",\"name\":\"work_sessions\",\"retain\":false,\"output\":\"{\\\"from\\\":\\\"system\\\",\\\"message\\\":\\\"Summarize the report.\\\"}\"}",
     "Write the notes."
   ],
   "bindings": "7737065bf45dc05e7413e0897652c3bf3061309413edc0db2ea905e32d1a51a5"

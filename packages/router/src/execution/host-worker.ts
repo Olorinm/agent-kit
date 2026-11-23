@@ -12,7 +12,7 @@ import type { HostTools, HostToolResult } from "./tools.js";
 import type { WorkDependencyWait } from "./sessions.js";
 import { AgentLedger, type TurnState } from "../ledger/ledger.js";
 import { cardBody, cardKind, cardOriginLine, STEER_COMMAND, STOP_COMMAND, type CardOrigin, type LedgerControl } from "../ledger/control.js";
-import { textDelivery, toolDelivery, type WorkInput, type WorkSender } from "./delivery.js";
+import { delivered, toolDelivery, type WorkInput, type WorkSender } from "./delivery.js";
 
 interface ToolReceipt { hash: string; phase: "executing" | "completed" | "uncertain"; result?: HostToolResult; }
 
@@ -237,7 +237,7 @@ export class HostWorker {
             this.store.set("execution_sessions", claim.contextId, { ...savedSession, channelTools: withTools });
           const admission = authored?.admission ?? this.options.admission?.(claim.contextId, claim.id);
           const delivered = admission && admission.kind !== "owner" && authored?.mode !== "compact"
-            ? await this.deliveryInput(runtimeId, input, admission, authored?.inputItems, authored?.sender, authored?.notice) : undefined;
+            ? await this.deliveryInput(runtimeId, input, admission, authored?.inputItems, authored?.sender, authored?.json) : undefined;
           // The agent's default settings apply to every turn; a turn's own selection wins. Compaction takes none.
           const defaults = authored?.mode === "compact" ? undefined : this.store.get<Record<string, unknown>>(DEFAULT_SETTINGS, "default");
           const settings = defaults || authored?.settings ? { ...defaults, ...authored?.settings } : undefined;
@@ -349,15 +349,15 @@ export class HostWorker {
     } catch { return true; }
   }
   /**
-   * Delegated and scheduled input is never a human user message. A runtime that accepts native tool output gets it as
-   * one; any other runtime gets the text with a fixed notice and its source (`textDelivery`).
+   * Delegated and scheduled input is never a human user message: it is one JSON object that says who it is from
+   * (`delivered`). A runtime that accepts native tool output gets it as one; any other runtime gets it as its text.
    */
   private async deliveryInput(runtimeId: string, input: string, admission: HostAdmission, items?: Record<string, unknown>[],
-    sender?: WorkSender, notice?: "brief"): Promise<{ input: string; toolOutput?: Record<string, unknown> }> {
+    sender?: WorkSender, json?: boolean): Promise<{ input: string; toolOutput?: Record<string, unknown> }> {
     if (!(await this.acceptsToolOutput(runtimeId))) {
       // Typed items are a native input form too; a text delivery cannot carry them.
       if (items?.length) throw new WorkError("native_tool_delivery_typed_input_unsupported", 422);
-      return { input: textDelivery(admission, input, sender, notice) };
+      return { input: delivered(admission, input, sender, json) };
     }
     let skills: Array<{ name: string; path: string }> | undefined;
     if (items?.length) {
@@ -376,7 +376,7 @@ export class HostWorker {
     // Native tool output is deliberately distinct from a human user message. Native Codex
     // cannot combine it with typed skill input; verified skill references remain evidence
     // for on-demand loading, not a claim that native explicit skill injection occurred.
-    return { input: "", toolOutput: toolDelivery(admission, input, sender, skills) };
+    return { input: "", toolOutput: toolDelivery(admission, input, sender, json, skills) };
   }
   private async recordFailure(error: unknown) {
       this.lastError = error instanceof Error && /^[a-z0-9_]+$/.test(error.message) ? error.message : "host_observation_failed";

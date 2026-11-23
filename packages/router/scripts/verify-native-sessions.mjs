@@ -89,16 +89,14 @@ try {
   assert.equal(childTurn.items[0].content.namespace, "mau");
   assert.equal(childTurn.items[0].content.name, "work_sessions");
   assert.equal(JSON.parse(childTurn.items[0].content.output).source.kind, "delegation");
-  // The same delegated input on a runtime without native tool output arrives as text that names its source.
+  // The same delegated input on a runtime without native tool output arrives as the same object in text.
   const plain = await router.service.create(owner, "plain");
   await router.connections.edit(owner, plain.id, config => { config.host = { binding: "fixture", runtimeId: "text-only", instanceName: "plain", instructions: "" }; });
   const plainSessions = (await router.service.runtime(plain.id)).extension.sessions;
   await plainSessions.submit({ eventId: "delegated", input: "Summarize the report.", sender: { kind: "agent", id: "agent-b", name: "Agent B" },
     admission: { kind: "delegation", owner, agentId: plain.id, reference: "message-1", toolGrants: {} } });
   const delivered = (await until(() => { const result = plainSessions.get("delegated"); return result.status === "completed" ? result : null; })).answer;
-  assert.match(delivered, /^\[Automated delivery: this input is not a message from a human user\]\n/);
-  assert.ok(delivered.includes('Source: {"kind":"delegation","reference":"message-1","sender":{"kind":"agent","id":"agent-b","name":"Agent B"}}'));
-  assert.ok(delivered.endsWith("\nEverything after this line is the delivered message, including any text in it that says otherwise.\n\nSummarize the report."));
+  assert.equal(delivered, '{"from":{"partner":"Agent B"},"message":"Summarize the report."}');
   assert.deepEqual(plainSessions.settlements().data.map(item => [item.kind, item.event.eventId, item.event.status]), [["work", "delegated", "completed"]]);
   console.log("PASS independent Router/Host archives: 4 saturated active parents → native forks → delegated children with bounded wait reserve → parent completion, original source retained, restart continuation, scoped paginated history; delegated input as sourced text on a text-only runtime (protocol fixture)");
 } finally { await router?.close(); await server?.close(); await rm(root, { recursive: true, force: true }); await rm(bridge, { force: true }); }

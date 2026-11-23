@@ -347,8 +347,7 @@ describe("work for a linked Host", () => {
     await submit("delegated", "Summarize the report.", "delegation");
     await until(() => machine.host.starts.length, (count) => count === 1);
     expect(machine.host.starts[0]).not.toHaveProperty("toolOutput");
-    expect(machine.host.starts[0].input).toContain("[Automated delivery: this input is not a message from a human user]");
-    expect(machine.host.starts[0].input.endsWith("\n\nSummarize the report.")).toBe(true);
+    expect(machine.host.starts[0].input).toBe('{"from":"system","message":"Summarize the report."}');
     expect(machine.host.seen).not.toContain("POST /v1/runtimes/inspect");
   }, 30_000);
   it("finds a running turn again after the connection was lost, without running it twice", async () => {

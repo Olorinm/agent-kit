@@ -1,5 +1,4 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { TEXT_DELIVERY_BOUNDARY, TEXT_DELIVERY_NOTICE } from "../src/execution/delivery.js";
 import { admission, harness, WorkHost, type Harness } from "./fixtures/work-harness.js";
 import { owner, setup as service, until } from "./ledger-fixture.js";
 
@@ -11,7 +10,7 @@ const setup = async (nativeItems?: "supported" | "unsupported"): Promise<Harness
 };
 
 describe("the sender of a submitted input", () => {
-  it("names the agent that sent the input: in the ledger, in the tool output and in the text notice", async () => {
+  it("names the agent that sent the input: in the ledger, in the tool output and in the text", async () => {
     const sender = { kind: "agent" as const, id: "partner-b", name: "Partner B" };
     const submission = { eventId: "from-partner", input: "Summarize the report.", admission: admission("delegation"), sender };
     const native = await setup("supported");
@@ -20,14 +19,14 @@ describe("the sender of a submitted input", () => {
     await expect(native.sessions.submit({ ...submission, sender: { ...sender, name: "Someone else" } })).rejects.toThrow("work_event_id_reused");
     await native.round();
     expect(native.host.starts[0]!.toolOutput).toEqual({ namespace: "mau", name: "work_sessions", retain: false,
-      output: "{\"source\":{\"kind\":\"delegation\",\"reference\":\"reference-1\",\"sender\":{\"kind\":\"agent\",\"id\":\"partner-b\",\"name\":\"Partner B\"}},\"message\":\"Summarize the report.\"}" });
+      output: "{\"from\":{\"partner\":\"Partner B\"},\"message\":\"Summarize the report.\"}" });
     const [event] = native.ledger.events(submitted.sessionId).filter((item) => item.kind === "message");
     expect(event).toMatchObject({ role: "user", senderType: "agent", senderId: "partner-b", turnId: submitted.taskId,
       body: { text: "Summarize the report.", origin: "delegation", reference: "reference-1", sender } });
     const text = await setup("unsupported");
     await text.sessions.submit(submission);
     await text.round();
-    expect(text.host.starts[0]!.input).toBe(`${TEXT_DELIVERY_NOTICE}\nSource: {"kind":"delegation","reference":"reference-1","sender":{"kind":"agent","id":"partner-b","name":"Partner B"}}\n${TEXT_DELIVERY_BOUNDARY}\n\nSummarize the report.`);
+    expect(text.host.starts[0]!.input).toBe('{"from":{"partner":"Partner B"},"message":"Summarize the report."}');
     // Without a sender the input stays a system event of its admission.
     const plain = await text.sessions.submit({ eventId: "plain", input: "Check.", admission: admission("schedule") });
     expect(text.ledger.events(plain.sessionId).find((item) => item.kind === "message")).toMatchObject({ senderType: "system", senderId: "schedule", body: { text: "Check.", origin: "schedule", reference: "reference-1" } });
@@ -58,7 +57,6 @@ describe("the sender of a submitted input", () => {
     // The agent's own answers keep its own name, and the turn answered once.
     expect(listed.filter((event) => event.kind === "message" && event.role === "assistant").map((event) => event.sender)).toEqual([
       { type: "agent", id: t.agent.id, name: "helper" }, { type: "agent", id: t.agent.id, name: "helper" }]);
-    expect(t.host.starts.map((start) => JSON.parse(String(start.toolOutput!.output)).source)).toEqual([
-      { kind: "delegation", reference: "message-1", sender: { kind: "agent", id: "partner-b", name: "Partner B" } }, { kind: "schedule", reference: "rule-1" }]);
+    expect(t.host.starts.map((start) => JSON.parse(String(start.toolOutput!.output)).from)).toEqual([{ partner: "Partner B" }, "schedule"]);
   }, 30_000);
 });

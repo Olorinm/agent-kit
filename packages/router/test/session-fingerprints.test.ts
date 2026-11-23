@@ -24,7 +24,9 @@ import { CHAT, withChat } from "./fixtures/chat-channel.js";
  *
  * `fixtures/session-fingerprints.json` was written by this test on the commit before those options existed
  * (`UPDATE_SESSION_FINGERPRINTS=1`), for the fixed agent and the four kinds of turn below. Regenerate it only for a
- * change that is meant to move existing sessions, and say so in the changelog.
+ * change that is meant to move existing sessions, and say so in the changelog. It was regenerated once since, when
+ * scheduled and delegated input became `{ from, message }`: the two delivered inputs and their turns changed, the
+ * scope, the session definitions and the bindings did not.
  */
 const FIXTURE = fileURLToPath(new URL("./fixtures/session-fingerprints.json", import.meta.url));
 const agent: ManagedAgent = { id: "11111111-1111-4111-8111-111111111111", owner: "@alice:example.test", name: "helper",

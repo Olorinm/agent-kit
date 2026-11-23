@@ -179,7 +179,7 @@ describe("native session coordination", () => {
     await h.worker.tick();
     expect(h.host.starts[0]).toMatchObject({ input: "", toolOutput: { namespace: "mau", name: "proactive_work", retain: false } });
     expect(h.host.starts[0]).not.toHaveProperty("inputItems");
-    expect(JSON.parse(h.host.starts[0]!.toolOutput!.output as string)).toMatchObject({ source: { kind: "schedule" }, message: "inspect", skills: [{ name: "plan", path: "/trusted/plan/SKILL.md" }] });
+    expect(JSON.parse(h.host.starts[0]!.toolOutput!.output as string)).toMatchObject({ from: "schedule", message: "inspect", skills: [{ name: "plan", path: "/trusted/plan/SKILL.md" }] });
     expect(h.host.methods).toContainEqual({ runtimeId: "codex", method: "skills/list", params: { forceReload: true, cwds: ["/trusted/workspace"] } });
     await h.sessions.submit({ eventId: "invalid", input: "image", admission: { ...admission, kind: "delegation" }, inputItems: [{ type: "image", imageUrl: "data:irrelevant" }] });
     await h.worker.tick(); expect(h.host.starts).toHaveLength(1);

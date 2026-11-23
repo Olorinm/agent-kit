@@ -5,6 +5,11 @@ tag publishes a GitHub Release whose notes are this file's section for that vers
 section in the version-bump commit before tagging. Changes up to the versions listed under
 0.8.0-alpha.1 are in each package's own `CHANGELOG.md`.
 
+## [Unreleased]
+
+- Router: deliver scheduled and delegated input as one JSON object, `{ "from": …, "message": … }`, as a native tool output where the runtime takes one and as text otherwise. The fixed notice, the `Source:` line and the boundary line of a text delivery are gone, and so are `source.kind`, `source.reference` and the sender's id in what a model reads. A session that exists keeps its definition; its next delivered turn has the new object.
+- Router: `WorkSessions.submit` accepts `json: true` with the text of a JSON object as `input`. Its members are delivered beside `from` in place of `message`. `notice` is removed.
+
 ## [0.11.0-alpha.15] - 2026-11-23
 
 - Send an ACP session its stable instructions once per process: when the session is created or resumed, and again after a compaction. Per-turn context still precedes every prompt.

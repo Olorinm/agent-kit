@@ -9,7 +9,7 @@ import { runtimeWorkingDirectory } from "./host.js";
 import { DEFAULT_SETTINGS, type ExecutionSession, type RunBinding } from "./host-worker.js";
 import { digest, key } from "./protocol.js";
 import { CliWork, WorkError } from "./work.js";
-import type { WorkInput, WorkSender } from "./delivery.js";
+import { jsonObject, type WorkInput, type WorkSender } from "./delivery.js";
 import { closeRequest, createRequest, displaySchema, displayTooLarge, expireRequests, ownerRequestSchema, requestCardId, requestDeliveryId,
   type OwnerRequestInput, type WorkDisplay } from "../ledger/requests.js";
 import { AgentLedger, legacySession, type CardKind } from "../ledger/ledger.js";
@@ -40,12 +40,15 @@ export interface WorkSessionSubmission {
   reply?: { connectionId?: string | undefined } | undefined;
   /**
    * Who the input is from when it is another agent's message. It is recorded as the sender of the input event and
-   * told to the model with the source of the delivery. Only for delegated and scheduled work: the owner's own work
+   * told to the model as `from` of the delivery. Only for delegated and scheduled work: the owner's own work
    * is the owner's.
    */
   sender?: WorkSender | undefined;
-  /** Request a shorter Router provenance notice for a delegated text delivery with a named agent sender. */
-  notice?: "brief" | undefined;
+  /**
+   * `input` is the text of a JSON object. Its members are delivered to the model beside `from` in place of `message`.
+   * Only for delegated and scheduled work.
+   */
+  json?: true | undefined;
   /**
    * What to show for this input: a JSON object the product defines, at most 64,000 bytes serialized. For example the
    * message as its sender wrote it, when `input` is the text written for the model. It is recorded on the input event
@@ -216,6 +219,7 @@ export class WorkSessions {
     const reply = input.reply === undefined ? undefined : replySchema.parse(input.reply);
     const sender = input.sender === undefined ? undefined : senderSchema.parse(input.sender);
     if (sender && input.admission.kind === "owner") throw new WorkError("work_sender_admission_mismatch", 403);
+    if (input.json && (input.admission.kind === "owner" || !jsonObject(input.input))) throw new WorkError("work_input_not_delivered_json", 400);
     const display = input.display === undefined ? undefined : displaySchema.parse(input.display);
     if (display && displayTooLarge(display)) throw new WorkError("work_display_too_large", 413);
     if (reply) {
@@ -251,7 +255,7 @@ export class WorkSessions {
         ...(input.inputItems ? { inputItems: input.inputItems } : {}),
         ...(input.settings ? { settings: input.settings } : {}), ...(input.mode ? { mode: input.mode } : {}),
         ...(sender ? { sender } : {}),
-        ...(input.notice === undefined ? {} : { notice: input.notice }),
+        ...(input.json ? { json: true as const } : {}),
       } satisfies WorkInput);
       this.store.set("work_session_events", input.eventId, { eventId: input.eventId, sessionId, taskId: task.id, hash,
         ...(route ? { reply: routeFacts(route, reply!.connectionId) } : {}) } satisfies WorkEvent);

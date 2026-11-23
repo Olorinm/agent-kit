@@ -2045,17 +2045,22 @@ on the others the run was refused (`native_tool_output_unsupported`).
   refusal agree. The decision is made in Router, because the Host does not know that an input is a delegation and must
   not turn a tool output into user text on its own. The answer is not cached, so a runtime that changes is noticed.
 - Only an explicit `unsupported` selects the text form. A runtime that accepts native input items, a Host that does not
-  describe its runtimes and a Host that does not answer all get the same tool output as before, byte for byte, so no
-  existing deployment gains a way to fail.
-- A runtime that reports `unsupported` gets the input as text behind a fixed notice (`src/execution/delivery.ts`): not
-  a message from a human user, no new human authorization, then the source (`kind`, `reference`, optional `sender`) as
-  one line of JSON, then a line saying that everything after it is the delivered message, then the message as the last
-  part. Typed input items cannot be carried and are refused before submission.
-- The notice is a statement to the model, not an enforced boundary: a text-only runtime has no input channel that a
+  describe its runtimes and a Host that does not answer all get the tool output, so no existing deployment gains a
+  way to fail.
+- Both forms carry the same JSON object (`src/execution/delivery.ts`): `from`, then the product's part. `from` is
+  `{ "partner": name }` for a submission with a sender, `"schedule"` for scheduled work and `"system"` otherwise. The
+  product's part is `message`, its text, or the members of the object a `json: true` submission gives as `input`.
+  Router writes `from` itself and the product's part is JSON values, so nothing in it can pass for `from`. A runtime
+  that reports `unsupported` gets the object as its text; typed input items cannot be carried and are refused before
+  submission.
+- Router adds no sentence to the object. An earlier form put a fixed notice, a source line and a boundary line before
+  the text; they repeated what `from` says, and what a model does with delivered input is the product's to say once,
+  in its instructions or a tool's description.
+- The object is a statement to the model, not an enforced boundary: a text-only runtime has no input channel that a
   message cannot imitate. Authorization stays where it was, in the admission and the grants the product enforces.
 - `submit` accepts `sender: { kind: "agent", id, name }`. It is stored on the input event (`sender_type = 'agent'`,
-  `sender_id`, `body.sender`), returned by the web API as the event's `sender` actor, and included in the source of both
-  delivery forms. It is refused on an owner admission.
+  `sender_id`, `body.sender`), returned by the web API as the event's `sender` actor, and its name is `from.partner`
+  of the delivery. It is refused on an owner admission.
 
 ### 20.6 The owner conversation as a work target
 
