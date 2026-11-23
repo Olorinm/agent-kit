@@ -4,6 +4,7 @@ import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
 import { ConnectorError } from "../../connector.js";
 
+const require = createRequire(import.meta.url);
 const API = "https://api.cloudflare.com/client/v4";
 
 export interface BrowserRunAccount { accountId: string; token: string }
@@ -72,7 +73,6 @@ export type AgentBrowserRunner = (args: string[], options: CliOptions) => Promis
 
 /** Use the pinned CLI's platform and libc detection. Optional binary packages work with npm install scripts disabled. */
 export function agentBrowserBinary(privateDirectory: string): string {
-  const require = createRequire(import.meta.url);
   let packaged: string | null = null;
   let name: string;
   try {
@@ -97,7 +97,9 @@ const MAX_OUTPUT = 32_000_000;
 
 /** Runs the binary with an argument array: no shell, no user-wide configuration, stdin only when given. */
 export const runAgentBrowser = (binary: () => string): AgentBrowserRunner => (args, options) => new Promise((resolve, reject) => {
-  const child = spawn(binary(), args, { cwd: options.cwd, env: options.env, signal: options.signal,
+  // Platform packages contain only the executable. The published guides live in the main package.
+  const skills = join(dirname(require.resolve("agent-browser/package.json")), "skill-data");
+  const child = spawn(binary(), args, { cwd: options.cwd, env: { ...options.env, AGENT_BROWSER_SKILLS_DIR: skills }, signal: options.signal,
     timeout: options.timeout, stdio: ["pipe", "pipe", "pipe"], windowsHide: true });
   const out: Buffer[] = [], err: Buffer[] = [];
   let size = 0, overflow = false;
