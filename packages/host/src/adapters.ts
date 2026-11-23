@@ -19,6 +19,8 @@ export interface AgentsByKernel {
   pi: PiAgent;
   opencode: AcpAgent;
   kimi: AcpAgent;
+  agy: AcpAgent;
+  dsh: AcpAgent;
   hermes: HermesAgent | HermesGatewayAgent;
   openclaw: OpenClawAgent;
 }
@@ -30,6 +32,8 @@ type ConfigByKernel = {
     options?: Omit<AcpAgentOptions, "command"> & { command?: string };
   };
   kimi: { options?: Omit<AcpAgentOptions, "command"> & { command?: string } };
+  agy: { options?: Omit<AcpAgentOptions, "command"> & { command?: string } };
+  dsh: { options?: Omit<AcpAgentOptions, "command"> & { command?: string } };
   hermes:
     | { transport?: "stdio"; options: HermesAgentOptions }
     | { transport: "acp"; options?: HermesGatewayAgentOptions };
@@ -67,6 +71,12 @@ export function createAgent(config: AgentConfig): AgentsByKernel[Kernel] {
         ...config.options,
         command: config.options?.command ?? config.kernel,
         compaction: config.kernel,
+      });
+    case "agy":
+    case "dsh":
+      return new AcpAgent({
+        ...config.options,
+        command: config.options?.command ?? config.kernel,
       });
     case "hermes":
       return config.transport === "acp"

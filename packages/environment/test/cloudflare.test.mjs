@@ -151,3 +151,33 @@ test("CloudflareProvider stores and deletes gateway model credentials and passes
     await assert.rejects(p.putModelCredential("../bad", { service: "openai", mode: "api_key", apiKey: "sk-1" }), { code: "invalid_credential_id" });
   });
 });
+test("CloudflareProvider stores a Gemini API key as a google credential and selects it on create and resume", async () => {
+  const sent = [];
+  let service = "google";
+  await withServer(async (req, res) => {
+    const chunks = []; for await (const c of req) chunks.push(c);
+    sent.push([req.method, req.url, Buffer.concat(chunks).toString(), req.headers["if-none-match"]]);
+    if (req.url.startsWith("/v1/model-credentials/")) {
+      res.end(JSON.stringify({ id: "gemini-main", service, mode: "api_key", renewable: false, updatedAt: "2026-11-23T00:00:00.000Z" }));
+      return;
+    }
+    res.end(JSON.stringify({ id, state: "running", template: "node24", metadata: {} }));
+  }, async p => {
+    const input = { service: "google", mode: "api_key", apiKey: "AIza-fixture" };
+    const info = await p.putModelCredential("gemini-main", input);
+    assert.deepEqual(info, { id: "gemini-main", service: "google", mode: "api_key", renewable: false, updatedAt: "2026-11-23T00:00:00.000Z" });
+    await p.putModelCredential("gemini-main", input, { ifAbsent: true });
+    const selection = { modelServices: ["openai", "google"], modelCredentials: { openai: "codex-main", google: "gemini-main" } };
+    await p.create({ template: "node24", ...selection });
+    await p.resume(id, 900, selection);
+    assert.deepEqual(sent, [
+      ["PUT", "/v1/model-credentials/gemini-main", JSON.stringify(input), undefined],
+      ["PUT", "/v1/model-credentials/gemini-main", JSON.stringify(input), "*"],
+      ["POST", "/v1/environments", JSON.stringify({ template: "node24", ...selection }), undefined],
+      ["POST", `/v1/environments/${id}/resume`, JSON.stringify({ timeoutSeconds: 900, ...selection }), undefined],
+    ]);
+    // An ID that already holds another service's credential is not taken for the one that was sent.
+    service = "openai";
+    await assert.rejects(p.putModelCredential("gemini-main", input, { ifAbsent: true }), { code: "invalid_response" });
+  });
+});

@@ -1,4 +1,4 @@
-import { jwtPayload } from "./egress.mjs";
+import { githubDestination, jwtPayload } from "./egress.mjs";
 
 export const CREDENTIAL_ID = /^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$/;
 export const DEFAULT_CODEX_CLIENT_ID = "app_EMoamEEZ73f0CkXaXp7hrann";
@@ -59,6 +59,63 @@ export function parseOpenAiCredential(body) {
     return { service: "openai", mode: "api_key", apiKey: body.apiKey };
   }
   throw new Error("invalid_model_credential");
+}
+
+/** The one host a held Gemini API key is sent to. */
+export const GOOGLE_API_HOST = "generativelanguage.googleapis.com";
+
+/**
+ * Validates a Gemini API key uploaded by the trusted operator, for Antigravity (`agy`) with `modelProvider: "gemini"`.
+ * @param {any} body
+ * @returns {{ service: "google"; mode: "api_key"; apiKey: string }}
+ */
+export function parseGoogleCredential(body) {
+  if (!body || typeof body !== "object" || Array.isArray(body) || body.service !== "google" || body.mode !== "api_key")
+    throw new Error("invalid_model_credential");
+  for (const key of Object.keys(body))
+    if (!["service", "mode", "apiKey"].includes(key))
+      throw new Error("invalid_model_credential");
+  if (typeof body.apiKey !== "string" || !SECRET.test(body.apiKey) || body.apiKey.length > 4096)
+    throw new Error("invalid_model_credential");
+  return { service: "google", mode: "api_key", apiKey: body.apiKey };
+}
+
+/** Validates an uploaded model credential of any service the gateway can hold. The service is part of what is stored. */
+export function parseModelCredential(body) {
+  if (body?.service === "github" || body?.service === "deepseek" || body?.service === "anthropic") {
+    const github = body.service === "github";
+    const mode = github ? "token" : "api_key";
+    const field = github ? "accessToken" : "apiKey";
+    if (body.mode !== mode || Object.keys(body).some(key => !["service", "mode", field].includes(key)) ||
+        typeof body[field] !== "string" || !/^[\x21-\x7e]{1,4096}$/.test(body[field]))
+      throw new Error("invalid_model_credential");
+    return github ? /** @type {const} */ ({ service: "github", mode: "token", accessToken: body.accessToken })
+      : /** @type {const} */ ({ service: /** @type {"deepseek" | "anthropic"} */ (body.service), mode: "api_key", apiKey: body.apiKey });
+  }
+  if (body && typeof body === "object" && !Array.isArray(body) && body.service === "google") return parseGoogleCredential(body);
+  return parseOpenAiCredential(body);
+}
+
+/** Inject only after the environment's outbound rule has selected this exact service and destination. */
+export function injectServiceAuth(request, service, cred) {
+  if (cred?.service !== service) return { error: "model_credential_service_mismatch" };
+  const target = new URL(request.url);
+  const headers = new Headers(request.headers);
+  for (const name of ["host", "cookie", "authorization", "proxy-authorization", "x-api-key"]) headers.delete(name);
+  for (const name of [...target.searchParams.keys()]) {
+    if (["access_token", "oauth_token", "api_key", "key"].includes(name.toLowerCase())) target.searchParams.delete(name);
+  }
+  if (service === "github" && githubDestination(target, request.method)) {
+    if (cred.mode !== "token" || !cred.accessToken) return { error: "model_credential_invalid" };
+    const auth = target.hostname === "github.com"
+      ? "Basic " + btoa("x-access-token:" + cred.accessToken) : "Bearer " + cred.accessToken;
+    headers.set("Authorization", auth);
+  } else if ((service === "deepseek" && target.origin === "https://api.deepseek.com") ||
+             (service === "anthropic" && target.origin === "https://api.anthropic.com")) {
+    if (cred.mode !== "api_key" || !cred.apiKey) return { error: "model_credential_invalid" };
+    headers.set("x-api-key", cred.apiKey);
+  } else return { error: "destination_not_allowed" };
+  return { headers, url: target.href };
 }
 
 /** Public metadata view of a stored credential. Never contains tokens or API keys. */
@@ -128,6 +185,8 @@ export async function refreshOpenAiToken(stored, fetchImpl = fetch, now = Date.n
  * enforcing mode and modelAccounts constraints before the request leaves the gateway.
  */
 export function injectOpenAiAuth(url, headers, cred, allowedAccounts) {
+  // An ID that names another service's credential is refused: a Gemini key is never sent to an OpenAI host.
+  if (cred?.service !== "openai") return { error: "model_credential_service_mismatch" };
   const host = new URL(url).hostname;
   const allowed = allowedAccounts && Object.hasOwn(allowedAccounts, "openai") ? allowedAccounts.openai : undefined;
   if (cred.mode === "chatgpt") {
@@ -149,6 +208,28 @@ export function injectOpenAiAuth(url, headers, cred, allowedAccounts) {
     return { headers: next };
   }
   return { error: "model_credential_invalid" };
+}
+
+/** Query parameters by which a Google API request can carry a credential of its own. */
+const GOOGLE_CREDENTIAL_PARAMETERS = ["key", "access_token", "oauth_token"];
+/**
+ * Replaces whatever credential the guest sent to the Gemini API with the gateway-held key. The guest's
+ * `X-Goog-Api-Key` and `Authorization` headers and its `key`, `access_token` and `oauth_token` query parameters are
+ * removed, so a request leaves under the owner's key or not at all. Returns the URL to send as well: it changes when
+ * a query parameter was removed.
+ */
+export function injectGoogleAuth(url, headers, cred) {
+  // An ID that names another service's credential is refused: an OpenAI key or token is never sent to Google.
+  if (cred?.service !== "google") return { error: "model_credential_service_mismatch" };
+  if (cred.mode !== "api_key" || typeof cred.apiKey !== "string" || !cred.apiKey) return { error: "model_credential_invalid" };
+  const target = new URL(url);
+  if (target.hostname !== GOOGLE_API_HOST) return {};
+  const carried = [...new Set(target.searchParams.keys())].filter(name => GOOGLE_CREDENTIAL_PARAMETERS.includes(name.toLowerCase()));
+  for (const name of carried) target.searchParams.delete(name);
+  const next = new Headers(headers);
+  next.delete("Authorization");
+  next.set("X-Goog-Api-Key", cred.apiKey);
+  return { url: carried.length ? target.href : url, headers: next };
 }
 
 /** Only takes public metadata. The native CLI reads its account from the ID token. */

@@ -42,6 +42,8 @@ export interface HostServerOptions {
   eventLimit?: number;
   durableEventLimit?: number;
   interactionTimeoutMs?: number;
+  /** Product tools callable by native session ID within a trusted local sandbox. Disabled by default. */
+  sessionRelayTools?: string[];
   /** Trusted local file access is opt-in, separate from native Agent permissions. */
   workspaceFiles?: boolean;
   /** Keep an outbound connection to a Router that may exchange messages with one runtime (see docs/host-link.md). */
@@ -84,12 +86,14 @@ interface ActiveRun {
   tools: ProductTool[];
   /** Shell commands of this run that are executing now, keyed `threadId:itemId`, with their turn. */
   commands: Map<string, string>;
+  nativeSessionId?: string;
   relayed: number;
 }
-const relaySchema = z.object({
-  threadId: z.string().min(1).max(200), callId: z.string().min(1).max(200),
-  tool: z.string().min(1).max(200), input: z.json(),
-}).strict();
+const relayFields = { threadId: z.string().min(1).max(200), tool: z.string().min(1).max(200), input: z.json() };
+const relaySchema = z.union([
+  z.object({ ...relayFields, callId: z.string().min(1).max(200) }).strict(),
+  z.object({ ...relayFields, kernel: idSchema }).strict(),
+]);
 /** Tracks Codex commandExecution items so a relay request can be tied to the command that sent it. */
 function trackCommand(commands: Map<string, string>, event: { type: string; [key: string]: unknown }) {
   if (event.type !== "native.notification") return;
@@ -201,26 +205,44 @@ export async function startAgentHostServer(options: HostServerOptions) {
   };
 
   /** Runs one product tool of the active run on behalf of a shell command that is executing in it. */
-  async function relay(input: z.infer<typeof relaySchema>) {
-    const key = `${input.threadId}:${input.callId}`;
-    const find = () => [...active.values()].find((candidate) => candidate.commands.has(key));
-    // Codex may start the process before its item/started notification reaches the Host.
-    let task = find();
-    for (let waited = 0; !task && waited < 5_000; waited += 50) {
-      await new Promise((resolve) => setTimeout(resolve, 50));
+  async function relay(input: z.infer<typeof relaySchema>, peer: string | undefined) {
+    const legacy = "callId" in input;
+    const kernel = legacy ? "codex" : input.kernel;
+    const bySession = options.sessionRelayTools?.includes(input.tool) === true;
+    const key = legacy ? `${input.threadId}:${input.callId}` : "";
+    let task: ActiveRun | undefined;
+    if (bySession) {
+      if (!["127.0.0.1", "::1", "::ffff:127.0.0.1"].includes(peer ?? ""))
+        throw new HostError(403, "relay_requires_local_session");
+      const matches = [...active.values()].filter(candidate =>
+        candidate.runtime.kernel === kernel && candidate.nativeSessionId !== undefined &&
+        (kernel === "pi" ? `${candidate.runtime.id}:${candidate.nativeSessionId}` : candidate.nativeSessionId) === input.threadId);
+      if (matches.length !== 1 || matches[0]!.controller.signal.aborted)
+        throw new HostError(403, "relay_session_not_running");
+      task = matches[0]!;
+    } else {
+      if (!legacy) throw new HostError(403, "session_relay_not_enabled");
+      const find = () => [...active.values()].find(candidate => candidate.commands.has(key));
       task = find();
+      // Codex may spawn the command before the Host receives its item/started notification.
+      for (let waited = 0; !task && waited < 5_000; waited += 50) {
+        await new Promise(resolve => setTimeout(resolve, 50));
+        task = find();
+      }
+      if (!task || task.controller.signal.aborted) throw new HostError(403, "relay_command_not_running");
     }
-    if (!task || task.controller.signal.aborted) throw new HostError(403, "relay_command_not_running");
     const tool = task.tools.find((candidate) => candidate.name === input.tool && !candidate.namespace);
     if (!tool?.execute) throw new HostError(404, "relay_tool_not_available");
     if (task.relayed >= 200) throw new HostError(429, "relay_limit");
-    const callId = `relay:${input.callId}:${++task.relayed}`;
-    const context = { sessionId: task.sessionId, runId: task.record.id, threadId: input.threadId,
-      turnId: task.commands.get(key)!, signal: task.controller.signal, callId };
-    store.append(task.record, { type: "tool.started", runId: task.record.id, threadId: input.threadId, turnId: context.turnId,
+    const source = !bySession && legacy ? input.callId : task.record.id;
+    const callId = `relay:${source}:${++task.relayed}`;
+    const threadId = task.nativeSessionId ?? input.threadId;
+    const context = { sessionId: task.sessionId, runId: task.record.id, threadId,
+      turnId: task.commands.get(key) ?? "", signal: task.controller.signal, callId };
+    store.append(task.record, { type: "tool.started", runId: task.record.id, threadId, turnId: context.turnId,
       callId, tool: tool.name, input: input.input });
     const result = await tool.execute(input.input, context);
-    store.append(task.record, { type: "tool.finished", runId: task.record.id, threadId: input.threadId, turnId: context.turnId,
+    store.append(task.record, { type: "tool.finished", runId: task.record.id, threadId, turnId: context.turnId,
       callId, tool: tool.name, result });
     return { result };
   }
@@ -266,6 +288,7 @@ export async function startAgentHostServer(options: HostServerOptions) {
       })) {
         if (event.runId !== record.id)
           throw new Error("runtime_event_run_mismatch");
+        if (event.type === "session.bound" && typeof event.threadId === "string") task.nativeSessionId = event.threadId;
         trackCommand(task.commands, event as unknown as { type: string });
         if (event.type === "turn.finished") {
           outcome = event.outcome;
@@ -447,9 +470,9 @@ export async function startAgentHostServer(options: HostServerOptions) {
         return;
       }
     }
-    // A shell command's relay is authorized by being that running command, not by the owner token.
+    // Relay requests use an active native command receipt or an explicitly enabled local session binding.
     if (request.method === "POST" && (request.url ?? "").split("?")[0] === "/v1/relay")
-      return reply(response, 200, await relay(relaySchema.parse(await body(request, 1_000_000))));
+      return reply(response, 200, await relay(relaySchema.parse(await body(request, 1_000_000)), request.socket.remoteAddress));
     const supplied = Buffer.from(request.headers.authorization ?? "");
     const expected = Buffer.from(`Bearer ${options.token}`);
     if (

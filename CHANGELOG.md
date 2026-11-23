@@ -5,6 +5,14 @@ tag publishes a GitHub Release whose notes are this file's section for that vers
 section in the version-bump commit before tagging. Changes up to the versions listed under
 0.8.0-alpha.1 are in each package's own `CHANGELOG.md`.
 
+## [0.11.0-alpha.13] - 2026-11-23
+
+- Add Antigravity and DeepSeek Harness through the shared ACP adapter. Support native model configuration, session binding and product tools.
+- Update the supported Codex, Claude, Pi, OpenCode, Kimi, Hermes and OpenClaw releases. Pi uses its public Durable 1.6 event API and can enable the official Bash extension.
+- Allow explicitly configured product tools to relay from a local employee shell using the running kernel's session identity.
+- Add gateway-held Gemini, Anthropic, DeepSeek and GitHub credentials. The GitHub route supports HTTPS Git and the official GitHub CLI. The gateway verifies a stored credential's service before use.
+- Install headless Chromium and the official browser CLI for workspace pages. Ship verified upstream Lark, Google Workspace Gmail and agent-browser skills for offline installation.
+
 ## [0.11.0-alpha.12] - 2026-11-22
 
 - Hold OpenAI model credentials at the Cloudflare gateway, preserve rotated credentials across imports, and bind model requests to the selected account.

@@ -53,6 +53,8 @@ Mau profile, in this order:
 | Verified Host archive | `/opt/agent-environment/agent-host.tgz` |
 | SHA-256 manifest for that archive | `/opt/agent-environment/agent-host.sha256` |
 | Native credential file for this owner | `/home/user/.codex/auth.json` |
+| [Verified offline connector skills](examples/official-skills.tgz) | `/opt/agent-environment/official-skills.tgz` |
+| Optional product-specific skill addendum | `/opt/agent-environment/mau-sandbox/SKILL.md` |
 | [Startup script](examples/start-host.sh) | `/opt/agent-environment/start.sh` |
 
 The checksum manifest must name `/opt/agent-environment/agent-host.tgz`.
@@ -63,7 +65,19 @@ Assign the profile to the intended owner; do not use a shared credential for
 unrelated users. Mau must load an Environment build containing this adapter.
 
 The first launch installs the verified Host package, pinned native Codex CLI,
-system CA certificates and basic tools. Subsequent launches reuse the snapshot.
+system CA certificates and basic tools. If a Host profile selects Antigravity, the starter downloads the matching Linux build and verifies its pinned SHA-512 digest. A DeepSeek Harness profile installs the pinned official DSH npm package. Subsequent launches reuse the snapshot.
+The starter verifies the bundled archive and installs 28 Lark skills, nine Gmail/shared skills and the agent-browser discovery skill.
+The bundle preserves upstream instructions, references and support files. It includes a source manifest with commit IDs and licenses.
+It is reproducible from the [pinned upstream archives](scripts/bundle-skills.py). The starter copies each skill into
+`~/.agents/skills`, `~/.claude/skills`, `~/.gemini/config/skills` and `~/.hermes/skills` before Host starts.
+A user-authored skill with the same name is preserved. The separate Mau sandbox addendum follows the same discovery paths.
+The script also installs a browser for the pages the Agent serves inside the environment: Debian's
+`chromium-headless-shell` with Latin, CJK and emoji fonts, and the official agent-browser CLI,
+unmodified, at the version Agent Connectors pins. Run the CLI as `/opt/local-browser/agent-browser`,
+which sets the Chromium path and the arguments a container needs and passes everything else on; the
+file appears when the installation has finished. That happens in the background after the first
+launch so that Host does not wait for it, about 285 MB to download and 670 MB on disk. The gateway's
+network policy admits no websites, so this browser reaches only what the environment serves.
 For production, replace runtime installation with a verified immutable image.
 SSH upgrade forwarding and shared object-storage mounts are not validated
 for this gateway; do not enable those profile options.
@@ -155,8 +169,8 @@ age public key; keep its private recovery identity off the servers, Workers, R2 
 Agent filesystems. No separate KMS subscription is required for this design.
 
 The outside-of-guest egress Worker denies arbitrary destinations. It admits only the
-reviewed model endpoints and native Codex read-only workspace routing discovery, read-only npm package fetches and signed Debian package
-repositories. The container cannot widen the policy. The ephemeral Cloudflare TLS
+reviewed model endpoints, native Codex read-only workspace routing discovery, read-only npm package fetches, signed Debian package
+repositories and GitHub endpoints selected by the operator. The container cannot widen the policy. The ephemeral Cloudflare TLS
 inspection CA is added to the system and Node trust stores before Host starts.
 Read `src/egress.mjs` when changing native runtime dependencies; do not disable TLS
 verification to fix a failed request.
@@ -169,6 +183,22 @@ for it:
 | --- | --- |
 | `openai` | ChatGPT Codex backend and workspace discovery, `api.openai.com` responses and model list, `auth.openai.com` token refresh |
 | `anthropic` | `api.anthropic.com`: `POST /v1/messages`, `POST /v1/messages/count_tokens`, `GET /v1/models` and `GET /v1/models/:id` |
+| `google` | Antigravity (`agy`) with a Gemini API key, on `generativelanguage.googleapis.com`. Key held by the gateway (`modelCredentials.google`): every path and method of that host. Key in the guest: `POST /v1beta/models/<model>:streamGenerateContent` only |
+| `deepseek` | DSH on `api.deepseek.com` with a held API key. Model listing, Messages, and Files collection and item operations |
+
+What the `google` service admits depends on who holds the key:
+
+- **The gateway holds it** (`modelCredentials.google`, see below): the whole Gemini API on that host, any path and
+  method. Every request leaves under the owner's key and the guest's own credentials are removed, so whatever the
+  guest sends, uploaded files included, stays in the owner's own project.
+- **The guest holds it**: only the one request Antigravity CLI 1.5.15 made for a turn with
+  `modelProvider: "gemini"` and `GEMINI_API_KEY`, in print mode and through `agy acp`, a turn with a shell command
+  included. The gateway cannot tell whose key a request carries. With files, caches or tuning admitted, a guest
+  that is talked into it could use someone else's key to put the owner's files into that person's project. Model
+  listing and the other Gemini API methods stay closed for the same reason.
+
+In both cases its Google sign-in (the Cloud Code backend and OAuth), Vertex AI, its telemetry and every other
+Google host are not admitted: each is a change to the rule.
 
 The product selects services with an optional `modelServices` array in the create
 body and in the resume body (`{"timeoutSeconds":600,"modelServices":["openai","anthropic"]}`).
@@ -197,7 +227,8 @@ account:
   with ChatGPT does not use that host. Do not set `modelAccounts` for an environment whose kernel uses an API key.
 - `auth.openai.com/oauth/token` stays open: a token refresh stores nothing.
 - Only `openai` can be listed. An Anthropic credential (`x-api-key` or a bearer token) cannot be mapped to an
-  account without asking the provider, so the `anthropic` service is not held to an account.
+  account without asking the provider, so the `anthropic` service is not held to an account. Neither is `google`:
+  an API key names no account.
 
 Without `modelAccounts` nothing about a request's credential is checked, as before. The value is stored with the
 environment and applied when its container starts; a resume without the field keeps it, `{}` removes it, and a
@@ -205,7 +236,50 @@ resume of a running environment stores it for the next start (pause and resume t
 value is refused with `invalid_create` or `invalid_model_accounts`. `/security` reports it as `modelAccounts`
 (`null` when unset).
 
-Only the holder of the operator credential can select services or accounts. Nothing inside the
+### Credentials held by the gateway
+
+The gateway can keep a model credential itself, so the real one never enters the guest. The operator stores it
+under an ID and selects it per environment; the guest keeps a placeholder, and the egress Worker replaces what the
+guest sends before the request leaves.
+
+| Request | Does |
+| --- | --- |
+| `PUT /v1/model-credentials/<id>` | Stores or replaces a credential. With `If-None-Match: *` an existing one is kept and returned |
+| `GET /v1/model-credentials`, `GET /v1/model-credentials/<id>` | Metadata only: `id`, `service`, `mode`, `accountId`, `expiresAt`, `renewable`, `updatedAt`. No token or key is ever returned |
+| `DELETE /v1/model-credentials/<id>` | Removes it. Environments that select it are refused at the model host from then on |
+
+| Body | Sent as |
+| --- | --- |
+| `{"service":"openai","mode":"chatgpt","accessToken","refreshToken"?,"accountId"?,"clientId"?}` | `Authorization: Bearer <access token>` and `ChatGPT-Account-ID` on `chatgpt.com`. The gateway refreshes the token; the guest cannot reach `auth.openai.com` |
+| `{"service":"openai","mode":"api_key","apiKey"}` | `Authorization: Bearer <key>` on `api.openai.com` |
+| `{"service":"google","mode":"api_key","apiKey"}` | `X-Goog-Api-Key: <key>` on `generativelanguage.googleapis.com` |
+| `{"service":"anthropic","mode":"api_key","apiKey"}` | `x-api-key` on the reviewed Messages and Models paths at `api.anthropic.com` |
+| `{"service":"deepseek","mode":"api_key","apiKey"}` | `x-api-key` on the reviewed DSH paths at `api.deepseek.com` |
+| `{"service":"github","mode":"token","accessToken"}` | HTTP Basic for Git smart HTTP on `github.com`, Bearer for `api.github.com` and release asset uploads on `uploads.github.com` |
+
+Select credentials with `modelCredentials` in the create or resume body
+(`{"modelCredentials":{"openai":"<id>","google":"<id>"}}`). The value is stored with the environment and applied
+when its container starts; a resume without the field keeps it and `{}` removes it. `/security` reports the IDs.
+Include the corresponding model service (`anthropic`, `google`, or `deepseek`) in `modelServices`. A `github` credential enables its own egress rule.
+GitHub HTTPS clone/fetch/push, REST/GraphQL (including pull requests) and release uploads run with the selected token's scopes.
+Each response redirect goes back through the egress policy. GitHub Enterprise, SSH, Git LFS and off-host asset downloads require additional routes.
+The Cloudflare starter installs `gh` for this binding. `GH_TOKEN` and the native CLI fallback `hosts.yml` hold a placeholder.
+The model bindings supply placeholders for `ANTHROPIC_API_KEY` and `DEEPSEEK_API_KEY`.
+
+- With `modelCredentials.google`, a request to `generativelanguage.googleapis.com` loses every credential the
+  guest sent (the `X-Goog-Api-Key` and `Authorization` headers, the `key`, `access_token` and `oauth_token` query
+  parameters) and gets the held key in `X-Goog-Api-Key`. Antigravity only checks that `GEMINI_API_KEY` is not
+  empty, so the guest's value can be any placeholder.
+- A credential is sent only to its own service. An ID under `openai` that names a Google credential, or the
+  reverse, is refused with `model_credential_service_mismatch`: at create and resume (`400`), and again on every
+  request (`403`), since a credential can be replaced after an environment selected it. A Gemini key never
+  reaches an OpenAI host and an OpenAI key or token never reaches Google.
+- When the selected credential does not exist the request is refused with `model_credential_missing` (`403`). It
+  is never forwarded with the guest's own credential instead.
+- A Gemini API key has nothing to refresh. To rotate it, `PUT` the new key under the same ID: requests use it at
+  once, running environments included.
+
+Only the holder of the operator credential can select services, accounts or credentials. Nothing inside the
 guest can change the list, and no request can add a destination: the rule sets are
 reviewed source. Admitting another provider or a private model gateway host means
 adding a service to `src/egress.mjs` with tests and redeploying the gateway.

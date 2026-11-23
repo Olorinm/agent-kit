@@ -20,6 +20,8 @@ export const selectableSettings: Record<Kernel, readonly string[]> = {
   pi: ["model", "thinkingLevel"],
   opencode: ["model", "effort", "config"],
   kimi: ["model", "effort", "config"],
+  agy: ["model", "effort", "config"],
+  dsh: ["model", "effort", "config"],
   hermes: ["model", "provider", "reasoningEffort", "fastMode"],
   openclaw: ["model", "thinking", "fastMode"],
 };

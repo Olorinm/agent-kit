@@ -21,7 +21,7 @@ const anthropic=[['https://api.anthropic.com/v1/messages','POST'],['https://api.
 const openai=[['https://chatgpt.com/backend-api/codex/responses','POST'],['https://chatgpt.com/backend-api/wham/accounts/check','GET'],['https://api.openai.com/v1/responses','POST'],['https://api.openai.com/v1/models','GET'],['https://auth.openai.com/oauth/token','POST']];
 const packages=[['https://registry.npmjs.org/zod','GET'],['http://deb.debian.org/debian/dists/trixie/InRelease','GET'],['https://security.debian.org/debian-security/dists/trixie-security/InRelease','GET']];
 test('model services are selected per environment and the default stays OpenAI only',()=>{
- assert.deepEqual(DEFAULT_MODEL_SERVICES,['openai']);assert.deepEqual(MODEL_SERVICES,['openai','anthropic']);
+ assert.deepEqual(DEFAULT_MODEL_SERVICES,['openai']);assert.deepEqual(MODEL_SERVICES,['openai','anthropic','google','deepseek']);
  assert.ok(Object.isFrozen(DEFAULT_MODEL_SERVICES));assert.ok(Object.isFrozen(MODEL_SERVICES));
  for(const [url,method] of anthropic) {
   assert.equal(allowEgress(url,method),false,url);
@@ -49,6 +49,57 @@ test('the Anthropic service admits inference, token counting and model discovery
  for(const [url,method] of denied)for(const services of [['anthropic'],['openai','anthropic']])assert.equal(allowEgress(url,method,services),false,url);
  assert.equal(allowEgress('https://api.anthropic.com/v1/models/../messages','POST',['anthropic']),true);
  for(const name of ['constructor','__proto__','toString','unknown'])assert.equal(allowEgress('https://api.anthropic.com/v1/messages','POST',[name]),false,name);
+});
+test('the Google service admits streamed Gemini API inference for Antigravity with an API key only',()=>{
+ const api='https://generativelanguage.googleapis.com',ccpa='https://daily-cloudcode-pa.googleapis.com';
+ const admitted=[[api+'/v1beta/models/gemini-3.8-flash:streamGenerateContent?alt=sse','POST'],[api+'/v1beta/models/gemini-4-neon:streamGenerateContent','POST'],[api+'/v1beta/models/gemini-3.1-flash-lite-preview:streamGenerateContent?alt=sse','POST']];
+ for(const [url,method] of admitted) {
+  for(const services of [undefined,[],['openai'],['anthropic'],['openai','anthropic']])assert.equal(allowEgress(url,method,services),false,url);
+  for(const services of [['google'],['openai','google'],['openai','anthropic','google']])assert.equal(allowEgress(url,method,services),true,url);
+ }
+ for(const [url,method] of [...openai,...anthropic])assert.equal(allowEgress(url,method,['google']),false,url);
+ // Other Gemini API methods and resources, the Google sign-in's Cloud Code backend and OAuth, and every other Google host.
+ const model=api+'/v1beta/models/gemini-3.8-flash';
+ const denied=[[model+':streamGenerateContent','GET'],[model+':generateContent','POST'],[model+':countTokens','POST'],[model+':embedContent','POST'],[model+':batchGenerateContent','POST'],[model,'GET'],[api+'/v1beta/models','GET'],
+  [model+':streamGenerateContentX','POST'],[model+':streamGenerateContent/extra','POST'],[api+'/v1beta/models/:streamGenerateContent','POST'],[api+'/v1beta/models/a/b:streamGenerateContent','POST'],[api+'/v1beta/tunedModels/m:streamGenerateContent','POST'],
+  [api+'/v1/models/gemini-3.8-flash:streamGenerateContent','POST'],[api+'/v1beta/models/gemini-3.8-flash%3AstreamGenerateContent','POST'],[api+'/v1beta/files','POST'],[api+'/upload/v1beta/files','POST'],[api+'/v1beta/cachedContents','POST'],[api+'/','GET'],
+  ['http://generativelanguage.googleapis.com/v1beta/models/m:streamGenerateContent','POST'],[api+':8443/v1beta/models/m:streamGenerateContent','POST'],['https://user:secret@generativelanguage.googleapis.com/v1beta/models/m:streamGenerateContent','POST'],
+  ['https://generativelanguage.googleapis.com.evil.test/v1beta/models/m:streamGenerateContent','POST'],['https://aiplatform.googleapis.com/v1/projects/p/locations/l/publishers/google/models/m:streamGenerateContent','POST'],
+  [ccpa+'/v1internal:streamGenerateContent','POST'],[ccpa+'/v1internal:loadCodeAssist','POST'],['https://cloudcode-pa.googleapis.com/v1internal:streamGenerateContent','POST'],['https://oauth2.googleapis.com/token','POST'],['https://accounts.google.com/o/oauth2/v2/auth','GET'],
+  ['https://play.googleapis.com/log','POST'],['https://www.googleapis.com/oauth2/v2/userinfo','GET'],['https://www.googleapis.com/drive/v3/files','POST'],['https://storage.googleapis.com/bucket/object','PUT']];
+ for(const [url,method] of denied)for(const services of [['google'],['openai','anthropic','google']])assert.equal(allowEgress(url,method,services),false,url);
+ // A key the guest holds names no account the gateway could hold it to.
+ assert.throws(()=>modelAccounts({google:['account-1']}),{message:'invalid_model_accounts'});
+ // The narrow rule is what applies whenever the gateway does not hold the Google key, whatever else it holds.
+ for(const credentials of [undefined,{},{openai:'codex-main'},Object.create({google:'inherited'})]) {
+  for(const [url,method] of admitted)assert.equal(allowEgress(url,method,['openai','google'],credentials),true,url);
+  for(const [url,method] of denied)assert.equal(allowEgress(url,method,['openai','google'],credentials),false,url);
+ }
+ assert.deepEqual(modelServices(['openai','google']),['openai','google']);
+});
+test('with the Google key held by the gateway the whole Gemini API host is admitted, and nothing else',()=>{
+ const api='https://generativelanguage.googleapis.com',held={google:'gemini-main'},model=api+'/v1beta/models/gemini-3.8-flash';
+ // Requests the narrow rule refuses: other methods, model listing, files, caches, tuning, the Live API, a key in the query.
+ const opened=[[model+':streamGenerateContent?alt=sse','POST'],[model+':generateContent','POST'],[model+':countTokens','POST'],[model+':embedContent','POST'],[model,'GET'],[api+'/v1beta/models','GET'],[api+'/v1beta/models?pageSize=50','GET'],
+  [api+'/v1/models/gemini-3.8-flash:streamGenerateContent','POST'],[api+'/v1beta/files','POST'],[api+'/v1beta/files/abc','DELETE'],[api+'/upload/v1beta/files?uploadType=resumable','POST'],[api+'/upload/v1beta/files?upload_id=1','PUT'],
+  [api+'/v1beta/cachedContents','POST'],[api+'/v1beta/cachedContents/c1','PATCH'],[api+'/v1beta/tunedModels/m:streamGenerateContent','POST'],[api+'/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent','GET'],
+  [api+'/','GET'],[api+'/v1beta/models?key=AIza-someone-else','GET'],[api+':443/v1beta/models','GET']];
+ for(const [url,method] of opened) {
+  for(const services of [['google'],['openai','google'],['openai','anthropic','google']])for(const credentials of [held,{openai:'codex-main',google:'gemini-main'}])assert.equal(allowEgress(url,method,services,credentials),true,url);
+  // Holding a key does not select the service, and holding another service's key does not open this one.
+  for(const services of [undefined,[],['openai'],['openai','anthropic']])assert.equal(allowEgress(url,method,services,held),false,url);
+ }
+ for(const [url,method] of opened.slice(1))assert.equal(allowEgress(url,method,['openai','google'],{openai:'codex-main'}),false,url);
+ // The checks every destination passes still apply, and no other host is opened.
+ const closed=[['http://generativelanguage.googleapis.com/v1beta/models','GET'],[api+':8443/v1beta/models','GET'],['https://user:secret@generativelanguage.googleapis.com/v1beta/models','GET'],[api+'/v1beta/files%2f..%2fmodels','GET'],[api+'/v1beta/files%5c..%5cmodels','GET'],
+  ['https://generativelanguage.googleapis.com.evil.test/v1beta/models','GET'],['https://evil.generativelanguage.googleapis.com/v1beta/models','GET'],['https://aiplatform.googleapis.com/v1/projects/p/locations/l/publishers/google/models/m:streamGenerateContent','POST'],
+  ['https://daily-cloudcode-pa.googleapis.com/v1internal:streamGenerateContent','POST'],['https://oauth2.googleapis.com/token','POST'],['https://accounts.google.com/o/oauth2/v2/auth','GET'],['https://www.googleapis.com/drive/v3/files','POST'],
+  ['https://storage.googleapis.com/bucket/object','PUT'],['https://play.googleapis.com/log','POST'],['https://evil.test/collect','POST']];
+ for(const [url,method] of closed)assert.equal(allowEgress(url,method,['openai','anthropic','google'],held),false,url);
+ // The other services are what they were.
+ for(const [url,method] of [...openai,...anthropic])assert.equal(allowEgress(url,method,['google'],held),false,url);
+ for(const [url,method] of openai)assert.equal(allowEgress(url,method,['openai','google'],held),true,url);
+ assert.equal(allowEgress('https://api.openai.com/v1/files','POST',['openai','google'],held),false);
 });
 test('model service selections accept only short lists of distinct reviewed names',()=>{
  assert.equal(modelServices(undefined),undefined);
@@ -92,4 +143,15 @@ test('model accounts accept short lists of distinct account ids for services tha
  for(const value of [null,'openai',[ours],0,true,{openai:[]},{openai:ours},{openai:[ours,ours]},{openai:[1]},{openai:[null]},{openai:['']},{openai:['a b']},{openai:['a/b']},{openai:['x'.repeat(129)]},{openai:Array.from({length:9},(_,i)=>'account-'+i)},
   {anthropic:[ours]},{unknown:[ours]},{openai:[ours],anthropic:[ours]},JSON.parse('{"__proto__":["a"]}'),{constructor:[ours]}])
   assert.throws(()=>modelAccounts(value),{message:'invalid_model_accounts'},JSON.stringify(value));
+});
+
+test('only the two pinned Linux Antigravity release artifacts can be downloaded', () => {
+ const root = 'https://storage.googleapis.com/antigravity-public/antigravity-cli/1.5.15-5514532022517760/';
+ for (const build of ['linux-x64/cli_linux_x64.tar.gz', 'linux-arm/cli_linux_arm64.tar.gz']) {
+  const artifact = root + build;
+  assert.equal(allowEgress(artifact, 'GET', []), true);
+  assert.equal(allowEgress(artifact + '?data=example', 'GET', []), false);
+  assert.equal(allowEgress(artifact, 'PUT', []), false);
+ }
+ assert.equal(allowEgress(root + 'other.tar.gz', 'GET', []), false);
 });

@@ -16,6 +16,8 @@ const profileSchema = z
       "pi",
       "opencode",
       "kimi",
+      "agy",
+      "dsh",
       "hermes",
       "openclaw",
     ]),
@@ -62,6 +64,7 @@ const profileSchema = z
       )
       .optional(),
     toolApproval: z.boolean().optional(),
+    shell: z.boolean().optional(),
     thinkingLevel: z
       .enum(["off", "minimal", "low", "medium", "high", "xhigh"])
       .optional(),
@@ -74,7 +77,9 @@ const profileSchema = z
       claude: ["command", "env", "native"],
       opencode: ["command", "args", "env", "effort", "config"],
       kimi: ["command", "args", "env", "effort", "config"],
-      pi: ["thinkingLevel", "toolApproval"],
+      agy: ["command", "args", "env", "effort", "config"],
+      dsh: ["command", "args", "env", "effort", "config"],
+      pi: ["thinkingLevel", "toolApproval", "shell"],
       hermes:
         profile.transport === "acp"
           ? ["command", "args", "env", "transport"]
@@ -150,6 +155,7 @@ export const configSchema = z
     port: z.number().int().min(0).max(65535).default(37420),
     allowedOrigins: z.array(z.string().url()).default([]),
     workspaceFiles: z.boolean().default(false),
+    sessionRelayTools: z.array(idSchema).max(64).optional(),
     /** How long a native approval or question waits for an answer before it is closed as timed out. */
     interactionTimeoutMs: z.number().int().min(1_000).max(86_400_000).default(120_000),
     runtimes: z.array(profileSchema).min(1),
@@ -199,6 +205,8 @@ export function createConfiguredRuntimes(
         break;
       case "opencode":
       case "kimi":
+      case "agy":
+      case "dsh":
         native = {
           ...base,
           kernel: profile.kernel,
@@ -212,6 +220,7 @@ export function createConfiguredRuntimes(
           ...base,
           kernel: "pi",
           toolApproval: profile.toolApproval,
+          shell: profile.shell,
           runOptions: { thinkingLevel: profile.thinkingLevel },
         };
         break;

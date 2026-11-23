@@ -41,6 +41,16 @@ test("new clients keep protocol-v1 servers usable without inventing their undecl
   );
 });
 
+test("DSH distinguishes native resume from history replay and unavailable session operations", () => {
+  for (const mode of ["embedded", "http"]) {
+    const { features } = getKernelCapabilities("dsh", mode);
+    assert.equal(features["sessions.resume"].reason, "native_negotiation_required");
+    for (const feature of ["sessions.history", "sessions.fork", "sessions.delete", "controls.compact", "controls.steer"])
+      assert.equal(features[feature].reason, "native_not_supported", feature);
+    assert.equal(features["interactions.approval"].status, "supported");
+  }
+});
+
 test("capability discovery distinguishes native limits, negotiation and Host omissions without launching an Agent", () => {
   const pi = getKernelCapabilities("pi");
   assert.equal(pi.features["sessions.delete"].reason, "native_not_supported");

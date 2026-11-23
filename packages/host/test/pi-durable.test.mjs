@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { model, fixture } from "./fixtures/pi-stream.mjs";
 import { PiAgent } from "../dist/pi/index.js";
+import { createNativeRuntime } from "../dist/service/native-runtimes.js";
 import { FileBindingStore } from "../dist/index.js";
 import { defineExtension, MemoryStorage } from "@earendil-works/pi-durable";
 import { createToolSearchExtension } from "@earendil-works/pi-durable/tool-search";
@@ -78,7 +79,7 @@ test("Pi durable: native JSONL survives restart, tools execute through product p
   }
 });
 
-test("Pi 1.2 nested tools preserve native parent identity, receipts, policy and failed image output", async () => {
+test("Pi durable nested tools preserve native parent identity, receipts, policy and failed image output", async () => {
   const observed = [],
     calls = [],
     policies = [];
@@ -179,7 +180,7 @@ test("Pi 1.2 nested tools preserve native parent identity, receipts, policy and 
   }
 });
 
-test("Pi 1.2 nested native tools retain structured results and may be blocked before execution", async () => {
+test("Pi durable nested native tools retain structured results and may be blocked before execution", async () => {
   for (const denied of [false, true]) {
     let executions = 0;
     const extension = defineExtension({
@@ -260,7 +261,7 @@ test("Pi 1.2 nested native tools retain structured results and may be blocked be
   }
 });
 
-test("Pi 1.2 uses native tool search for deferred product tools and preserves policy argument changes", async () => {
+test("Pi durable uses native tool search for deferred product tools and preserves policy argument changes", async () => {
   const observed = [],
     inputs = [],
     approvals = [];
@@ -367,7 +368,7 @@ test("Pi 1.2 uses native tool search for deferred product tools and preserves po
 });
 
 test(
-  "Pi 1.2 fatal storage reads close the native session without retrying work",
+  "Pi durable fatal storage reads close the native session without retrying work",
   { timeout: 2000 },
   async () => {
     const storage = new MemoryStorage();
@@ -471,3 +472,27 @@ test(
     }
   },
 );
+
+test("Pi shell binds local conversation IDs to their own runtime in parallel", async () => {
+  const cwd = await mkdtemp(join(tmpdir(), "agent-host-pi-relay-"));
+  const command = 'printf %s "$PI_DURABLE_CONVERSATION_ID"';
+  const runtimes = ["lead", "reviewer"].map((id) => createNativeRuntime({
+    id, cwd, kernel: "pi", shell: true,
+    options: { model, streamFn: fixture([], "bash", { command }) },
+  }, cwd));
+  try {
+    const runs = await Promise.all(runtimes.map((runtime) => Array.fromAsync(runtime.run({
+      sessionId: "same-product-session", input: "call edit", instructions: "",
+    }))));
+    const ids = runs.map((events) => events.find((e) => e.type === "session.bound").threadId);
+    assert.equal(ids[0], ids[1]);
+    for (const [index, events] of runs.entries()) {
+      assert.equal(events.at(-1).outcome.status, "completed", JSON.stringify(events.at(-1)));
+      const output = events.find((e) => e.type === "tool.finished").result;
+      assert.equal(output.success, true);
+      assert.equal(output.contentItems[0].text.trim(), `${runtimes[index].id}:${ids[index]}`);
+    }
+  } finally {
+    await Promise.all(runtimes.map((runtime) => runtime.close()));
+  }
+});
