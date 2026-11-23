@@ -519,7 +519,7 @@ test("Pi lists metadata from an explicitly configured skills directory and leave
       assert.equal(context.includes("<available_skills>"), skillsDirectory === "skills");
       if (skillsDirectory === "skills") {
         assert.ok(context.includes("Browser &lt;automation&gt; &amp; capture"), context);
-        assert.ok(context.includes(join(cwd, "skills", "browser", "SKILL.md")));
+        assert.ok(context.includes(JSON.stringify(join(cwd, "skills", "browser", "SKILL.md")).slice(1, -1)));
         assert.ok(!context.includes("Manual only"));
         assert.ok(!context.includes("Overlarge YAML"));
         assert.ok(!context.includes("private-document-body"));

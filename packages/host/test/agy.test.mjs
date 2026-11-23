@@ -15,12 +15,10 @@ import {
 // Antigravity (`agy acp`) through the shared ACP adapter. The fixture replays the shapes of a recorded local
 // handshake with Antigravity CLI 1.5.15; no model is contacted here.
 const fixture = resolve("test/fixtures/agy-acp-server.mjs");
-async function workspace(t) {
-  const root = await mkdtemp(join(tmpdir(), "agent-host-agy-"));
-  t.after(() =>
-    rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }),
-  );
-  return root;
+const workspace = () => mkdtemp(join(tmpdir(), "agent-host-agy-"));
+async function cleanup(root, runtime) {
+  try { await runtime.close(); }
+  finally { await rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }); }
 }
 function configured(root, profile = {}, log) {
   const { args = [], ...rest } = profile;
@@ -139,7 +137,7 @@ test("the agy adapter starts `agy acp` by default and has no compaction path", {
   // The default command is found on PATH; a shell-script stand-in needs a POSIX system.
   skip: process.platform === "win32",
 }, async (t) => {
-  const root = await workspace(t),
+  const root = await workspace(),
     log = join(root, "acp.log");
   await writeFile(
     join(root, "agy"),
@@ -168,12 +166,12 @@ test("the agy adapter starts `agy acp` by default and has no compaction path", {
       compactionTransport: undefined,
     });
   } finally {
-    await agent.close();
+    await cleanup(root, agent);
   }
 });
 
 test("an agy runtime sets model, thinking level and mode through native config options", async (t) => {
-  const root = await workspace(t),
+  const root = await workspace(),
     log = join(root, "acp.log");
   const runtime = configured(
     root,
@@ -188,7 +186,7 @@ test("an agy runtime sets model, thinking level and mode through native config o
     },
     log,
   );
-  t.after(() => runtime.close());
+  t.after(() => cleanup(root, runtime));
   const first = await turn(runtime, "hello");
   assert.deepEqual(first.outcome, { status: "completed" });
   assert.equal(first.text, "model=gemini-3.8-flash effort=low mode=auto");
@@ -233,9 +231,9 @@ test("an agy runtime sets model, thinking level and mode through native config o
 });
 
 test("an agy permission request is a Host approval with the native option IDs; unanswered it is cancelled", async (t) => {
-  const root = await workspace(t);
+  const root = await workspace();
   const runtime = configured(root);
-  t.after(() => runtime.close());
+  t.after(() => cleanup(root, runtime));
   const approved = await turn(runtime, "command", { answer: choose("allow") });
   assert.equal(approved.text, "command ran");
   assert.equal(approved.requests.length, 1);
@@ -288,9 +286,9 @@ test("agy asks about Host product tools in auto mode; --dangerously-skip-permiss
       ],
     };
   };
-  const autoRoot = await workspace(t),
+  const autoRoot = await workspace(),
     auto = configured(autoRoot, { config: { mode: "auto" } });
-  t.after(() => auto.close());
+  t.after(() => cleanup(autoRoot, auto));
   // Auto mode runs commands unasked, and still asks before a tool of the Host's MCP server.
   assert.equal((await turn(auto, "command")).requests.length, 0);
   const asked = tools();
@@ -306,14 +304,14 @@ test("agy asks about Host product tools in auto mode; --dangerously-skip-permiss
   assert.equal(refused.text, "tool refused");
   assert.deepEqual(asked.calls, []);
 
-  const skipRoot = await workspace(t),
+  const skipRoot = await workspace(),
     log = join(skipRoot, "acp.log");
   const skip = configured(
     skipRoot,
     { args: ["--dangerously-skip-permissions"] },
     log,
   );
-  t.after(() => skip.close());
+  t.after(() => cleanup(skipRoot, skip));
   const unasked = tools();
   const ran = await turn(skip, "tool", { tools: unasked.list });
   assert.equal(ran.requests.length, 0);
@@ -331,9 +329,9 @@ test("agy asks about Host product tools in auto mode; --dangerously-skip-permiss
 });
 
 test("agy discovery reports what the native server negotiated, and compaction is refused", async (t) => {
-  const root = await workspace(t);
+  const root = await workspace();
   const runtime = configured(root);
-  t.after(() => runtime.close());
+  t.after(() => cleanup(root, runtime));
   assert.equal(runtime.supportsCompaction, false);
   assert.deepEqual(runtime.inputs, { attachments: true, images: "negotiated" });
   const { capabilities, native } = await runtime.discover();
