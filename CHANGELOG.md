@@ -5,9 +5,10 @@ tag publishes a GitHub Release whose notes are this file's section for that vers
 section in the version-bump commit before tagging. Changes up to the versions listed under
 0.8.0-alpha.1 are in each package's own `CHANGELOG.md`.
 
-## [0.11.0-alpha.14]
+## [0.11.0-alpha.14] - 2026-11-23
 
 - Fix duplicate Pi message-start events when the 1.6 harness delays persistence of an assistant message.
+- Restore the environment's selected skill groups after restart. Preserve the product addendum and locally edited guides when updating or pruning the official bundle.
 
 ## [0.11.0-alpha.13] - 2026-11-23
 

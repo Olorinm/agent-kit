@@ -15,9 +15,9 @@ import tarfile
 
 ROOT = Path(__file__).resolve().parent
 SOURCES = (
-    ("larksuite/cli", "v1.0.97", "72579c80027c863ca51d5f9affda72a70ab0d8a6", "58e9a73c321d404098c06ab8646d65f8b00c7d970963193bba58a504145c9388"),
+    ("larksuite/cli", "v1.0.100", "ac22a60a23d66c37d43a7ec6d9e99b99a4320356", "cf578bb878407673b441cebb0bcb9b2d8f2204c19c65f50df1f6cce7694e7cfb"),
     ("googleworkspace/cli", "v0.22.5", "705fb0ecac6f4249679958f6325b809b63fdde17", "1e55ec8c6ee87fac7d422975604a2d546c35f6d687a1cfaba7c7cc0d3c05663f"),
-    ("vercel-labs/agent-browser", "v0.41.2", "d52a5e90c372ec4710c69adc3837ac14bbd852aa", "5deccde57db7ed416d46a57e3c2767fba74f96e750d1d8fabe79bfa1f4bd228b"),
+    ("vercel-labs/agent-browser", "v0.43.0", "1cc19526f3641c8543d55aa6700e7c55b37ac356", "ed52840279526f057977a98e99d60fe0ab760122ee73ce11f4cf050e47938913"),
 )
 
 
@@ -30,7 +30,8 @@ def selected(agency, name):
 
 
 def build(directory, output):
-    files = {"install.sh": ((ROOT / "install-skills.sh").read_bytes(), 0o644)}
+    files = {name: ((ROOT / source).read_bytes(), 0o644) for name, source in (
+        ("install.sh", "install-skills.sh"), ("install.mjs", "install-skills.mjs"), ("previous-trees.json", "previous-trees.json"))}
     provenance = []
     for repo, tag, commit, digest in SOURCES:
         org = repo.split("/")[0]

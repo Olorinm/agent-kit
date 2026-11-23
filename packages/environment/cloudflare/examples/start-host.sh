@@ -40,20 +40,17 @@ fi
 # /opt/local-browser/agent-browser; /usr/local/bin/agent-browser is Mau's and is
 # left alone. Installed in the background, some 285 MB to download, so Host does
 # not wait for it. An install cut short by a pause is completed at the next start.
-if [ ! -f "$base/local-browser-installed" ]; then
+agent_browser_version=0.43.0
+if [ ! -f "$base/local-browser-installed-$agent_browser_version" ]; then
   (
     exec >/var/log/local-browser-install.log 2>&1
     dpkg --configure -a
     apt-get update -qq
     DEBIAN_FRONTEND=noninteractive apt-get -o DPkg::Lock::Timeout=600 install -y --no-install-recommends \
       chromium-headless-shell fonts-liberation fonts-noto-cjk fonts-noto-color-emoji
-    # The package carries a binary for every platform, so its install script has nothing to fetch. Keep this machine's.
-    npm install --prefix /opt/local-browser --ignore-scripts --no-audit --no-fund agent-browser@0.41.2
-    case "$(uname -m)" in aarch64|arm64) arch=arm64 ;; *) arch=x64 ;; esac
-    cd /opt/local-browser/node_modules/agent-browser/bin
-    find . -type f ! -name "agent-browser-linux-$arch" -delete
-    chmod 755 "agent-browser-linux-$arch"
-    ln -sf "agent-browser-linux-$arch" agent-browser
+    # The official npm entry point selects the native optional package with install scripts disabled.
+    npm install --prefix /opt/local-browser --ignore-scripts --no-audit --no-fund "agent-browser@$agent_browser_version"
+    /opt/local-browser/node_modules/.bin/agent-browser --version
     # Written last: this file is there once the browser and the CLI are.
     cat > /opt/local-browser/agent-browser.new <<'LAUNCHER'
 #!/bin/sh
@@ -68,11 +65,11 @@ export AGENT_BROWSER_ARGS="--no-sandbox
 $AGENT_BROWSER_ARGS}"
 # The check for an outdated Chrome asks a site on the internet, which this environment does not reach.
 export AGENT_BROWSER_NO_VERSION_CHECK=1
-exec /opt/local-browser/node_modules/agent-browser/bin/agent-browser "$@"
+exec /opt/local-browser/node_modules/.bin/agent-browser "$@"
 LAUNCHER
     chmod 755 /opt/local-browser/agent-browser.new
     mv /opt/local-browser/agent-browser.new /opt/local-browser/agent-browser
-    touch "$base/local-browser-installed"
+    touch "$base/local-browser-installed-$agent_browser_version"
   ) &
 fi
 
@@ -118,7 +115,7 @@ if uses_kernel dsh; then
   fi
 fi
 # Mau supplies the pinned offline skill bundle before publishing this start script.
-skills_digest=09c3d39cd7091881f1cc3dd9d2a2175a3a545847bb7f542f57e5c16b18c84d19
+skills_digest=981a6270ea6059085354b99565f9033813c2d4998284fc3bb7f0c2aa76e70273
 skills_store=/opt/agent-environment-skills
 skills_path="$skills_store/$skills_digest"
 if [ -f "$base/official-skills.tgz" ] && [ ! -d "$skills_path" ]; then
@@ -127,15 +124,24 @@ if [ -f "$base/official-skills.tgz" ] && [ ! -d "$skills_path" ]; then
   temp_skills=$(mktemp -d "$skills_store/.skills-XXXXXX")
   tar xzf "$base/official-skills.tgz" -C "$temp_skills"
   chmod 755 "$temp_skills"
-  mv "$temp_skills" "$skills_path"
+  if ! mv -T "$temp_skills" "$skills_path"; then
+    [ -f "$skills_path/install.sh" ] || exit 1
+    rm -rf "$temp_skills"
+  fi
 fi
 chown -R user:user /home/user
 if [ -d "$skills_path" ]; then
   ln -sfnT "$skills_path" "$skills_store/current"
   # What Mau asks the installer for later: only the skill groups this environment has connections for.
-  printf '%s\n' "$skills_digest" > "$skills_store/digest"
-  chmod 644 "$skills_store/digest"
-  runuser -u user -- sh "$skills_path/install.sh" /home/user "$skills_digest" "$skills_path"/skills/*
+  manifest=$(mktemp "$skills_store/.digest-XXXXXX")
+  printf '%s\n' "$skills_digest" > "$manifest"
+  chmod 644 "$manifest"
+  mv -T "$manifest" "$skills_store/digest"
+  if [ -f "$base/mau-sandbox/SKILL.md" ]; then
+    runuser -u user -- sh "$skills_path/install.sh" /home/user "$skills_digest" --restore --default-browser
+  else
+    runuser -u user -- sh "$skills_path/install.sh" /home/user "$skills_digest" --restore
+  fi
   if [ -f "$base/mau-sandbox/SKILL.md" ]; then
     install -d -m 755 "$skills_store/mau-sandbox"
     install -m 644 "$base/mau-sandbox/SKILL.md" "$skills_store/mau-sandbox/SKILL.md"

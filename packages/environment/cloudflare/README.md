@@ -66,11 +66,11 @@ unrelated users. Mau must load an Environment build containing this adapter.
 
 The first launch installs the verified Host package, pinned native Codex CLI,
 system CA certificates and basic tools. If a Host profile selects Antigravity, the starter downloads the matching Linux build and verifies its pinned SHA-512 digest. A DeepSeek Harness profile installs the pinned official DSH npm package. Subsequent launches reuse the snapshot.
-The starter verifies the bundled archive and installs 28 Lark skills, nine Gmail/shared skills and the agent-browser discovery skill.
+The verified bundle contains 25 Lark skills, nine Gmail/shared skills and the agent-browser discovery skill.
 The bundle preserves upstream instructions, references and support files. It includes a source manifest with commit IDs and licenses.
-It is reproducible from the [pinned upstream archives](scripts/bundle-skills.py). The starter copies each skill into
+It is reproducible from the [pinned upstream archives](scripts/bundle-skills.py). The starter copies selected skills into
 `~/.agents/skills`, `~/.claude/skills`, `~/.gemini/config/skills` and `~/.hermes/skills` before Host starts.
-A user-authored skill with the same name is preserved. The separate Mau sandbox addendum follows the same discovery paths.
+An environment with the Mau addendum starts with its browser skill and sandbox instructions. Mau selects additional groups using the connections assigned to the environment. The selection survives restarts and bundle upgrades. A generic environment initially installs all groups. Locally edited skills and other user-authored files stay in place.
 The script also installs a browser for the pages the Agent serves inside the environment: Debian's
 `chromium-headless-shell` with Latin, CJK and emoji fonts, and the official agent-browser CLI,
 unmodified, at the version Agent Connectors pins. Run the CLI as `/opt/local-browser/agent-browser`,

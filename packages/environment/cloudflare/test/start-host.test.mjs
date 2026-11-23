@@ -19,7 +19,7 @@ function command(t, cli, chromium) {
   t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
   const file = path.join(directory, "agent-browser");
   const body = embedded("LAUNCHER")
-    .replace("exec /opt/local-browser/node_modules/agent-browser/bin/agent-browser ", `exec '${cli}' `)
+    .replace("exec /opt/local-browser/node_modules/.bin/agent-browser ", `exec '${cli}' `)
     .replace("AGENT_BROWSER_EXECUTABLE_PATH=/usr/lib/chromium/chromium-headless-shell\n", `AGENT_BROWSER_EXECUTABLE_PATH='${chromium}'\n`);
   assert.ok(body.includes(`exec '${cli}' "$@"\n`) && body.includes(`AGENT_BROWSER_EXECUTABLE_PATH='${chromium}'\n`));
   fs.writeFileSync(file, body, { mode: 0o755 });
@@ -41,11 +41,12 @@ test("the start script installs the browser and the pinned CLI without holding H
   assert.equal(spawnSync("sh", ["-n", new URL("../examples/start-host.sh", import.meta.url).pathname]).status, 0);
   const install = script.indexOf("chromium-headless-shell fonts-liberation fonts-noto-cjk fonts-noto-color-emoji");
   // In a background subshell, between the Host installation and the wait for Mau's readiness manifest.
-  assert.ok(install > script.indexOf('touch "$base/host-installed"') && install < script.indexOf('touch "$base/local-browser-installed"\n  ) &\n'));
-  assert.ok(script.indexOf('touch "$base/local-browser-installed"\n  ) &\n') < script.indexOf('while [ ! -f "$host_dir/ready.json" ]'));
+  assert.ok(install > script.indexOf('touch "$base/host-installed"') && install < script.indexOf('touch "$base/local-browser-installed-$agent_browser_version"\n  ) &\n'));
+  assert.ok(script.indexOf('touch "$base/local-browser-installed-$agent_browser_version"\n  ) &\n') < script.indexOf('while [ ! -f "$host_dir/ready.json" ]'));
   // One agent-browser version for the remote browser and this one.
   const connectors = JSON.parse(fs.readFileSync(new URL("../../../connectors/package.json", import.meta.url), "utf8"));
-  assert.ok(script.includes(`npm install --prefix /opt/local-browser --ignore-scripts --no-audit --no-fund agent-browser@${connectors.dependencies["agent-browser"]}\n`));
+  assert.ok(script.includes(`agent_browser_version=${connectors.dependencies["agent-browser"]}\n`));
+  assert.ok(script.includes('--no-audit --no-fund "agent-browser@$agent_browser_version"'));
   // /usr/local/bin/agent-browser is Mau's client of the remote browser; nothing here goes on the Agent's PATH.
   assert.doesNotMatch(script.replace(/^\s*#.*$/gm, ""), /\/usr\/local\/bin/);
 });
@@ -74,6 +75,8 @@ test("the launcher opens a local page, fills and clicks by ref, and takes a scre
   const ok = async (...args) => { const result = await start(args); assert.equal(result.status, 0, `${args.join(" ")}: ${result.stderr}${result.stdout}`); return result.stdout; };
   // The CLI leaves a daemon with the browser; close it while the command's directory is still there.
   try {
+    assert.match(await ok("--help"), /snapshot/);
+    assert.match(await ok("skills", "get", "core"), /^name: core$/m);
     assert.match(await ok("open", `http://localhost:${server.address().port}/`), /验收/);
     const snapshot = await ok("snapshot", "-i");
     const textbox = /textbox "Name" \[ref=(e\d+)\]/.exec(snapshot)?.[1], button = /button "Go" \[ref=(e\d+)\]/.exec(snapshot)?.[1];
