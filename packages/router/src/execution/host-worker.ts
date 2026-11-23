@@ -353,11 +353,11 @@ export class HostWorker {
    * one; any other runtime gets the text with a fixed notice and its source (`textDelivery`).
    */
   private async deliveryInput(runtimeId: string, input: string, admission: HostAdmission, items?: Record<string, unknown>[],
-    sender?: WorkSender, notice?: boolean): Promise<{ input: string; toolOutput?: Record<string, unknown> }> {
+    sender?: WorkSender, notice?: "brief"): Promise<{ input: string; toolOutput?: Record<string, unknown> }> {
     if (!(await this.acceptsToolOutput(runtimeId))) {
       // Typed items are a native input form too; a text delivery cannot carry them.
       if (items?.length) throw new WorkError("native_tool_delivery_typed_input_unsupported", 422);
-      return { input: textDelivery(admission, input, sender, notice !== false) };
+      return { input: textDelivery(admission, input, sender, notice) };
     }
     let skills: Array<{ name: string; path: string }> | undefined;
     if (items?.length) {

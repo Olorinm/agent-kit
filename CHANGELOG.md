@@ -5,12 +5,12 @@ tag publishes a GitHub Release whose notes are this file's section for that vers
 section in the version-bump commit before tagging. Changes up to the versions listed under
 0.8.0-alpha.1 are in each package's own `CHANGELOG.md`.
 
-## [Unreleased]
+## [0.11.0-alpha.15] - 2026-11-23
 
 - Send an ACP session its stable instructions once per process: when the session is created or resumed, and again after a compaction. Per-turn context still precedes every prompt.
 - Keep the agent, conversation and source of a turn out of the Host request's `context`. A linked Host is still told who is asking.
 - Add channel routing IDs to a turn only for a group message or a quoted message. A direct chat's turn is the message alone.
-- Let a product state the provenance of delivered input itself: `WorkSessions.submit` accepts `notice: false`, which leaves a text delivery without Router's fixed notice.
+- Use `notice: "brief"` for delegated text from a named partner. Router includes the sender and the existing permission boundary before the message.
 
 ## [0.11.0-alpha.14] - 2026-11-23
 
