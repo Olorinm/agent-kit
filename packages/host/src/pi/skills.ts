@@ -1,4 +1,5 @@
-import { readFile, readdir } from "node:fs/promises";
+import { constants } from "node:fs";
+import { lstat, open, readdir } from "node:fs/promises";
 import { join } from "node:path";
 import { defineExtension, section } from "@earendil-works/pi-durable";
 import { parseDocument } from "yaml";
@@ -8,20 +9,47 @@ function escapeXml(value: string) {
     .replaceAll('"', "&quot;").replaceAll("'", "&apos;");
 }
 
+const maxHeaderBytes = 32 * 1024;
+
+function missing(error: unknown) {
+  return ["ENOENT", "ENOTDIR", "ELOOP"].includes((error as NodeJS.ErrnoException).code ?? "");
+}
+
+async function readHeader(file: string): Promise<string | undefined> {
+  try {
+    if (!(await lstat(file)).isFile()) return;
+    const handle = await open(file, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+    try {
+      if (!(await handle.stat()).isFile()) return;
+      const buffer = Buffer.alloc(maxHeaderBytes);
+      let length = 0;
+      while (length < buffer.length) {
+        const size = Math.min(2048, buffer.length - length);
+        const { bytesRead } = await handle.read(buffer, length, size);
+        length += bytesRead;
+        const text = buffer.toString("utf8", 0, length);
+        if (!text.startsWith("---")) return;
+        const header = /^---\r?\n([\s\S]*?)\r?\n---\r?\n/.exec(bytesRead ? text : text + "\n");
+        if (header || !bytesRead) return header?.[1];
+      }
+    } finally {
+      await handle.close();
+    }
+  } catch (error) {
+    if (!missing(error)) throw error;
+  }
+}
+
 async function installedSkills(directory: string, shell: boolean): Promise<string | undefined> {
-  const entries = await readdir(directory, { withFileTypes: true });
+  const entries = await readdir(directory, { withFileTypes: true }).catch((error) => {
+    if (missing(error)) return [];
+    throw error;
+  });
   const skills: string[] = [];
   for (const entry of entries.sort((a, b) => a.name.localeCompare(b.name))) {
     if (!entry.isDirectory() && !entry.isSymbolicLink()) continue;
     const file = join(directory, entry.name, "SKILL.md");
-    let source: string;
-    try {
-      source = await readFile(file, "utf8");
-    } catch (error) {
-      if (["ENOENT", "ENOTDIR"].includes((error as NodeJS.ErrnoException).code ?? "")) continue;
-      throw error;
-    }
-    const header = /^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/.exec(source)?.[1];
+    const header = await readHeader(file);
     if (!header) continue;
     const metadata = parseDocument(header);
     if (metadata.errors.length || metadata.get("disable-model-invocation") === true) continue;

@@ -49,6 +49,7 @@ test("Git, gh, DSH and Claude use the credential of their respective upstream se
     ["https://github.com/team/project/git-receive-pack", "POST", "Basic " + btoa("x-access-token:github-fixture")],
     ["https://api.github.com/repos/team/project/pulls", "POST", "Bearer github-fixture"],
     ["https://api.github.com/graphql", "POST", "Bearer github-fixture"],
+    ["https://api.github.com/repos/team/project/actions/caches?key=release", "GET", "Bearer github-fixture"],
     ["https://uploads.github.com/repos/team/project/releases/52/assets?name=a.tgz", "POST", "Bearer github-fixture"],
     ["https://api.anthropic.com/v1/messages?beta=true", "POST", "anthropic-fixture"],
     ["https://api.deepseek.com/models", "GET", "deepseek-fixture"],

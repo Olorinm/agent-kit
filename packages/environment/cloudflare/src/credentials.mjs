@@ -102,8 +102,10 @@ export function injectServiceAuth(request, service, cred) {
   const target = new URL(request.url);
   const headers = new Headers(request.headers);
   for (const name of ["host", "cookie", "authorization", "proxy-authorization", "x-api-key"]) headers.delete(name);
+  // GitHub uses key as a regular filter (e.g. the Actions cache API).
+  const authParameters = service === "github" ? ["access_token", "oauth_token"] : ["access_token", "oauth_token", "api_key", "key"];
   for (const name of [...target.searchParams.keys()]) {
-    if (["access_token", "oauth_token", "api_key", "key"].includes(name.toLowerCase())) target.searchParams.delete(name);
+    if (authParameters.includes(name.toLowerCase())) target.searchParams.delete(name);
   }
   if (service === "github" && githubDestination(target, request.method)) {
     if (cred.mode !== "token" || !cred.accessToken) return { error: "model_credential_invalid" };

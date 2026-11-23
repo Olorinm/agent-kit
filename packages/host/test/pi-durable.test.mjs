@@ -502,11 +502,13 @@ test("Pi lists metadata from an explicitly configured skills directory and leave
   for (const [name, metadata] of [
     ["browser", 'description: "Browser <automation> & capture"'],
     ["private", "description: Manual only\ndisable-model-invocation: true"],
+    ["oversized", "description: Overlarge YAML\n#" + "x".repeat(33 * 1024)],
   ]) {
     await mkdir(join(cwd, "skills", name), { recursive: true });
     await writeFile(join(cwd, "skills", name, "SKILL.md"), `---\nname: ${name}\n${metadata}\n---\nprivate-document-body`);
   }
-  for (const skillsDirectory of ["skills", undefined]) {
+  await mkdir(join(cwd, "skills", "directory", "SKILL.md"), { recursive: true });
+  for (const skillsDirectory of ["skills", "not-installed", undefined]) {
     const seen = [];
     const runtime = createNativeRuntime({id: skillsDirectory ?? "no-skills", kernel: "pi",
       cwd, shell: true, skillsDirectory, options: {model, streamFn: fixture(seen)}}, cwd);
@@ -514,11 +516,12 @@ test("Pi lists metadata from an explicitly configured skills directory and leave
       const events = await Array.fromAsync(runtime.run({sessionId: "session", input: "hello"}));
       assert.equal(events.at(-1).outcome.status, "completed");
       const context = JSON.stringify(seen.at(-1));
-      assert.equal(context.includes("<available_skills>"), !!skillsDirectory);
-      if (skillsDirectory) {
+      assert.equal(context.includes("<available_skills>"), skillsDirectory === "skills");
+      if (skillsDirectory === "skills") {
         assert.ok(context.includes("Browser &lt;automation&gt; &amp; capture"), context);
         assert.ok(context.includes(join(cwd, "skills", "browser", "SKILL.md")));
         assert.ok(!context.includes("Manual only"));
+        assert.ok(!context.includes("Overlarge YAML"));
         assert.ok(!context.includes("private-document-body"));
       }
     } finally { await runtime.close(); }
