@@ -2069,6 +2069,12 @@ would have created when it is missing: the ledger session (`kind = 'owner_main'`
 current window with `channelTools: true`. `submit` with that session id does the same. An execution binding that
 exists is never changed, so a session an earlier release opened keeps its definition.
 
+`WorkSessions.resetOwnerConversation()` is the reset of section 16.3 for a product whose session definition changed
+(new instructions or tool definitions): it opens the next window, so the next turn starts a new Host session with the
+current definition, and the transcript stays one history with a divider. It cancels nothing: with a turn that still
+runs or an input that waits it throws `session_busy`, and the product calls it again later. It returns `null` when the
+owner conversation does not exist.
+
 ### 20.7 Web API
 
 Additive, no new route:

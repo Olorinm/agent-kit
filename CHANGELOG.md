@@ -9,6 +9,7 @@ section in the version-bump commit before tagging. Changes up to the versions li
 
 - Router: deliver scheduled and delegated input as one JSON object, `{ "from": …, "message": … }`, as a native tool output where the runtime takes one and as text otherwise. The fixed notice, the `Source:` line and the boundary line of a text delivery are gone, and so are `source.kind`, `source.reference` and the sender's id in what a model reads. A session that exists keeps its definition; its next delivered turn has the new object.
 - Router: `WorkSessions.submit` accepts `json: true` with the text of a JSON object as `input`. Its members are delivered beside `from` in place of `message`. `notice` is removed.
+- Router: `WorkSessions.resetOwnerConversation()` continues the owner conversation in a new window, for a product whose instructions or tool definitions changed. It refuses a busy conversation (`session_busy`) instead of cancelling its turns.
 
 ## [0.11.0-alpha.15] - 2026-11-23
 

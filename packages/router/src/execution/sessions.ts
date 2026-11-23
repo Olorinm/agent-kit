@@ -185,6 +185,23 @@ export class WorkSessions {
     });
     return { sessionId };
   }
+  /**
+   * Continue the owner conversation in a new window, as the owner's own reset does (ADR 0005 16.3): the transcript
+   * stays one history with a divider, and the next turn opens a new Host session with the product's current
+   * instructions and tools. For a product whose session definition changed. It cancels nothing: a conversation with a
+   * turn that still runs or an input that waits is refused (`session_busy`), and the product tries again later.
+   * `null` when the owner conversation does not exist yet.
+   */
+  resetOwnerConversation(): { window: number } | null {
+    this.validate();
+    const sessionId = this.ownerSession, ledger = AgentLedger.open(this.store);
+    if (!ledger.session(sessionId)) return null;
+    return ledger.atomic(() => {
+      const busy = ledger.busy(sessionId);
+      if (busy.activeTurns.length || busy.queuedInputs.length) throw new WorkError("session_busy", 409);
+      return { window: ledger.reset(sessionId).window };
+    });
+  }
   validateTarget(sessionId: string) {
     this.getSession(sessionId);
     if (!this.ownerInput(sessionId)) throw new WorkError("notification_requires_owner_conversation", 403);
