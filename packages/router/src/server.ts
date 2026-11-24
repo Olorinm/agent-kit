@@ -50,3 +50,5 @@ export { routerApiReference, routerRouteScope, type RouterApiRoute, type RouterR
 export { RunObservation, type CommunicationTask, type RunReference, type TaskFilter } from "./execution/observation.js";
 export { WorkSessions, type WorkSessionSubmission, type WorkEventResult, type WorkSessionWaitOptions, type WorkDependencyWait,
   type WorkReplyReceipt, type WorkPendingCard, type WorkSender, type WorkDisplay, type OwnerRequestInput, type OwnerRequestResult, type Settlement } from "./execution/sessions.js";
+
+export { StoreLease } from "./communication/store-lease.js";

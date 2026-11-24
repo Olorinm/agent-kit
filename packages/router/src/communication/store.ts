@@ -1,6 +1,7 @@
 import { mkdirSync, chmodSync } from "node:fs";
 import { dirname } from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import { StoreLease } from "./store-lease.js";
 
 /**
  * Durable identity-scoped state. Network calls never run inside a transaction.
@@ -9,6 +10,7 @@ import { DatabaseSync } from "node:sqlite";
  */
 export class DurableStore {
   readonly db: DatabaseSync;
+  readonly lease: StoreLease;
   constructor(path: string, identity: string) {
     if (path !== ":memory:") mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
     this.db = new DatabaseSync(path);
@@ -19,7 +21,8 @@ export class DurableStore {
     if (path !== ":memory:") chmodSync(path, 0o600);
     const previous = this.get<string>("meta", "identity");
     if (previous && previous !== identity) { this.db.close(); throw new Error("store_identity_mismatch"); }
-    this.set("meta", "identity", identity);
+    if (!previous) this.set("meta", "identity", identity);
+    this.lease = new StoreLease(this.db, path, "connector_store_already_in_use");
   }
   get<T>(collection: string, id: string): T | undefined {
     const row = this.db.prepare("SELECT value FROM documents WHERE collection=? AND id=?").get(collection, id);
@@ -58,15 +61,8 @@ export class DurableStore {
    * written again only in its second half, so a heartbeat may ask every few seconds without writing each time.
    */
   acquireLease(owner: string, now = Date.now()): void {
-    this.transaction(() => {
-      const lease = this.get<{ owner: string; expires: number }>("meta", "lease");
-      if (lease && lease.owner !== owner && lease.expires > now) throw new Error("connector_store_already_in_use");
-      if (lease?.owner === owner && lease.expires - now > 15_000) return;
-      this.set("meta", "lease", { owner, expires: now + 30_000 });
-    });
+    this.transaction(() => this.lease.acquire(owner, now));
   }
-  releaseLease(owner: string): void {
-    if (this.get<{ owner: string }>("meta", "lease")?.owner === owner) this.delete("meta", "lease");
-  }
+  releaseLease(owner: string): void { this.lease.release(owner); }
   close(): void { this.db.close(); }
 }

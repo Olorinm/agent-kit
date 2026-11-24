@@ -103,7 +103,9 @@ describe("owner accounts, Agents and worker instances", () => {
     const issued = service.issue(a.id, "laptop");
     expect(issued.token).toMatch(/^ari_/);
     expect(JSON.stringify(issued.instance)).not.toContain("tokenHash");
+    const changesBeforeValidation = service.store.db.prepare("SELECT total_changes() AS n").get()!.n;
     expect(service.instance(issued.token, a.id).id).toBe(issued.instance.id);
+    expect(service.store.db.prepare("SELECT total_changes() AS n").get()!.n).toBe(changesBeforeValidation);
     expect(() => service.instance(issued.token, b.id)).toThrow("instance_unauthorized");
     expect(() => service.instance("alice", a.id)).toThrow("instance_token_required");
     expect((await api(`${root}/agents`, issued.token)).status).toBe(401);
