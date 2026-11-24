@@ -387,7 +387,6 @@ export class ManagedService {
     const hash = digest(token);
     const instance = this.store.entries<Instance>("instances").map((r) => r.value).find((i) => equal(i.tokenHash, hash));
     if (!instance || instance.revoked || instance.agentId !== agentId) throw new WorkError("instance_unauthorized", 401);
-    this.store.set("instances", instance.id, { ...instance, lastSeen: new Date().toISOString() });
     return instance;
   }
   async start(): Promise<void> { for (const agent of this.agents()) if (agent.status !== "deleting") await this.runtime(agent.id); }

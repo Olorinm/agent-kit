@@ -5,6 +5,11 @@ tag publishes a GitHub Release whose notes are this file's section for that vers
 section in the version-bump commit before tagging. Changes up to the versions listed under
 0.8.0-alpha.1 are in each package's own `CHANGELOG.md`.
 
+## [0.11.0-alpha.17] - 2026-11-25
+
+- Worker credential validation leaves the registry unchanged. Host connection state continues to track actual connections.
+- File-backed stores can keep process lease renewals outside replicated application data using `AGENT_LOCAL_LEASE_DIR`. Processes sharing a database and lease directory retain the same ownership and expiry checks.
+
 ## [0.11.0-alpha.16] - 2026-11-24
 
 - Router: deliver scheduled and delegated input as one JSON object, `{ "from": …, "message": … }`, as a native tool output where the runtime takes one and as text otherwise. The fixed notice, the `Source:` line and the boundary line of a text delivery are gone, and so are `source.kind`, `source.reference` and the sender's id in what a model reads. A session that exists keeps its definition; its next delivered turn has the new object.

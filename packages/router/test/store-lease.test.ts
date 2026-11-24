@@ -1,4 +1,7 @@
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
+import { mkdtempSync, rmSync, statSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { DurableStore } from "../src/communication/store.js";
 
 it("keeps a held lease without writing until its second half, and refuses another owner while it is valid", () => {
@@ -22,4 +25,28 @@ it("keeps a held lease without writing until its second half, and refuses anothe
   store.releaseLease("b");
   expect(store.get("meta", "lease")).toBeUndefined();
   store.close();
+});
+
+it("keeps file-backed leases exclusive without adding heartbeat frames to the replicated database", () => {
+  const root = mkdtempSync(join(tmpdir(), "router-lease-"));
+  const file = join(root, "agent.sqlite");
+  const old = new DurableStore(file, "test");
+  old.acquireLease("previous", 1000);
+  old.close();
+  vi.stubEnv("AGENT_LOCAL_LEASE_DIR", join(root, "local"));
+  try {
+    const first = new DurableStore(file, "test"), second = new DurableStore(file, "test");
+    try {
+      expect(() => first.acquireLease("new", 30_999)).toThrow("connector_store_already_in_use");
+      first.acquireLease("new", 31_000);
+      first.db.exec("PRAGMA main.wal_checkpoint(TRUNCATE)");
+      first.acquireLease("new", 46_000);
+      expect(statSync(file + "-wal").size).toBe(0);
+      expect(second.lease.current()).toEqual({ owner: "new", expires: 76_000 });
+      expect(() => second.acquireLease("other", 75_999)).toThrow("connector_store_already_in_use");
+      second.acquireLease("other", 76_000);
+      first.releaseLease("new");
+      expect(second.lease.current()?.owner).toBe("other");
+    } finally { first.close(); second.close(); }
+  } finally { vi.unstubAllEnvs(); rmSync(root, { recursive: true, force: true }); }
 });

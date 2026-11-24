@@ -18,7 +18,7 @@ export class AgentRuntime {
     this.work = new CliWork(store, () => "ask");
   }
   assertLease(): void {
-    const lease = this.store.get<{ owner: string; expires: number }>("meta", "lease");
+    const lease = this.store.lease.current();
     if (!lease || lease.owner !== this.leaseOwner || lease.expires <= Date.now()) throw new Error("connector_lease_lost");
   }
   start(): void {
