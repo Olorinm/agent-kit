@@ -23,7 +23,13 @@ const ask = (method, params) =>
 createInterface({ input: process.stdin }).on("line", async (line) => {
   const m = JSON.parse(line);
   if (!m.method) {
-    requests.get(m.id)?.(m.result);
+    // As Codex does: an error without a numeric code and a message is not a reply, and the request goes on waiting.
+    if (
+      m.error &&
+      (typeof m.error.code !== "number" || typeof m.error.message !== "string")
+    )
+      return;
+    requests.get(m.id)?.(m.error ? { failed: m.error.code } : m.result);
     requests.delete(m.id);
     return;
   }

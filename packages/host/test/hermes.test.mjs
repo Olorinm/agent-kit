@@ -5,7 +5,11 @@ import { mkdtemp, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { HermesAgent } from "../dist/hermes/index.js";
-import { FileBindingStore, MemoryBindingStore } from "../dist/index.js";
+import {
+  FileBindingStore,
+  InteractionUnanswered,
+  MemoryBindingStore,
+} from "../dist/index.js";
 const fixture = resolve("test/fixtures/hermes-gateway.mjs");
 const request = {
   sessionId: "product-session",
@@ -187,6 +191,27 @@ test("Hermes bridges product tools and preserves modern approval/multi-question 
         permission: { choice: "once" },
         response: { answers: { one: "blue", two: "large" } },
       },
+    );
+  } finally {
+    agent.close();
+  }
+});
+test("Hermes gets its own refusal for an approval or question nobody answered, and its turn goes on", async () => {
+  const { agent } = await setup();
+  try {
+    const events = await Array.fromAsync(
+      agent.run({
+        ...request,
+        input: "INTERACTION",
+        onRequest: async () => {
+          throw new InteractionUnanswered();
+        },
+      }),
+    );
+    assert.equal(events.at(-1).outcome.status, "completed");
+    assert.deepEqual(
+      JSON.parse(events.find((e) => e.type === "model.response").text),
+      { permission: { choice: "deny" }, response: {} },
     );
   } finally {
     agent.close();

@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import type { InteractionContext, ProductTool } from "../agent.js";
 import type { JsonValue } from "../types.js";
+import { InteractionUnanswered } from "../interactions.js";
 import {
   HostError,
   productResultSchema,
@@ -129,19 +130,18 @@ export class CallBroker {
     };
     this.store.saveCall(call);
     return new Promise((resolve, reject) => {
-      const settle = (result?: JsonValue, error?: Error) => {
+      const settle = (
+        result?: JsonValue,
+        error?: Error,
+        status: "timed_out" | "cancelled" = "cancelled",
+      ) => {
         if (!this.pending.delete(call.id)) return;
         clearTimeout(timer);
         this.signal.removeEventListener("abort", abort);
         context.signal.removeEventListener("abort", abort);
         if (error) {
           try {
-            this.store.saveCall({
-              ...call,
-              status: error.message.includes("deadline")
-                ? "timed_out"
-                : "cancelled",
-            });
+            this.store.saveCall({ ...call, status });
           } catch (storageError) {
             reject(storageError);
             return;
@@ -151,8 +151,16 @@ export class CallBroker {
       };
       const abort = () =>
         settle(undefined, new Error("call_outcome_unknown:cancelled"));
+      // A product tool that ran out of time may have had its effect. A question nobody answered had none.
       const timer = setTimeout(
-        () => settle(undefined, new Error("call_outcome_unknown:deadline")),
+        () =>
+          settle(
+            undefined,
+            kind === "interaction"
+              ? new InteractionUnanswered()
+              : new Error("call_outcome_unknown:deadline"),
+            "timed_out",
+          ),
         timeoutMs,
       );
       timer.unref();

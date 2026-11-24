@@ -60,7 +60,7 @@ For HTTP, pass the same `onInteraction` to `task.wait({onInteraction})`. No per-
 | `url` | Accept only after completion, or cancel | Native URL and message; Host does not open it or infer completion. |
 | `native` | `{native: nativeResponse}` | Original method and parameters when no faithful common representation exists. |
 
-Every request includes `native`. `onRequest` remains available for direct native replies. If both handlers exist, recognized requests use `onInteraction`, and unknown requests use `onRequest`. Complex Codex rule amendments can use an explicit native answer. A missing or cancelled handler never becomes approval. Native permissions and product business authorization are separate decisions.
+Every request includes `native`. `onRequest` remains available for direct native replies. If both handlers exist, recognized requests use `onInteraction`, and unknown requests use `onRequest`. Complex Codex rule amendments can use an explicit native answer. A missing or cancelled handler never becomes approval. A handler that throws `InteractionUnanswered` says that nobody answered in time: the kernel is told so in its own terms and its turn goes on ([how each kernel is told](host-link.md#approvals-that-wait-for-a-person)). Native permissions and product business authorization are separate decisions.
 
 Pi's callback is the native `beforeTool` policy hook; HTTP owners enable it with `toolApproval: true`. This is not a claim that Pi implements a built-in permission dialog. OpenClaw native command approvals are correlated to the active session/run and require Gateway approval scope. Its pinned Gateway has no structured native question RPC; a product tool can still ask its own questions.
 

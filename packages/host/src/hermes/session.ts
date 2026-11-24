@@ -1,6 +1,10 @@
 import { SessionManager, sessionPage } from "../sessions.js";
 import { projectProgress } from "../progress.js";
-import { routeInteraction, type InteractionHandler } from "../interactions.js";
+import {
+  InteractionUnanswered,
+  routeInteraction,
+  type InteractionHandler,
+} from "../interactions.js";
 import { createHash, randomUUID } from "node:crypto";
 import { resolve } from "node:path";
 import { abortable } from "../abortable.js";
@@ -419,6 +423,8 @@ export class HermesAgent {
               )) ?? fallback
             );
           } catch (error) {
+            // Nobody answered: Hermes gets its own refusal and the turn goes on.
+            if (error instanceof InteractionUnanswered) return fallback;
             if (!interactionContext.signal.aborted)
               rejectTerminal(
                 error instanceof Error ? error : new Error(String(error)),

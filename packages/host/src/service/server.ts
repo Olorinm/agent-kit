@@ -116,7 +116,7 @@ export async function startAgentHostServer(options: HostServerOptions) {
       throw new Error("invalid_runtime_configuration");
     runtimes.set(runtime.id, runtime);
   }
-  const interactionTimeoutMs = options.interactionTimeoutMs ?? 120_000;
+  const interactionTimeoutMs = options.interactionTimeoutMs ?? 1_800_000;
   if (!Number.isInteger(interactionTimeoutMs) || interactionTimeoutMs < 1 || interactionTimeoutMs > 86_400_000)
     throw new Error("invalid_interaction_timeout");
   if (options.link && !runtimes.has(options.link.runtimeId)) throw new Error("link_runtime_not_found");

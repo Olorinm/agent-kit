@@ -1,6 +1,11 @@
 import { SessionManager, sessionPage } from "../sessions.js";
 import { projectProgress } from "../progress.js";
-import { routeInteraction, type InteractionHandler } from "../interactions.js";
+import {
+  routeInteraction,
+  unlessUnanswered,
+  UNANSWERED,
+  type InteractionHandler,
+} from "../interactions.js";
 import { inlineImage } from "../image-content.js";
 import { createHash, randomUUID } from "node:crypto";
 import { join } from "node:path";
@@ -526,18 +531,21 @@ export class PiAgent {
                   (!request.onInteraction && !request.onRequest)
                 )
                   return policy;
-                const answer = await routeInteraction(
-                  request,
-                  {
-                    method: "pi/toolApproval",
-                    params: json({
-                      name: call.name,
-                      input: policy?.arguments ?? call.arguments,
-                      toolCallId: call.id,
-                      parent: call.parent,
-                    }),
-                  },
-                  { ...interaction, signal },
+                const answer = await unlessUnanswered(
+                  routeInteraction(
+                    request,
+                    {
+                      method: "pi/toolApproval",
+                      params: json({
+                        name: call.name,
+                        input: policy?.arguments ?? call.arguments,
+                        toolCallId: call.id,
+                        parent: call.parent,
+                      }),
+                    },
+                    { ...interaction, signal },
+                  ),
+                  { block: UNANSWERED },
                 );
                 return answer &&
                   typeof answer === "object" &&

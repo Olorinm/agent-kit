@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 import { CodexAgent, MemoryBindingStore } from "../dist/codex/index.js";
+import { InteractionUnanswered } from "../dist/index.js";
 
 const command = fileURLToPath(
   new URL("./fixtures/codex-server.mjs", import.meta.url),
@@ -240,6 +241,23 @@ test("native approval accept/reject and structured questions return to the same 
   assert.deepEqual(JSON.parse(response(events)), {
     answers: { color: { answers: ["Blue"] } },
   });
+});
+test("an approval or question nobody answered reaches Codex as an error it reads, and the turn goes on", async (t) => {
+  const agent = await agentTest(t);
+  for (const input of ["approval", "question"]) {
+    const events = await Array.fromAsync(
+      agent.run({
+        ...base,
+        input,
+        signal: AbortSignal.timeout(5_000),
+        onRequest: async () => {
+          throw new InteractionUnanswered();
+        },
+      }),
+    );
+    assert.equal(terminal(events).status, "completed");
+    assert.deepEqual(JSON.parse(response(events)), { failed: -32603 });
+  }
 });
 test("cancellation unblocks an unanswered interaction and signals the product", async (t) => {
   const agent = await agentTest(t);

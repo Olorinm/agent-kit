@@ -157,8 +157,8 @@ export const configSchema = z
     allowedOrigins: z.array(z.string().url()).default([]),
     workspaceFiles: z.boolean().default(false),
     sessionRelayTools: z.array(idSchema).max(64).optional(),
-    /** How long a native approval or question waits for an answer before it is closed as timed out. */
-    interactionTimeoutMs: z.number().int().min(1_000).max(86_400_000).default(120_000),
+    /** How long a native approval or question waits for a person to answer before it is closed as timed out. */
+    interactionTimeoutMs: z.number().int().min(1_000).max(86_400_000).default(1_800_000),
     runtimes: z.array(profileSchema).min(1),
   })
   .strict();

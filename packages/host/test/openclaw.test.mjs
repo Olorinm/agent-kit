@@ -8,7 +8,11 @@ import {
   OpenClawGatewayClient,
   OpenClawGatewayError,
 } from "../dist/openclaw/index.js";
-import { MemoryBindingStore, FileBindingStore } from "../dist/index.js";
+import {
+  FileBindingStore,
+  InteractionUnanswered,
+  MemoryBindingStore,
+} from "../dist/index.js";
 import { startOpenClawFixture } from "./fixtures/openclaw-gateway.mjs";
 const request = {
   sessionId: "product-session",
@@ -287,6 +291,33 @@ test("OpenClaw product image results remain native image blocks outside text-onl
   }
 });
 
+test("OpenClaw keeps its turn when nobody answered an approval: the approval is OpenClaw's to expire", async () => {
+  const gateway = await startOpenClawFixture(),
+    agent = new OpenClawAgent({ ...gateway, cancellationGraceMs: 20 });
+  try {
+    const controller = new AbortController();
+    let result;
+    for await (const e of agent.run({
+      ...request,
+      input: "APPROVAL",
+      signal: controller.signal,
+      onRequest: async () => {
+        setTimeout(() => controller.abort(), 50);
+        throw new InteractionUnanswered();
+      },
+    }))
+      if (e.type === "turn.finished") result = e.outcome;
+    // The turn was still waiting for OpenClaw when this test ended it.
+    assert.equal(result.status, "cancelled");
+    assert.equal(
+      gateway.calls.some((c) => c.method === "exec.approval.resolve"),
+      false,
+    );
+  } finally {
+    agent.close();
+    await gateway.close();
+  }
+});
 test("OpenClaw unknown cancellation blocks another turn on the same native producer", async () => {
   const gateway = await startOpenClawFixture({ ignoreCancel: true }),
     agent = new OpenClawAgent({ ...gateway, cancellationGraceMs: 20 });

@@ -1,6 +1,10 @@
 import { SessionManager, sessionPage } from "../sessions.js";
 import { projectProgress } from "../progress.js";
-import { routeInteraction, type InteractionHandler } from "../interactions.js";
+import {
+  InteractionUnanswered,
+  routeInteraction,
+  type InteractionHandler,
+} from "../interactions.js";
 import { createHash, randomUUID } from "node:crypto";
 import { AsyncEventQueue } from "../async-event-queue.js";
 import { abortable } from "../abortable.js";
@@ -394,6 +398,8 @@ export class OpenClawAgent {
               );
             })
             .catch((error) => {
+              // Nobody answered: the approval expires in OpenClaw by itself.
+              if (error instanceof InteractionUnanswered) return;
               if (!signal.aborted) controller.abort(error);
             })
             .finally(() => {
