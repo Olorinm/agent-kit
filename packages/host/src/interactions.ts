@@ -40,6 +40,28 @@ export type InteractionHandler = (
   context: InteractionContext,
 ) => Promise<InteractionAnswer>;
 
+/**
+ * Nobody answered before the request expired. That is not a refusal and not a failure of the turn: the adapter tells
+ * its kernel so in the kernel's own terms, and the turn goes on.
+ */
+export class InteractionUnanswered extends Error {
+  constructor() {
+    super("interaction_unanswered");
+    this.name = "InteractionUnanswered";
+  }
+}
+/** What a kernel that takes words is told about a request nobody answered. */
+export const UNANSWERED = "No one answered this request before it expired.";
+/** The answer to an interaction, or `reply` when nobody gave one in time. */
+export const unlessUnanswered = <T, R>(
+  answer: Promise<T>,
+  reply: R,
+): Promise<T | R> =>
+  answer.catch((error) => {
+    if (error instanceof InteractionUnanswered) return reply;
+    throw error;
+  });
+
 const object = (value: unknown): JsonObject =>
   value && typeof value === "object" && !Array.isArray(value)
     ? (value as JsonObject)

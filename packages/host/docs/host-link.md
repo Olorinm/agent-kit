@@ -63,18 +63,29 @@ full access. The link opens no listening port.
 
 ## Approvals that wait for a person
 
-A native approval or question waits for an answer for `interactionTimeoutMs` (default `120000`, between `1000` and
-`86400000`). When the answer comes from a person on a phone, set it longer in `host.json`:
+A native approval or question waits for an answer for `interactionTimeoutMs` (default `1800000`, half an hour;
+between `1000` and `86400000`). Set another time in `host.json`:
 
 ```json
 {
-  "interactionTimeoutMs": 1800000,
+  "interactionTimeoutMs": 600000,
   "runtimes": [{ "id": "local-codex", "kernel": "codex", "cwd": "./workspace" }]
 }
 ```
 
-An unanswered call is closed as `timed_out`, and a late answer is refused. A run's own `timeoutMs` (default one hour)
-still ends the run.
+An unanswered call is closed as `timed_out`, and a late answer is refused. The kernel is told that no one answered,
+which is neither a refusal by the person nor a failure of the turn, and its turn goes on:
+
+| Kernel | What it is told |
+| --- | --- |
+| Codex | A JSON-RPC error. Codex treats the request as failed: a command or file change is not run, a question has no answers. |
+| Claude | The tool is denied with "No one answered this request before it expired."; an elicitation is cancelled. |
+| Pi | The tool call is blocked with the same sentence. |
+| Hermes | Its own refusal (`deny` for an approval, an empty answer otherwise). |
+| ACP kernels | `cancelled` for a permission request or an elicitation. |
+| OpenClaw | Nothing: the approval expires in OpenClaw by its own time. |
+
+A run's own `timeoutMs` (default one hour) still ends the run, also while an approval waits.
 
 ## Connection behavior
 

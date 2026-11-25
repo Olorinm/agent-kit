@@ -161,15 +161,19 @@ test("an approval asked on the machine is answered over the link, within the con
   assert.equal((await finished(router, waiting.id)).status, "cancelled");
 });
 
-test("an unanswered approval closes after interactionTimeoutMs, which host.json sets and bounds", async (t) => {
+test("an unanswered approval closes after interactionTimeoutMs, which host.json sets and bounds, and the kernel goes on", async (t) => {
   const router = await fakeRouter(t);
   await linkedHost(t, router, { interactionTimeoutMs: 150 });
   const { body: run } = await router.request("POST", "/v1/runs", { sessionId: "expire", runtimeId: "linked", input: "approval" });
   const { calls } = await until(async () => (await router.request("GET", `/v1/runs/${run.id}/calls`)).body, (value) => value.calls[0]?.status === "timed_out");
   assert.equal((await router.request("POST", `/v1/runs/${run.id}/calls/${calls[0].id}/result`, { result: { decision: "accept" } })).status, 409);
+  // Codex was told that the request failed and finished its turn with that.
+  const ended = await finished(router, run.id);
+  assert.equal(ended.status, "completed");
+  assert.match(ended.answer, /"failed":-32603/);
   const profile = { runtimes: [{ id: "codex", kernel: "codex", cwd: "." }] };
-  assert.equal(configSchema.parse(profile).interactionTimeoutMs, 120_000);
-  assert.equal(configSchema.parse({ ...profile, interactionTimeoutMs: 1_800_000 }).interactionTimeoutMs, 1_800_000);
+  assert.equal(configSchema.parse(profile).interactionTimeoutMs, 1_800_000);
+  assert.equal(configSchema.parse({ ...profile, interactionTimeoutMs: 600_000 }).interactionTimeoutMs, 600_000);
   for (const invalid of [999, 86_400_001, 1.5, "600000"]) assert.throws(() => configSchema.parse({ ...profile, interactionTimeoutMs: invalid }));
   await assert.rejects(startAgentHostServer({ runtimes: [], stateDirectory: tmpdir(), token, interactionTimeoutMs: 0 }), /invalid_interaction_timeout/);
 });

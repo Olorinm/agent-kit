@@ -8,7 +8,12 @@ import {
 } from "@anthropic-ai/claude-agent-sdk";
 import { SessionManager, sessionPage } from "../sessions.js";
 import { projectProgress } from "../progress.js";
-import { routeInteraction, type InteractionHandler } from "../interactions.js";
+import {
+  routeInteraction,
+  unlessUnanswered,
+  UNANSWERED,
+  type InteractionHandler,
+} from "../interactions.js";
 import { mcpToolResult } from "../image-content.js";
 import { createHash, randomUUID } from "node:crypto";
 import {
@@ -370,25 +375,28 @@ export class ClaudeAgent {
             );
           const { signal: _signal, ...metadata } = options;
           const answer = object(
-            await abortable(
-              routeInteraction(
-                request,
-                {
-                  method:
-                    name === "AskUserQuestion"
-                      ? "AskUserQuestion"
-                      : "permission",
-                  params: object(
-                    json({
-                      name,
-                      input,
-                      ...metadata,
-                    }),
-                  ),
-                },
-                { ...context, signal },
+            await unlessUnanswered(
+              abortable(
+                routeInteraction(
+                  request,
+                  {
+                    method:
+                      name === "AskUserQuestion"
+                        ? "AskUserQuestion"
+                        : "permission",
+                    params: object(
+                      json({
+                        name,
+                        input,
+                        ...metadata,
+                      }),
+                    ),
+                  },
+                  { ...context, signal },
+                ),
+                signal,
               ),
-              signal,
+              { behavior: "deny", message: UNANSWERED },
             ),
           );
           if (answer.behavior === "allow")
@@ -427,18 +435,21 @@ export class ClaudeAgent {
               signal,
             );
           const answer = object(
-            await abortable(
-              routeInteraction(
-                request,
-                {
-                  method: "elicitation/create",
-                  params: object(
-                    json({ ...elicitation, requestId: options.requestId }),
-                  ),
-                },
-                { ...context, signal },
+            await unlessUnanswered(
+              abortable(
+                routeInteraction(
+                  request,
+                  {
+                    method: "elicitation/create",
+                    params: object(
+                      json({ ...elicitation, requestId: options.requestId }),
+                    ),
+                  },
+                  { ...context, signal },
+                ),
+                signal,
               ),
-              signal,
+              { action: "cancel" },
             ),
           );
           if (answer.action !== "accept")

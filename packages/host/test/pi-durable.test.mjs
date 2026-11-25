@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { model, fixture } from "./fixtures/pi-stream.mjs";
 import { PiAgent } from "../dist/pi/index.js";
 import { createNativeRuntime } from "../dist/service/native-runtimes.js";
-import { FileBindingStore } from "../dist/index.js";
+import { FileBindingStore, InteractionUnanswered } from "../dist/index.js";
 import { defineExtension, MemoryStorage } from "@earendil-works/pi-durable";
 import { createToolSearchExtension } from "@earendil-works/pi-durable/tool-search";
 import { createAssistantMessageEventStream } from "@earendil-works/pi-ai";
@@ -228,8 +228,8 @@ test("Pi durable nested tools preserve native parent identity, receipts, policy 
   }
 });
 
-test("Pi durable nested native tools retain structured results and may be blocked before execution", async () => {
-  for (const denied of [false, true]) {
+test("Pi durable nested native tools retain structured results and may be blocked before execution, also when nobody answers", async () => {
+  for (const denied of [false, true, "unanswered"]) {
     let executions = 0;
     const extension = defineExtension({
       name: `native-nested-${denied}`,
@@ -275,6 +275,8 @@ test("Pi durable nested native tools retain structured results and may be blocke
           extensions: [extension],
           onRequest: async (request) => {
             interactions.push(request);
+            if (denied === "unanswered" && request.params.name === "child")
+              throw new InteractionUnanswered();
             return denied && request.params.name === "child"
               ? { block: "Native child denied" }
               : {};
@@ -289,7 +291,11 @@ test("Pi durable nested native tools retain structured results and may be blocke
       assert.equal(child.result.success, !denied);
       assert.match(
         JSON.stringify(child.result.contentItems),
-        denied ? /Native child denied/ : /42/,
+        denied === "unanswered"
+          ? /No one answered this request before it expired\./
+          : denied
+            ? /Native child denied/
+            : /42/,
       );
       assert.ok(
         interactions.find((request) => request.params.name === "child").params

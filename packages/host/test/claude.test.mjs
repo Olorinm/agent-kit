@@ -3,7 +3,7 @@ import test from "node:test";
 import { ClaudeAgent, createClaudeMcpServer } from "../dist/claude/index.js";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
-import { MemoryBindingStore } from "../dist/index.js";
+import { InteractionUnanswered, MemoryBindingStore } from "../dist/index.js";
 import { createClaudeQueryFixture } from "./fixtures/claude-query.mjs";
 const base = {
   sessionId: "document",
@@ -133,6 +133,31 @@ test("Claude native permissions and elicitation remain separate callbacks", asyn
     assert.match(
       events.find((event) => event.type === "model.response").text,
       kind === "permission" ? /Rejected/ : /Maple/,
+    );
+  }
+});
+test("Claude is told that no one answered a permission or an elicitation, and its turn goes on", async (t) => {
+  for (const [kind, told] of [
+    [
+      "permission",
+      {
+        behavior: "deny",
+        toolUseID: "native-tool",
+        message: "No one answered this request before it expired.",
+      },
+    ],
+    ["question", { action: "cancel" }],
+  ]) {
+    const events = await run(agent(t), {
+      input: `fixture ${kind}`,
+      async onRequest() {
+        throw new InteractionUnanswered();
+      },
+    });
+    assert.equal(terminal(events).status, "completed");
+    assert.deepEqual(
+      JSON.parse(events.find((event) => event.type === "model.response").text),
+      told,
     );
   }
 });

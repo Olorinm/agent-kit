@@ -422,11 +422,14 @@ export class CodexAppServerClient {
       if (fallback !== undefined) respond({ id: request.id, result: fallback });
       else respond(defaultCodexServerRequestResponse(request));
     } catch (error) {
+      // Codex drops an error that has no code and goes on waiting for the answer.
+      const failure = error instanceof CodexRequestFailure ? error : undefined;
       respond({
         id: request.id,
         error: {
+          code: failure?.code ?? -32603,
           message: error instanceof Error ? error.message : String(error),
-          ...(error instanceof CodexRequestFailure ? { code: error.code, data: error.data } : {}),
+          ...(failure?.data !== undefined ? { data: failure.data } : {}),
         },
       });
     }
